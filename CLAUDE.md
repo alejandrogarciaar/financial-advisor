@@ -420,6 +420,56 @@ generalize this to ETH or to other RSI thresholds/horizons without re-running th
 check; it is a narrow, ticker-specific refinement, not a general "RSI adds value" finding (the
 underlying RSI mean-reversion hypothesis that motivated the search failed outright).
 
+**"📊 Validación" tab (`render_validation()` in `app.py`)**: not a price signal like the other 4
+tabs — it's a check on how well the *existing* signals have performed, added after the user
+asked "what else could we add" and picked this + a rejected support/resistance idea (see above)
+out of a shortlist. Two independent sections, neither of which runs unprompted, so this tab adds
+no latency to any other tab's rerun even though `st.tabs()` isn't lazy (see above):
+
+- **Backtest section** surfaces `src/backtest.py`'s `backtest_ticker()` (previously
+  console-only, via `python -c "from src.backtest import run_backtest; ..."`) behind a
+  `st.button("Correr backtest")` — same pattern as `render_detail()`'s "🔍 ¿FMP y yfinance
+  opinan lo mismo de esta acción?" button, deliberately not auto-run, since it's ~6 network
+  calls × 8 tickers. Called per-ticker through `_cached_backtest_ticker()` (new,
+  `@st.cache_data(ttl=86400)` — a day-long TTL because financial statements don't move
+  intraday, unlike `_cached_evaluation`'s 900s) submitted to the existing `_parallel_fetch()`
+  (not `_get_or_fetch` — no other tab needs to reuse a backtest result, so the
+  session-cross-tab dedup layer would be pure overhead here). `BACKTEST_YEARS_AGO` is fixed at
+  1, not exposed as a UI control — `backtest.py`'s own docstring documents that `years_ago=2`
+  fails for 0/8 tickers (not enough EPS history in yfinance), so a free-form control would
+  silently invite a value that can't work. The "¿Acertó?" column is a simple directional check
+  (`verdict_then` cheap + positive `actual_return`, or expensive + negative, = ✅; `mixed` = "—"
+  since there's no directional claim to grade; anything else = ❌) — the 3 caveats already
+  written in `backtest.py`'s module docstring (small survivorship-biased sample, today's beta
+  not the historical one, yfinance's EPS-history gaps) are reproduced in an `st.info` under the
+  table, matching this project's habit of surfacing its own limitations in the UI, not just in
+  code comments.
+- **Verdict-history section** is genuinely new state, not a recomputation: `src/verdict_history.py`
+  (same `app_data/` pattern as `src/preferences.py` — not reconstructible from an API, so it's
+  gitignored but lives outside `.cache/`) persists one `{date, verdict, headline, cheap, fair,
+  expensive, price}` entry per ticker per calendar day to `app_data/verdict_history.json`.
+  `record_verdict()` dedupes on `entries[-1]["date"] == today` so it's safe to call more than
+  once; `_maybe_record_verdict()` in `app.py` additionally gates on a
+  `st.session_state["_verdict_recorded_today"]` set so a session with many reruns (every widget
+  interaction reruns the script) doesn't re-open and re-write the JSON file each time — the
+  session-state check is purely a perf optimization, the on-disk dedupe is what makes it
+  *correct* (two separate sessions the same day still collapse to one entry). Called right
+  after `summarize_signals(evaluation)` in both `render_list()` and `render_detail()` — the only
+  two places a `TICKERS` summary already gets computed — so history only accumulates for
+  tickers the user actually viewed that day, same "job counts are dynamic" philosophy as the
+  rest of the app (no forced background evaluation of all 8 tickers just to backfill history).
+  ETFs are excluded from the selector (`evaluate_etf()` has no cheap/expensive verdict to log,
+  only risk/return metrics). Since there's no way to reconstruct a past day's verdict without
+  that day's financial statements (that's what the backtest section does, with its own real
+  limits, for `years_ago=1` only), history starts accumulating from whenever this shipped —
+  the UI explicitly says so (and skips the chart) below 2 recorded points rather than showing a
+  1-dot plot. The chart reuses `VERDICT_COLOR` (defined for `triangulation_badge()`) and a new
+  `VERDICT_LABEL` (`{"cheap": "Barata", "expensive": "Cara", "mixed": "Mixta"}`) — deliberately
+  not a new categorical palette, since cheap/mixed/expensive is the same 3-way status this app
+  already colors consistently everywhere else. A plain table of the same entries sits below the
+  chart (dataviz skill's "a table view exists" companion for any chart carrying meaning in
+  color).
+
 ## Known data caveats (already handled deliberately — don't "fix" without re-reading the comment)
 
 - `src/config.py` excludes CSPXCO (an ETF, no financial statements) and NU (blocked on FMP's

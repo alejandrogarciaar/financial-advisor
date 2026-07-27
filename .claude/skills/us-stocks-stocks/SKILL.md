@@ -18,6 +18,10 @@ design rationale for everything listed here; this is only the map of where it li
 - `render_detail(ticker)` — single-ticker detail page: valuation verdict, quality/solvency
   filters, trend section, `render_sticky_price()` call (shared helper, also used by
   Especulación — don't fork it, extend the shared one).
+- `_maybe_record_verdict()` — called in both `render_list()` and `render_detail()` right after
+  `summarize_signals()`, feeds the Validación tab's verdict-history log (`src/verdict_history.py`).
+  Don't add a third call site without also considering whether it should count as "the user saw
+  this ticker's verdict today."
 - `STOCK_EVAL_CACHE_KEY`, `_cached_evaluation()`, `_parallel_fetch()` / `_get_or_fetch()` — the
   concurrent-fetch + cross-tab dedup plumbing (ETFs and Portafolio also read from this cache
   key when a held ticker's underlying was already evaluated here this run).
@@ -50,7 +54,16 @@ design rationale for everything listed here; this is only the map of where it li
 - Ticker filter persistence (`app_data/preferences.json`) — read `CLAUDE.md`'s note on the
   `key=` vs. `default=` widget-identity bug before touching the multiselect wiring.
 
+## `src/verdict_history.py`
+
+- `record_verdict()` / `load_verdict_history()` — one JSON entry per ticker per calendar day
+  (`app_data/verdict_history.json`), fed from Acciones (see `_maybe_record_verdict()` above),
+  displayed in the Validación tab, not this one. Touch this file if the schema of what gets
+  logged needs to change; the recording call sites live in `app.py`, not here.
+
 ## `src/backtest.py`
 
-- Not part of the UI, but validates this tab's triangulation verdict against historical
-  returns — relevant if a formula or the verdict logic changes.
+- `backtest_ticker()` is also called live from the Validación tab now (behind a button, via
+  `_cached_backtest_ticker()` in `app.py`) — it's not console-only anymore. `run_backtest()`
+  (the console-loop wrapper) is still the one to use for a quick CLI sanity check; `app.py`
+  calls `backtest_ticker()` directly per ticker so it can go through `_parallel_fetch()`.
