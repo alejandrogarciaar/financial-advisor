@@ -105,6 +105,106 @@ def scroll_to_top() -> None:
     )
 
 
+def render_sticky_price(key_prefix: str, label: str, price: float, nonce_id: str) -> None:
+    """Precio normal en el punto de la página donde se llama + un clon flotante que arranca
+    OCULTO y solo aparece cuando ese primero sale de la vista al hacer scroll (y se vuelve a
+    ocultar si volvés a subir) — lo detecta el IntersectionObserver de más abajo, no hay forma
+    de hacerlo con CSS solo. position: fixed en vez de sticky porque sticky depende de que TODA
+    la cadena de contenedores padre tenga overflow visible/scroll, y algún div interno de
+    Streamlit casi seguro tiene overflow:hidden en algún punto — fixed ancla directo al
+    viewport, sin esa dependencia. Los !important y el ancho explícito son porque el CSS propio
+    de Streamlit para ese contenedor (pensado para una columna de ancho completo) le ganaba en
+    especificidad al nuestro — así se veía estirado de borde a borde y entrecortado.
+
+    key_prefix debe ser único por cada llamada activa en el mismo rerun (varias pestañas de
+    Streamlit corren en el mismo script run — ver nota sobre st.tabs() en CLAUDE.md — así que
+    dos llamadas con el mismo prefix pisarían el CSS/selector de la otra)."""
+    top_key = f"{key_prefix}_top_price"
+    sticky_key = f"{key_prefix}_sticky_price"
+    st.markdown(
+        f"""
+        <style>
+        .st-key-{sticky_key} {{
+            display: none;
+            position: fixed !important;
+            top: 4.5rem !important;
+            right: 1.5rem !important;
+            left: auto !important;
+            bottom: auto !important;
+            width: auto !important;
+            min-width: 200px !important;
+            max-width: 260px !important;
+            z-index: 9999;
+            padding: 0.4rem 1rem;
+            border-radius: 12px;
+            box-shadow: 0 2px 10px rgba(0, 0, 0, 0.25);
+        }}
+        @media (prefers-color-scheme: light) {{
+            .st-key-{sticky_key} {{
+                background-color: rgba(255, 255, 255, 0.97);
+                border: 1px solid rgba(0, 0, 0, 0.1);
+            }}
+        }}
+        @media (prefers-color-scheme: dark) {{
+            .st-key-{sticky_key} {{
+                background-color: rgba(14, 17, 23, 0.97);
+                border: 1px solid rgba(255, 255, 255, 0.15);
+            }}
+        }}
+        </style>
+        """,
+        unsafe_allow_html=True,
+    )
+    with st.container(key=top_key):
+        st.metric(label, f"${price:,.2f}")
+    with st.container(key=sticky_key):
+        st.metric(label, f"${price:,.2f}")
+
+    # nonce en el comentario: fuerza a que este iframe se considere "distinto" en cada rerun
+    # (cambio de ticker o de precio), así el navegador lo vuelve a montar y el script corre de
+    # nuevo apuntando a los elementos recién dibujados — si el contenido fuera idéntico al de la
+    # corrida anterior, Streamlit podría no re-ejecutar el <script> de adentro. El registro de
+    # observers vive en window.__stickyPriceObservers, indexado por key_prefix, para que cada
+    # instancia (Acciones, Especulación, ...) pueda remontar la suya sin desconectar la de otra.
+    st.iframe(
+        f"""
+        <!-- nonce: {nonce_id}-{price} -->
+        <script>
+        (function () {{
+            var doc = window.parent.document;
+            function setup() {{
+                var topEl = doc.querySelector('.st-key-{top_key}');
+                var stickyEl = doc.querySelector('.st-key-{sticky_key}');
+                if (!topEl || !stickyEl) {{
+                    return false;
+                }}
+                window.__stickyPriceObservers = window.__stickyPriceObservers || {{}};
+                if (window.__stickyPriceObservers['{key_prefix}']) {{
+                    window.__stickyPriceObservers['{key_prefix}'].disconnect();
+                }}
+                var observer = new IntersectionObserver(function (entries) {{
+                    entries.forEach(function (entry) {{
+                        stickyEl.style.display = entry.isIntersecting ? 'none' : 'block';
+                    }});
+                }}, {{ root: null, threshold: 0 }});
+                observer.observe(topEl);
+                window.__stickyPriceObservers['{key_prefix}'] = observer;
+                return true;
+            }}
+            var attempts = 0;
+            var interval = setInterval(function () {{
+                attempts += 1;
+                if (setup() || attempts > 20) {{
+                    clearInterval(interval);
+                }}
+            }}, 200);
+        }})();
+        </script>
+        """,
+        height=1,
+    )
+
+
 @st.cache_data(ttl=900, show_spinner=False)
 def _cached_evaluation(ticker: str, provider: str):
     return evaluate_ticker(ticker, provider=provider)
@@ -635,7 +735,7 @@ def render_detail(ticker: str):
     summary = summarize_signals(evaluation)
 
     st.title(ticker)
-    st.metric("Precio actual", f"${evaluation.current_price:,.2f}")
+    render_sticky_price("acciones", "Precio actual", evaluation.current_price, ticker)
     st.markdown(triangulation_badge(summary), unsafe_allow_html=True)
 
     note = quality_context_note(evaluation, summary)
@@ -1509,94 +1609,7 @@ def render_speculation():
         return
     current_price = closes[-1]
 
-    # Precio normal arriba de la página + un clon flotante que arranca OCULTO y solo aparece
-    # cuando el de arriba sale de la vista al hacer scroll (y se vuelve a ocultar si volvés a
-    # subir) — eso lo detecta el IntersectionObserver de más abajo, no hay forma de hacerlo con
-    # CSS solo. position: fixed en vez de sticky porque sticky depende de que TODA la cadena de
-    # contenedores padre tenga overflow visible/scroll, y algún div interno de Streamlit casi
-    # seguro tiene overflow:hidden en algún punto — fixed ancla directo al viewport, sin esa
-    # dependencia. Los !important y el ancho explícito son porque el CSS propio de Streamlit
-    # para ese contenedor (pensado para una columna de ancho completo) le ganaba en
-    # especificidad al mío — así se veía estirado de borde a borde y entrecortado.
-    st.markdown(
-        """
-        <style>
-        .st-key-speculation_sticky_price {
-            display: none;
-            position: fixed !important;
-            top: 4.5rem !important;
-            right: 1.5rem !important;
-            left: auto !important;
-            bottom: auto !important;
-            width: auto !important;
-            min-width: 200px !important;
-            max-width: 260px !important;
-            z-index: 9999;
-            padding: 0.4rem 1rem;
-            border-radius: 12px;
-            box-shadow: 0 2px 10px rgba(0, 0, 0, 0.25);
-        }
-        @media (prefers-color-scheme: light) {
-            .st-key-speculation_sticky_price {
-                background-color: rgba(255, 255, 255, 0.97);
-                border: 1px solid rgba(0, 0, 0, 0.1);
-            }
-        }
-        @media (prefers-color-scheme: dark) {
-            .st-key-speculation_sticky_price {
-                background-color: rgba(14, 17, 23, 0.97);
-                border: 1px solid rgba(255, 255, 255, 0.15);
-            }
-        }
-        </style>
-        """,
-        unsafe_allow_html=True,
-    )
-    with st.container(key="speculation_top_price"):
-        st.metric(f"Precio actual — {ticker}", f"${current_price:,.2f}")
-    with st.container(key="speculation_sticky_price"):
-        st.metric(f"Precio actual — {ticker}", f"${current_price:,.2f}")
-
-    # nonce en el comentario: fuerza a que este iframe se considere "distinto" en cada rerun
-    # (cambio de ticker o de precio), así el navegador lo vuelve a montar y el script corre de
-    # nuevo apuntando a los elementos recién dibujados — si el contenido fuera idéntico al de la
-    # corrida anterior, Streamlit podría no re-ejecutar el <script> de adentro.
-    st.iframe(
-        f"""
-        <!-- nonce: {ticker}-{current_price} -->
-        <script>
-        (function () {{
-            var doc = window.parent.document;
-            function setup() {{
-                var topEl = doc.querySelector('.st-key-speculation_top_price');
-                var stickyEl = doc.querySelector('.st-key-speculation_sticky_price');
-                if (!topEl || !stickyEl) {{
-                    return false;
-                }}
-                if (window.__specPriceObserver) {{
-                    window.__specPriceObserver.disconnect();
-                }}
-                var observer = new IntersectionObserver(function (entries) {{
-                    entries.forEach(function (entry) {{
-                        stickyEl.style.display = entry.isIntersecting ? 'none' : 'block';
-                    }});
-                }}, {{ root: null, threshold: 0 }});
-                observer.observe(topEl);
-                window.__specPriceObserver = observer;
-                return true;
-            }}
-            var attempts = 0;
-            var interval = setInterval(function () {{
-                attempts += 1;
-                if (setup() || attempts > 20) {{
-                    clearInterval(interval);
-                }}
-            }}, 200);
-        }})();
-        </script>
-        """,
-        height=1,
-    )
+    render_sticky_price("speculation", f"Precio actual — {ticker}", current_price, ticker)
 
     st.divider()
     st.subheader("RSI (14)")

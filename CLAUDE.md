@@ -205,24 +205,32 @@ window instead of lowest, sharing `_sorted_dated_closes`/`_extreme_since`), MACD
 by taking the last `min(len)` elements of each since the fast one starts earlier), and
 Bollinger Bands (`compute_bollinger_bands`, 20-period SMA ± 2 population std devs).
 
-**Current-price display**: the price renders twice — once normally at the top
-(`st.container(key="speculation_top_price")`) and once in a floating card
-(`st.container(key="speculation_sticky_price")`) that starts `display: none`. `position:
-sticky` was tried first and didn't work in practice (it depends on every ancestor container
-having non-`hidden` overflow up to the scrolling root — some Streamlit-internal div in that
-chain almost certainly clips it, silently breaking sticky with no error). `position: fixed`
-replaced it (anchors to the viewport directly, no ancestor dependency), with `!important` on
-every layout property — Streamlit's own CSS for that container (sized for a full-width column)
-otherwise wins the specificity fight and the card stretches edge-to-edge instead of staying a
-narrow corner card. An `IntersectionObserver` (injected via `st.iframe`, since `st.markdown`
-strips `<script>` tags) watches the top price element and toggles the floating card's
-`display` — visible only once the top price scrolls out of view, hidden again when it's back
-in view. The injected HTML includes an `{ticker}-{current_price}` nonce in a comment
-specifically so the iframe's content differs on every rerun, forcing the browser to remount it
-and re-run the script against the freshly-rendered elements (identical content might not
-re-execute). The background colors are Streamlit's literal default light/dark theme colors
-(`#ffffff` / dark-surface variants via `prefers-color-scheme`), not a theme CSS variable — safe
-since this project has no `.streamlit/config.toml`; update if a custom theme is ever added.
+**Current-price display (`render_sticky_price()` in `app.py`)**: shared by both Especulación and
+the Acciones detail page (`render_detail()`) — originally built Especulación-only, then extended
+to Acciones on request; extracted into a helper the same session it was duplicated, rather than
+leaving two copies to drift. The price renders twice — once normally wherever it's called
+(`st.container(key=f"{key_prefix}_top_price")`) and once in a floating card
+(`st.container(key=f"{key_prefix}_sticky_price")`) that starts `display: none`. `key_prefix`
+("acciones", "speculation") must be unique per caller: `st.tabs()` isn't lazy (see below), so on
+a rerun where a ticker's Acciones detail page AND the Especulación tab are both mounted, two
+calls sharing one `key_prefix` would collide on the same CSS selector and the same
+`window.__stickyPriceObservers` entry, each stealing the other's `topEl`. `position: sticky` was
+tried first and didn't work in practice (it depends on every ancestor container having
+non-`hidden` overflow up to the scrolling root — some Streamlit-internal div in that chain almost
+certainly clips it, silently breaking sticky with no error). `position: fixed` replaced it
+(anchors to the viewport directly, no ancestor dependency), with `!important` on every layout
+property — Streamlit's own CSS for that container (sized for a full-width column) otherwise wins
+the specificity fight and the card stretches edge-to-edge instead of staying a narrow corner
+card. An `IntersectionObserver` (injected via `st.iframe`, since `st.markdown` strips `<script>`
+tags) watches the top price element and toggles the floating card's `display` — visible only once
+the top price scrolls out of view, hidden again when it's back in view. The injected HTML
+includes a `{nonce_id}-{price}` nonce in a comment specifically so the iframe's content differs
+on every rerun, forcing the browser to remount it and re-run the script against the
+freshly-rendered elements (identical content might not re-execute); callers pass the bare ticker
+as `nonce_id` rather than relying on `label` alone, since Acciones' label ("Precio actual") never
+changes across tickers. The background colors are Streamlit's literal default light/dark theme
+colors (`#ffffff` / dark-surface variants via `prefers-color-scheme`), not a theme CSS variable —
+safe since this project has no `.streamlit/config.toml`; update if a custom theme is ever added.
 None of this has been checked in a real browser this session (no browser access) — only that it
 compiles and runs with zero exceptions under `streamlit.testing.v1.AppTest`.
 
