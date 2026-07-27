@@ -1,0 +1,11 @@
+.env
+venv/
+__pycache__/
+*.pyc
+.streamlit/secrets.toml
+.cache/
+portfolio_data/
+app_data/
+streamlit.log
+streamlit.pid
+.claude/settings.local.json

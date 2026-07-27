@@ -1,0 +1,341 @@
+"""Indicadores para la pestaña Especulación — a diferencia de todo lo demás en
+`src/valuation/`, ACÁ sí se permite lenguaje de timing de corto plazo (así lo pidió
+explícitamente el usuario: "acá si podemos especular 100%"). No se cruza con las señales de
+valoración ni con el Portafolio — es una zona aparte a propósito.
+"""
+
+from dataclasses import dataclass
+from datetime import datetime, timedelta
+
+import pandas as pd
+
+from src.valuation.trend import EMA_PERIOD, SMA_LONG_PERIOD, SMA_SHORT_PERIOD
+
+RSI_PERIOD = 14
+
+
+def compute_rsi(closes: list[float], period: int = RSI_PERIOD) -> float | None:
+    """RSI de Wilder (el estándar clásico: promedio de ganancias/pérdidas suavizado, no un
+    promedio simple de los últimos N cambios)."""
+    if len(closes) < period + 1:
+        return None
+    changes = [closes[i] - closes[i - 1] for i in range(1, len(closes))]
+    gains = [max(c, 0.0) for c in changes]
+    losses = [max(-c, 0.0) for c in changes]
+
+    avg_gain = sum(gains[:period]) / period
+    avg_loss = sum(losses[:period]) / period
+
+    for i in range(period, len(changes)):
+        avg_gain = (avg_gain * (period - 1) + gains[i]) / period
+        avg_loss = (avg_loss * (period - 1) + losses[i]) / period
+
+    if avg_loss == 0:
+        return 100.0
+    rs = avg_gain / avg_loss
+    return 100 - (100 / (1 + rs))
+
+
+def compute_rsi_series(closes: list[float], period: int = RSI_PERIOD) -> list[float | None]:
+    """Versión histórica (día por día) de `compute_rsi` — misma suavización de Wilder, pero
+    devuelve toda la serie alineada 1:1 con `closes` en vez de solo el último valor. Existe
+    para poder cruzar el RSI contra el régimen día por día (`compute_regime_rsi_reactions`),
+    el mismo patrón que `classify_regime_series` ya usa para las medias móviles."""
+    n = len(closes)
+    rsi_series: list[float | None] = [None] * n
+    if n < period + 1:
+        return rsi_series
+    changes = [closes[i] - closes[i - 1] for i in range(1, n)]
+    gains = [max(c, 0.0) for c in changes]
+    losses = [max(-c, 0.0) for c in changes]
+    avg_gain = sum(gains[:period]) / period
+    avg_loss = sum(losses[:period]) / period
+
+    def _rsi(avg_gain: float, avg_loss: float) -> float:
+        if avg_loss == 0:
+            return 100.0
+        rs = avg_gain / avg_loss
+        return 100 - (100 / (1 + rs))
+
+    rsi_series[period] = _rsi(avg_gain, avg_loss)
+    for i in range(period, len(changes)):
+        avg_gain = (avg_gain * (period - 1) + gains[i]) / period
+        avg_loss = (avg_loss * (period - 1) + losses[i]) / period
+        rsi_series[i + 1] = _rsi(avg_gain, avg_loss)
+    return rsi_series
+
+
+def _sorted_dated_closes(historical_prices: list[dict]) -> list[tuple[datetime, float]]:
+    return sorted(
+        ((datetime.strptime(p["date"], "%Y-%m-%d"), p["close"]) for p in historical_prices),
+        key=lambda pair: pair[0],
+    )
+
+
+def _extreme_since(dated: list[tuple[datetime, float]], days: int, pick) -> float | None:
+    if not dated:
+        return None
+    cutoff = dated[-1][0] - timedelta(days=days)
+    values = [close for date, close in dated if date >= cutoff]
+    return pick(values) if values else None
+
+
+DAILY_WINDOW_DAYS = 3
+
+
+@dataclass
+class SupportLevels:
+    daily: float | None
+    weekly: float | None
+    monthly: float | None
+    yearly: float | None
+
+
+def compute_support_levels(historical_prices: list[dict]) -> SupportLevels:
+    """Soporte = el cierre más bajo de la ventana — la lectura más simple y defendible de
+    'soporte': un nivel del que el precio ya rebotó en ese plazo. `daily` usa una ventana de
+    3 sesiones (no 1 sola) porque solo hay un cierre por día — un único cierre no tiene 'rango'
+    propio, así que el nivel más corto posible con este dato es el extremo de las últimas
+    pocas sesiones, no la de hoy."""
+    dated = _sorted_dated_closes(historical_prices)
+    return SupportLevels(
+        daily=_extreme_since(dated, DAILY_WINDOW_DAYS, min),
+        weekly=_extreme_since(dated, 7, min),
+        monthly=_extreme_since(dated, 30, min),
+        yearly=_extreme_since(dated, 365, min),
+    )
+
+
+@dataclass
+class ResistanceLevels:
+    daily: float | None
+    weekly: float | None
+    monthly: float | None
+    yearly: float | None
+
+
+def compute_resistance_levels(historical_prices: list[dict]) -> ResistanceLevels:
+    """Resistencia = el cierre más alto de la ventana — el espejo del soporte: un nivel del
+    que el precio ya retrocedió en ese plazo."""
+    dated = _sorted_dated_closes(historical_prices)
+    return ResistanceLevels(
+        daily=_extreme_since(dated, DAILY_WINDOW_DAYS, max),
+        weekly=_extreme_since(dated, 7, max),
+        monthly=_extreme_since(dated, 30, max),
+        yearly=_extreme_since(dated, 365, max),
+    )
+
+
+def _ema_series(closes: list[float], period: int) -> list[float]:
+    """A diferencia de la EMA de `trend.py` (que solo devuelve el último valor), el MACD
+    necesita la serie completa para calcular el histórico de la línea de señal."""
+    if len(closes) < period:
+        return []
+    ema = sum(closes[:period]) / period
+    multiplier = 2 / (period + 1)
+    series = [ema]
+    for close in closes[period:]:
+        ema = (close - ema) * multiplier + ema
+        series.append(ema)
+    return series
+
+
+MACD_FAST = 12
+MACD_SLOW = 26
+MACD_SIGNAL = 9
+
+
+@dataclass
+class MACDResult:
+    macd: float
+    signal: float
+    histogram: float
+
+
+def compute_macd(
+    closes: list[float], fast: int = MACD_FAST, slow: int = MACD_SLOW, signal_period: int = MACD_SIGNAL
+) -> MACDResult | None:
+    """Línea MACD = EMA rápida - EMA lenta. Señal = EMA de la línea MACD. Histograma = MACD -
+    Señal — mide si el momentum de corto plazo viene a favor (positivo) o en contra
+    (negativo) de la tendencia."""
+    if len(closes) < slow + signal_period:
+        return None
+    ema_fast = _ema_series(closes, fast)
+    ema_slow = _ema_series(closes, slow)
+    # ema_fast arranca antes que ema_slow (período más corto) — alinear por el final, que es
+    # donde ambas series representan la misma fecha (la más reciente).
+    min_len = min(len(ema_fast), len(ema_slow))
+    macd_line = [ema_fast[-min_len:][i] - ema_slow[-min_len:][i] for i in range(min_len)]
+    if len(macd_line) < signal_period:
+        return None
+    signal_series = _ema_series(macd_line, signal_period)
+    if not signal_series:
+        return None
+    macd_value = macd_line[-1]
+    signal_value = signal_series[-1]
+    return MACDResult(macd=macd_value, signal=signal_value, histogram=macd_value - signal_value)
+
+
+BOLLINGER_PERIOD = 20
+BOLLINGER_NUM_STD = 2.0
+
+
+@dataclass
+class BollingerBands:
+    middle: float
+    upper: float
+    lower: float
+
+
+def compute_bollinger_bands(
+    closes: list[float], period: int = BOLLINGER_PERIOD, num_std: float = BOLLINGER_NUM_STD
+) -> BollingerBands | None:
+    """Banda media = SMA del período. Bandas superior/inferior = media ± N desvíos estándar
+    del mismo período — se ensanchan con más volatilidad, se angostan con menos."""
+    if len(closes) < period:
+        return None
+    window = closes[-period:]
+    middle = sum(window) / period
+    variance = sum((c - middle) ** 2 for c in window) / period
+    std = variance**0.5
+    return BollingerBands(middle=middle, upper=middle + num_std * std, lower=middle - num_std * std)
+
+
+# Reemplaza a los niveles de Fibonacci (removidos): probamos esos niveles a fondo — incluso
+# condicionados por régimen de tendencia y por volumen — y ninguna versión sobrevivió una
+# validación fuera de muestra (train/test), el resultado cambiaba de signo con cambios chicos
+# de parámetros, la firma clásica de ruido estadístico. Esto en cambio SÍ sobrevivió esa misma
+# prueba para BTC/ETH: no es un nivel de precio puntual, es una pregunta más simple y con mucho
+# más poder estadístico — "¿el retorno futuro es distinto según si el precio viene sostenido
+# arriba (o abajo) de sus 3 medias?" — el efecto "momentum/trend-following" documentado en la
+# literatura académica desde hace décadas, no algo inventado para este ticker.
+REGIME_STRONG = "fuerte"
+REGIME_WEAK = "debil"
+REGIME_MIXED = "mixta"
+
+# Mismos horizontes probados en la investigación: 5/10 días no mostraron nada que se sostuviera
+# fuera de muestra, 20/30 sí (para BTC/ETH, no para SOL) — se muestran los 4 igual, por
+# transparencia, en vez de ocultar los que no funcionaron.
+REGIME_REACTION_HORIZONS_DAYS = [5, 10, 20, 30]
+REGIME_MIN_OBSERVATIONS = 15
+
+
+def classify_regime_series(closes: list[float]) -> list[str | None]:
+    """Versión histórica (día por día) de la misma regla que ya usa `classify_trend_state`
+    (app.py) para "hoy": "fuerte" = precio sostenido arriba de su EMA de EMA_PERIOD Y su SMA de
+    SMA_SHORT_PERIOD Y su SMA de SMA_LONG_PERIOD a la vez; "debil" = sostenido abajo de las 3;
+    "mixta" = cualquier otra combinación. None mientras no haya suficiente historia para las 3
+    medias (los primeros SMA_LONG_PERIOD-1 días, ya que esa es la más lenta de las tres)."""
+    n = len(closes)
+    if n < SMA_LONG_PERIOD:
+        return [None] * n
+
+    ema_series = _ema_series(closes, EMA_PERIOD)  # ema_series[0] == día EMA_PERIOD-1
+    ema_offset = EMA_PERIOD - 1
+    closes_series = pd.Series(closes, dtype=float)
+    sma_short = closes_series.rolling(SMA_SHORT_PERIOD).mean()
+    sma_long = closes_series.rolling(SMA_LONG_PERIOD).mean()
+
+    regimes: list[str | None] = [None] * n
+    for i in range(SMA_LONG_PERIOD - 1, n):
+        sma_s, sma_l = sma_short.iloc[i], sma_long.iloc[i]
+        if pd.isna(sma_s) or pd.isna(sma_l):
+            continue
+        ema_val = ema_series[i - ema_offset]
+        price = closes[i]
+        above_ema, above_s, above_l = price >= ema_val, price >= sma_s, price >= sma_l
+        if above_ema and above_s and above_l:
+            regimes[i] = REGIME_STRONG
+        elif not above_ema and not above_s and not above_l:
+            regimes[i] = REGIME_WEAK
+        else:
+            regimes[i] = REGIME_MIXED
+    return regimes
+
+
+@dataclass
+class RegimeReaction:
+    regime: str
+    horizon_days: int
+    observations: int
+    mean_return: float | None  # retorno promedio histórico a horizon_days, dado ese régimen
+    win_rate: float | None  # fracción de esas veces que el retorno fue positivo
+
+
+def compute_regime_reactions(closes: list[float]) -> list[RegimeReaction]:
+    """Para cada (régimen, horizonte), junta todos los días históricos que estuvieron en ese
+    régimen y mide qué retorno tuvieron horizon_days después — el promedio y qué fracción fue
+    positiva. Descarta con muestra chica (< REGIME_MIN_OBSERVATIONS) en vez de mostrar un
+    número poco confiable. Esto es estadística descriptiva sobre el propio historial del
+    ticker: valida (o no) según lo que ya viste en régimen "fuerte" en el propio backtest de
+    esta conversación, no algo que este código re-verifique en cada corrida."""
+    n = len(closes)
+    regimes = classify_regime_series(closes)
+    closes_series = pd.Series(closes, dtype=float)
+    regime_series = pd.Series(regimes)
+
+    reactions = []
+    for horizon in REGIME_REACTION_HORIZONS_DAYS:
+        forward_return = (closes_series.shift(-horizon) - closes_series) / closes_series
+        valid = forward_return.notna() & regime_series.notna()
+        for regime in [REGIME_STRONG, REGIME_WEAK, REGIME_MIXED]:
+            mask = valid & (regime_series == regime)
+            n_obs = int(mask.sum())
+            if n_obs < REGIME_MIN_OBSERVATIONS:
+                reactions.append(RegimeReaction(regime, horizon, n_obs, None, None))
+                continue
+            vals = forward_return[mask]
+            reactions.append(
+                RegimeReaction(regime, horizon, n_obs, float(vals.mean()), float((vals > 0).mean()))
+            )
+    return reactions
+
+
+# Refinamiento sobre el régimen "fuerte": la validación fuera de muestra de esta sesión (mismo
+# split 60/40) probó si el RSI agrega información DENTRO de los días ya "fuerte" — separando
+# "fuerte + RSI ≥ 70" contra "fuerte sin sobrecompra" y comparando el retorno futuro entre
+# ambos. El resultado fue específico de BTC: el retorno de "fuerte + sobrecompra" superó a
+# "fuerte sin sobrecompra" con signo consistente en los 4 horizontes, train y test. Para ETH el
+# signo del diferencial se invirtió entre train y test (no persistió) — no validó. Ver
+# REGIME_RSI_OVERBOUGHT_VALIDATED_HORIZONS en app.py para el scope exacto por ticker.
+RSI_OVERBOUGHT_THRESHOLD = 70.0
+
+
+@dataclass
+class RegimeRsiReaction:
+    horizon_days: int
+    observations: int
+    mean_return: float | None
+    win_rate: float | None
+
+
+def compute_regime_rsi_reactions(closes: list[float]) -> list[RegimeRsiReaction]:
+    """Como `compute_regime_reactions`, pero acotado al subconjunto 'fuerte + RSI sobrecomprado'
+    — el refinamiento que sí agregó información nueva sobre el régimen solo, validado fuera de
+    muestra únicamente para BTC (ver comentario arriba)."""
+    n = len(closes)
+    regimes = classify_regime_series(closes)
+    rsi_series = compute_rsi_series(closes)
+    closes_series = pd.Series(closes, dtype=float)
+
+    reactions = []
+    for horizon in REGIME_REACTION_HORIZONS_DAYS:
+        forward_return = (closes_series.shift(-horizon) - closes_series) / closes_series
+        mask = pd.Series(
+            [
+                forward_return.notna().iloc[i]
+                and regimes[i] == REGIME_STRONG
+                and rsi_series[i] is not None
+                and rsi_series[i] >= RSI_OVERBOUGHT_THRESHOLD
+                for i in range(n)
+            ]
+        )
+        n_obs = int(mask.sum())
+        if n_obs < REGIME_MIN_OBSERVATIONS:
+            reactions.append(RegimeRsiReaction(horizon, n_obs, None, None))
+            continue
+        vals = forward_return[mask]
+        reactions.append(
+            RegimeRsiReaction(horizon, n_obs, float(vals.mean()), float((vals > 0).mean()))
+        )
+    return reactions
