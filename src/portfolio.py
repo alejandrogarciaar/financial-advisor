@@ -137,6 +137,67 @@ def simulate_additional_purchase(
     }
 
 
+def build_synthetic_portfolio_series(
+    holdings_prices: dict[str, list[dict]], weights: dict[str, float]
+) -> list[dict]:
+    """Combina el historial de precios (del subyacente, en USD) de cada holding en un único
+    índice sintético {date, close} ponderado por el peso ACTUAL de cada posición — asume que
+    esa asignación se mantuvo constante durante todo el período, no reconstruye cuándo se
+    compró cada cosa realmente (misma simplificación, documentada, que ya usa `backtest.py`
+    para otra cosa). El resultado está listo para pasarle directo a
+    `evaluate_risk_return()` — no hace falta ninguna matemática de riesgo nueva.
+
+    `weights` no necesita sumar 1: se normaliza acá, así el caller puede pasar valores en COP
+    tal cual sin calcular el total primero. Tickers ausentes de `weights` (peso 0) se ignoran."""
+    tickers = [t for t in holdings_prices if weights.get(t, 0) > 0]
+    if not tickers:
+        return []
+    total_weight = sum(weights[t] for t in tickers)
+    normalized_weights = {t: weights[t] / total_weight for t in tickers}
+
+    # Intersección de fechas: alguna posición puede cotizar en otra plaza (ej. CSPX en
+    # Londres) y no calzar 1:1 con el resto día a día.
+    common_dates = None
+    for t in tickers:
+        dates = {p["date"] for p in holdings_prices[t]}
+        common_dates = dates if common_dates is None else common_dates & dates
+    if not common_dates or len(common_dates) < 2:
+        return []
+    sorted_dates = sorted(common_dates)
+
+    closes_by_ticker = {t: {p["date"]: p["close"] for p in holdings_prices[t]} for t in tickers}
+
+    index_value = 100.0
+    series = [{"date": sorted_dates[0], "close": index_value}]
+    for i in range(1, len(sorted_dates)):
+        prev_date, date = sorted_dates[i - 1], sorted_dates[i]
+        weighted_return = sum(
+            normalized_weights[t] * (closes_by_ticker[t][date] / closes_by_ticker[t][prev_date] - 1)
+            for t in tickers
+        )
+        index_value *= 1 + weighted_return
+        series.append({"date": date, "close": index_value})
+    return series
+
+
+def project_future_value(
+    current_value: float, monthly_contribution: float, annual_rate: float, years: float
+) -> float:
+    """Valor futuro de un capital inicial + aportes mensuales, a una tasa anual compuesta
+    mensualmente (fórmula estándar de capital inicial + anualidad ordinaria) — matemática
+    determinística, no un modelo que haya que validar fuera de muestra. Qué tasa pasar (y si
+    es razonable asumirla hacia adelante) es responsabilidad de quien llama a esta función."""
+    months = round(years * 12)
+    if months <= 0:
+        return current_value
+    monthly_rate = (1 + annual_rate) ** (1 / 12) - 1
+    if monthly_rate == 0:
+        return current_value + monthly_contribution * months
+    future_value_lump = current_value * (1 + monthly_rate) ** months
+    future_value_contributions = monthly_contribution * (((1 + monthly_rate) ** months - 1) / monthly_rate)
+    return future_value_lump + future_value_contributions
+
+
 def commission_summary(purchases: pd.DataFrame) -> dict:
     """Cuánto se pagó en comisiones en total y qué proporción representa del capital
     invertido — costo real que reduce la rentabilidad, no una proyección de nada."""

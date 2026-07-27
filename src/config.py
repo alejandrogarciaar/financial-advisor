@@ -60,6 +60,20 @@ PORTFOLIO_CDI_UNDERLYING = {
     "CSPXCO": ("etf", "CSPXCO"),
 }
 
+# Clasificación GICS aproximada de cada subyacente, para la sección de diversificación del
+# Portafolio. Estática (no viene de ninguna API — yfinance/FMP no la exponen de forma
+# confiable en este proyecto) porque el universo es chico y fijo y estas clasificaciones no
+# cambian seguido: Alphabet es Comunicación desde la reclasificación GICS de 2018, Amazon
+# Consumo discrecional, Apple/Microsoft Tecnología — no ambiguas. CSPX es un fondo diversificado
+# (S&P 500 completo), no un sector puntual.
+PORTFOLIO_CDI_SECTOR = {
+    "GOOGLCO": "Comunicación",
+    "AMZNCO": "Consumo discrecional",
+    "AAPLCO": "Tecnología",
+    "MSFTCO": "Tecnología",
+    "CSPXCO": "Diversificado (ETF S&P 500)",
+}
+
 # Cripto para la pestaña Especulación (no participa en Acciones/Portafolio: no tiene estados
 # financieros, ninguna de las 6 fórmulas de valoración aplicaría). yfinance exige el sufijo
 # "-USD" para spot cripto; el usuario elige el símbolo pelado, el sufijo se resuelve al hacer

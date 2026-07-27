@@ -225,7 +225,12 @@ def get_historical_prices(ticker: str) -> tuple[list[dict], dict]:
         # todavía no cerró cuando yfinance arma el historial) — se descarta acá, en la fuente,
         # para que ningún consumidor (EMA, SMA, CAGR, volatilidad) tenga que lidiar con eso.
         return [
-            {"date": idx.strftime("%Y-%m-%d"), "close": float(row["Close"])}
+            {
+                "date": idx.strftime("%Y-%m-%d"),
+                "close": float(row["Close"]),
+                "high": float(row["High"]),
+                "low": float(row["Low"]),
+            }
             for idx, row in hist.iterrows()
             if pd.notna(row["Close"])
         ]

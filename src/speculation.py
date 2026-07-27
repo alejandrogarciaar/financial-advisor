@@ -7,6 +7,7 @@ valoración ni con el Portafolio — es una zona aparte a propósito.
 from dataclasses import dataclass
 from datetime import datetime, timedelta
 
+import numpy as np
 import pandas as pd
 
 from src.valuation.trend import EMA_PERIOD, SMA_LONG_PERIOD, SMA_SHORT_PERIOD
@@ -199,6 +200,71 @@ def compute_bollinger_bands(
     variance = sum((c - middle) ** 2 for c in window) / period
     std = variance**0.5
     return BollingerBands(middle=middle, upper=middle + num_std * std, lower=middle - num_std * std)
+
+
+ADX_PERIOD = 14
+
+
+@dataclass
+class ADXResult:
+    adx: float
+    plus_di: float
+    minus_di: float
+
+
+def compute_adx(
+    highs: list[float | None], lows: list[float | None], closes: list[float], period: int = ADX_PERIOD
+) -> ADXResult | None:
+    """ADX de Wilder (14) — a diferencia de RSI/MACD/Bollinger (que solo miran el cierre), acá
+    hace falta el máximo y el mínimo de cada día para medir el "true range" y el movimiento
+    direccional (+DM/-DM). Mide la FUERZA de la tendencia, no su dirección — un ADX alto puede
+    acompañar tanto una suba como una baja sostenida; +DI vs. -DI es lo que da la dirección.
+
+    Se investigó como posible refuerzo del régimen "fuerte" del "Plan de DCA sugerido" (mismo
+    split cronológico 60/40 que validó el refuerzo de RSI para BTC) y NO se sostuvo: el signo
+    del efecto se invertía entre entrenamiento y prueba, y cambiaba según el umbral de ADX
+    elegido (20/25/30) — la misma fragilidad que hundió los niveles de Fibonacci (ver
+    CLAUDE.md). Por eso se muestra solo como indicador descriptivo clásico (igual jerarquía que
+    MACD/Bollinger), no como parte de esa recomendación.
+
+    Suavizado de Wilder = EMA con alpha=1/period — equivalente matemático de la fórmula
+    recursiva clásica ("resta 1/N, suma el valor nuevo"), expresado con `ewm` de pandas en vez
+    de un loop manual como `compute_rsi_series`, porque acá hace falta encadenar 3 suavizados
+    distintos (TR, +DM, -DM) antes de llegar al ADX."""
+    n = len(closes)
+    if n < period * 2 or len(highs) != n or len(lows) != n:
+        return None
+
+    high = pd.Series(highs, dtype=float)
+    low = pd.Series(lows, dtype=float)
+    close = pd.Series(closes, dtype=float)
+    prev_close = close.shift(1)
+    prev_high = high.shift(1)
+    prev_low = low.shift(1)
+
+    true_range = pd.concat(
+        [high - low, (high - prev_close).abs(), (low - prev_close).abs()], axis=1
+    ).max(axis=1)
+
+    up_move = high - prev_high
+    down_move = prev_low - low
+    plus_dm = pd.Series(np.where((up_move > down_move) & (up_move > 0), up_move, 0.0))
+    minus_dm = pd.Series(np.where((down_move > up_move) & (down_move > 0), down_move, 0.0))
+
+    atr = true_range.ewm(alpha=1 / period, adjust=False, min_periods=period).mean()
+    plus_di = 100 * (plus_dm.ewm(alpha=1 / period, adjust=False, min_periods=period).mean() / atr)
+    minus_di = 100 * (minus_dm.ewm(alpha=1 / period, adjust=False, min_periods=period).mean() / atr)
+
+    dx = 100 * (plus_di - minus_di).abs() / (plus_di + minus_di)
+    adx_series = dx.ewm(alpha=1 / period, adjust=False, min_periods=period).mean()
+
+    if adx_series.empty or pd.isna(adx_series.iloc[-1]):
+        return None
+    return ADXResult(
+        adx=float(adx_series.iloc[-1]),
+        plus_di=float(plus_di.iloc[-1]),
+        minus_di=float(minus_di.iloc[-1]),
+    )
 
 
 # Reemplaza a los niveles de Fibonacci (removidos): probamos esos niveles a fondo — incluso

@@ -6,12 +6,23 @@ import plotly.graph_objects as go
 import streamlit as st
 
 from src.backtest import backtest_ticker
-from src.config import ETF_TICKERS, PORTFOLIO_CDI_TICKERS, PORTFOLIO_CDI_UNDERLYING, RISK_FREE_RATE, SPECULATION_CRYPTO_TICKERS, TICKERS
+from src.config import (
+    ETF_TICKERS,
+    PORTFOLIO_CDI_SECTOR,
+    PORTFOLIO_CDI_TICKERS,
+    PORTFOLIO_CDI_UNDERLYING,
+    RISK_FREE_RATE,
+    SPECULATION_CRYPTO_TICKERS,
+    TICKERS,
+)
 from src.data.errors import DataError
+from src.drawdown_dca import classify_drawdown_bucket, current_bucket_reaction, current_drawdown_snapshot
 from src.portfolio import (
     DEFAULT_COMMISSION_COP,
+    build_synthetic_portfolio_series,
     commission_summary,
     load_purchases,
+    project_future_value,
     save_purchases,
     simulate_additional_purchase,
     summarize_by_ticker,
@@ -20,6 +31,7 @@ from src.portfolio import (
 from src.preferences import load_selected_tickers, save_selected_tickers
 from src.verdict_history import load_verdict_history, record_verdict
 from src.speculation import (
+    compute_adx,
     compute_bollinger_bands,
     compute_macd,
     compute_regime_reactions,
@@ -29,6 +41,7 @@ from src.speculation import (
     compute_support_levels,
 )
 from src.valuation.etf_analysis import REFERENCE_PE, evaluate_etf
+from src.valuation.risk_return import evaluate_risk_return
 from src.valuation.trend import evaluate_trend
 from src.valuation.fair_value import (
     PROVIDERS,
@@ -1209,6 +1222,27 @@ def render_etf_detail(ticker: str):
         st.caption("No disponible.")
 
 
+# Gate estático de qué (ticker subyacente, franja de caída) se validó fuera de muestra en la
+# investigación de esta sesión (split cronológico 60/40, mismo patrón que
+# REGIME_VALIDATED_COMBOS de Especulación — no recalculado en vivo, para evitar p-hacking).
+# Horizonte fijo en 90 días (DRAWDOWN_REACTION_HORIZON_DAYS en drawdown_dca.py): elegido de
+# antemano por ser el horizonte medio de los 4 testeados (20/60/90/180), no porque haya sido el
+# que mejor dio — no agregar otros horizontes al gate sin repetir la validación completa.
+# Las franjas de caída profunda (20%+) NO validan para casi ningún ticker: el período de test
+# (últimos ~2 años) fue mayormente alcista y casi no tuvo caídas grandes — no es que la señal
+# falle ahí, es que no hay con qué medirla todavía. MSFT es la única excepción con muestra
+# suficiente en 20-30%. CSPX (S&P 500) no tiene ningún bucket validado — ni bajó lo suficiente
+# en el período de test como para poder chequear nada más allá de 0-5%. Ver CLAUDE.md para el
+# detalle completo del backtest (train/test, n por celda).
+DRAWDOWN_VALIDATED_BUCKETS = {
+    "GOOGL": {"5-10%"},
+    "AMZN": {"5-10%", "10-15%"},
+    "AAPL": {"5-10%", "10-15%"},
+    "MSFT": {"5-10%", "10-15%", "20-30%"},
+    "CSPXCO": set(),
+}
+
+
 def render_capital():
     st.title("💰 Portafolio")
     st.caption(
@@ -1387,6 +1421,11 @@ def render_capital():
         context_results = {t: stock_results[(u, provider)] for t, u in stock_underlying.items()}
         context_results.update({t: etf_results[u] for t, u in etf_underlying.items()})
 
+        # Capturado durante el loop de abajo (no un fetch aparte) para que las secciones de
+        # Diversificación/Retorno y riesgo/Proyección, más abajo, puedan reusar el mismo
+        # historial de precios del subyacente sin volver a pedirlo.
+        underlying_prices: dict[str, list[dict]] = {}
+
         context_cols = st.columns(2)
         for i, ticker in enumerate(held_tickers):
             kind, underlying = PORTFOLIO_CDI_UNDERLYING[ticker]
@@ -1412,6 +1451,188 @@ def render_capital():
                             st.markdown(zone_badge(ev.zone, small=True), unsafe_allow_html=True)
                         else:
                             st.caption("Sin señal de valoración disponible para este ETF.")
+
+                    # Zona de acumulación: % de caída desde el máximo de 1 año del SUBYACENTE.
+                    # DRAWDOWN_VALIDATED_BUCKETS es el gate estático de qué franja está
+                    # confirmada fuera de muestra para este ticker puntual; el número mostrado
+                    # se recalcula en vivo sobre todo el historial disponible. Para acciones,
+                    # `ev.historical_prices` ya está en memoria (TickerEvaluation lo trae) — sin
+                    # fetch nuevo. ETFEvaluation NO trae ese campo, así que para ETFs hace falta
+                    # un fetch aparte (cacheado, y casi siempre ya tibio si Especulación lo pidió
+                    # este mismo run) contra el símbolo real de yfinance (ETF_TICKERS[underlying],
+                    # no el "CSPXCO" pelado).
+                    if kind == "stock":
+                        dca_prices = ev.historical_prices
+                    else:
+                        try:
+                            dca_prices, _ = _cached_historical_prices(ETF_TICKERS[underlying])
+                        except DataError:
+                            dca_prices = []
+                    underlying_prices[ticker] = dca_prices
+                    snapshot = current_drawdown_snapshot(dca_prices)
+                    if snapshot is not None:
+                        bucket = classify_drawdown_bucket(snapshot.drawdown)
+                        reaction = None
+                        if bucket in DRAWDOWN_VALIDATED_BUCKETS.get(underlying, set()):
+                            closes = [p["close"] for p in dca_prices]
+                            reaction = current_bucket_reaction(closes)
+                        # st.metric SIEMPRE (no un caption) — el % en sí es útil incluso sin
+                        # confirmación histórica, y la mayoría de los holdings, en un momento
+                        # dado, van a estar en una franja no validada (ver rama de abajo); si
+                        # el número solo se destacara cuando SÍ está validado, en la práctica se
+                        # vería chico/perdido la mayor parte del tiempo, que fue el problema
+                        # reportado.
+                        st.metric("📉 Vs. máximo de 1 año", f"-{snapshot.drawdown:.0%}")
+                        # Precio de referencia en USD (moneda del subyacente, no del CDI en
+                        # COP) — mismo criterio que el resto de "Contexto de valoración", que ya
+                        # muestra datos del subyacente sin convertir. Se nombra el ticker
+                        # (`underlying`) explícitamente para que no se confunda con el precio en
+                        # COP del CDI que se ve en el resto de la tarjeta/tabla.
+                        st.caption(
+                            f"{underlying} (USD): ${snapshot.current_price:,.2f} hoy vs. máximo "
+                            f"de ${snapshot.trailing_high:,.2f} el {snapshot.trailing_high_date}."
+                        )
+                        if reaction is not None and reaction.mean_return is not None:
+                            # st.success acá SÍ, porque este es el caso interesante y accionable
+                            # (confirmado fuera de muestra) — mismo peso visual que el DCA box
+                            # de Especulación.
+                            st.success(
+                                f"**Zona de acumulación** — esta franja ({bucket}) rindió, en "
+                                f"promedio y confirmado fuera de muestra, "
+                                f"**{reaction.mean_return:+.0%} a {reaction.horizon_days} días** "
+                                f"(tasa de acierto {reaction.win_rate:.0%}, n={reaction.observations})."
+                            )
+                        else:
+                            st.caption("Sin confirmación histórica suficiente para esta franja todavía.")
+
+        st.divider()
+        st.subheader("🥧 Diversificación")
+        st.caption(
+            "Cuánto pesa cada posición sobre el total y a qué sector pertenece (clasificación "
+            "aproximada) — para ver qué tan concentrado estás en pocos nombres o en un solo rubro."
+        )
+        weighted_rows = summary[summary["current_value_cop"].notna()].sort_values(
+            "current_value_cop", ascending=False
+        )
+        if weighted_rows.empty:
+            st.caption("No hay precios actuales disponibles para calcular esto todavía.")
+        else:
+            total_weighted_value = float(weighted_rows["current_value_cop"].sum())
+            # Colores de la paleta categórica validada de la dataviz skill, orden fijo por
+            # sector (nunca por orden de aparición) — mismo criterio que LEVEL_CHART_COLORS en
+            # Especulación. 4 sectores posibles acá, slots 1-4 de la paleta de 8.
+            sector_colors = {
+                "Comunicación": "#2a78d6",
+                "Consumo discrecional": "#eb6834",
+                "Tecnología": "#1baf7a",
+                "Diversificado (ETF S&P 500)": "#eda100",
+            }
+            div_fig = go.Figure()
+            for sector in dict.fromkeys(PORTFOLIO_CDI_SECTOR[t] for t in weighted_rows["ticker"]):
+                sector_rows = weighted_rows[weighted_rows["ticker"].map(PORTFOLIO_CDI_SECTOR) == sector]
+                div_fig.add_trace(
+                    go.Bar(
+                        x=sector_rows["ticker"],
+                        y=sector_rows["current_value_cop"] / total_weighted_value,
+                        name=sector,
+                        marker_color=sector_colors.get(sector, "#898781"),
+                        hovertemplate="%{x}: %{y:.0%}<extra>" + sector + "</extra>",
+                    )
+                )
+            div_fig.update_layout(
+                plot_bgcolor="rgba(0,0,0,0)",
+                paper_bgcolor="rgba(0,0,0,0)",
+                font=dict(color="#898781"),
+                legend=dict(orientation="h", yanchor="bottom", y=1.02, xanchor="left", x=0),
+                margin=dict(l=10, r=10, t=10, b=10),
+                height=320,
+                yaxis=dict(tickformat=".0%", gridcolor="rgba(128,128,128,0.2)"),
+                xaxis=dict(showgrid=False),
+            )
+            st.plotly_chart(div_fig, use_container_width=True)
+            largest = weighted_rows.iloc[0]
+            st.caption(
+                f"Tu posición más grande es **{largest['ticker']}**, con "
+                f"{largest['current_value_cop'] / total_weighted_value:.0%} del total."
+            )
+
+        st.divider()
+        st.subheader("📈 Retorno y riesgo del portafolio")
+        st.caption(
+            "Simulación con tu asignación ACTUAL aplicada a todo el historial disponible — no "
+            "reconstruye cuándo compraste cada cosa realmente. Usa el precio del subyacente en "
+            "USD, no el del CDI en COP (no incorpora el efecto de la TRM). 100% histórico, no "
+            "proyecta nada."
+        )
+        # Solo entran a la serie sintética los tickers con peso Y precio histórico disponibles
+        # a la vez — build_synthetic_portfolio_series ya renormaliza entre los que califican.
+        weights_for_series = {
+            t: float(v) for t, v in zip(summary["ticker"], summary["current_value_cop"]) if pd.notna(v)
+        }
+        holdings_for_series = {t: underlying_prices[t] for t in weights_for_series if underlying_prices.get(t)}
+        weights_for_series = {t: w for t, w in weights_for_series.items() if t in holdings_for_series}
+        portfolio_series = build_synthetic_portfolio_series(holdings_for_series, weights_for_series)
+        portfolio_rr = evaluate_risk_return(portfolio_series, RISK_FREE_RATE) if portfolio_series else None
+
+        if portfolio_rr is None:
+            st.caption("No hay suficiente historial disponible para calcular esto todavía.")
+        else:
+            prr1, prr2, prr3 = st.columns(3)
+            if portfolio_rr.cagr_1y is not None:
+                prr1.metric("Retorno anualizado (1 año)", f"{portfolio_rr.cagr_1y:+.1%}")
+            if portfolio_rr.cagr_3y is not None:
+                prr2.metric("Retorno anualizado (3 años)", f"{portfolio_rr.cagr_3y:+.1%}")
+            if portfolio_rr.cagr_5y is not None:
+                prr3.metric("Retorno anualizado (5 años)", f"{portfolio_rr.cagr_5y:+.1%}")
+            prr4, prr5, prr6 = st.columns(3)
+            if portfolio_rr.annualized_volatility is not None:
+                prr4.metric("Volatilidad anualizada", f"{portfolio_rr.annualized_volatility:.1%}")
+            if portfolio_rr.sharpe_ratio is not None:
+                prr5.metric("Sharpe ratio", f"{portfolio_rr.sharpe_ratio:.2f}")
+            if portfolio_rr.max_drawdown is not None:
+                prr6.metric("Máxima caída", f"{portfolio_rr.max_drawdown:.1%}")
+
+        st.divider()
+        st.subheader("🎯 Proyección de meta")
+        if portfolio_rr is None or total_value_cop is None:
+            st.caption("No disponible todavía — depende del retorno agregado calculado arriba.")
+        else:
+            st.caption(
+                "Proyección matemática (capital inicial + aportes mensuales, interés compuesto) "
+                "usando el retorno histórico de arriba — **no es una promesa ni garantía de "
+                "retorno futuro**. El desempeño pasado no asegura nada hacia adelante."
+            )
+            proj1, proj2 = st.columns(2)
+            monthly_contribution = proj1.number_input(
+                "Aporte mensual (COP)", min_value=0, step=50_000, value=200_000, key="goal_monthly_cop"
+            )
+            horizon_years = proj2.number_input(
+                "Horizonte (años)", min_value=1, max_value=40, step=1, value=10, key="goal_horizon_years"
+            )
+
+            # Total aportado no depende de la tasa (es capital de hoy + aportes futuros) — un
+            # solo número, no uno por escenario, para no repetirlo 3 veces sin necesidad.
+            months = round(horizon_years * 12)
+            total_contributed = total_value_cop + monthly_contribution * months
+            st.metric("Total aportado (lo que ya tenés + tus aportes futuros)", f"${total_contributed:,.0f}")
+
+            proj_cols = st.columns(3)
+            for proj_col, label, rate in zip(
+                proj_cols,
+                ["1 año", "3 años", "5 años"],
+                [portfolio_rr.cagr_1y, portfolio_rr.cagr_3y, portfolio_rr.cagr_5y],
+            ):
+                if rate is None:
+                    continue
+                projected_value = project_future_value(total_value_cop, monthly_contribution, rate, horizon_years)
+                gain = projected_value - total_contributed
+                # delta = la ganancia proyectada (aportado vs. aportado+ganancia) — Streamlit la
+                # colorea sola (verde/rojo según signo), es justo la distinción que se pidió.
+                proj_col.metric(
+                    f"Total proyectado — retorno de {label}",
+                    f"${projected_value:,.0f}",
+                    delta=f"${gain:,.0f} de ganancia",
+                )
 
     st.divider()
     st.subheader("🧮 Simulador de precio promedio")
@@ -1879,6 +2100,53 @@ def render_speculation():
                 "que marcan la banda superior e inferior es el movimiento esperable mientras "
                 "no se acerque a ninguna de las dos."
             )
+
+    st.divider()
+    st.subheader("ADX (14) — Fuerza de la tendencia")
+    st.caption(
+        "El ADX no dice si el precio va a subir o bajar — mide qué tan fuerte y sostenida es "
+        "la tendencia actual, sea cual sea. Pensalo como un medidor de intensidad de viento: no "
+        "importa de qué lado sopla, importa si sopla fuerte y parejo o si apenas hay brisa "
+        "(precio moviéndose de costado, sin rumbo claro)."
+    )
+    highs = [p.get("high") for p in historical_prices]
+    lows = [p.get("low") for p in historical_prices]
+    adx = compute_adx(highs, lows, closes)
+    if adx is None:
+        st.caption("No hay suficiente historial (o datos de máximos/mínimos) para calcular el ADX.")
+    else:
+        adx_col1, adx_col2, adx_col3 = st.columns(3)
+        adx_col1.metric("ADX", f"{adx.adx:.1f}")
+        adx_col2.metric("+DI (empuje alcista)", f"{adx.plus_di:.1f}")
+        adx_col3.metric("−DI (empuje bajista)", f"{adx.minus_di:.1f}")
+
+        direction = "alcista 🟢" if adx.plus_di > adx.minus_di else "bajista 🔴"
+        if adx.adx < 20:
+            st.info(
+                "➖ ADX por debajo de 20 — sin tendencia clara, el precio se mueve de costado. "
+                "Clásicamente, en esta zona las señales de tendencia (medias móviles, MACD) son "
+                "menos confiables: hay más chance de que sean señales falsas."
+            )
+        elif adx.adx < 25:
+            st.info(
+                f"🟡 ADX entre 20 y 25 — zona gris. Hay un empuje {direction} recién formándose, "
+                "pero todavía no está confirmado con fuerza — clásicamente conviene esperar más "
+                "confirmación antes de darle mucho peso a esta lectura."
+            )
+        else:
+            st.info(
+                f"💪 ADX por encima de 25 — tendencia {direction} fuerte y confirmada (cuanto "
+                "más alto el número, más fuerte). Clásicamente, tendencias así de marcadas "
+                "tienden a sostenerse un tramo más antes de perder fuerza — pero el ADX no "
+                "avisa el techo/piso exacto, solo que la tendencia actual tiene 'motor'."
+            )
+        st.caption(
+            "Se probó como posible refuerzo del régimen del '📋 Plan de DCA sugerido' (misma "
+            "prueba fuera de muestra que validó el refuerzo de RSI para BTC) y no se sostuvo: "
+            "el resultado cambiaba de signo entre entrenamiento y prueba, y variaba según el "
+            "umbral de ADX elegido. Por eso queda acá como indicador descriptivo clásico, igual "
+            "que el MACD y las Bandas de Bollinger — no ajusta esa sugerencia."
+        )
 
 
 BACKTEST_YEARS_AGO = 1  # ver docstring de src/backtest.py: years_ago=2 no tiene suficiente

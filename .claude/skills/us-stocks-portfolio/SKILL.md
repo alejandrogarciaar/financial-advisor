@@ -17,7 +17,19 @@ shares only) — this skill is only the map of where it lives.
 - `render_capital()` — the whole tab: purchase entry form, held-position table,
   `render_portfolio_total_hero()`, and the "📎 Contexto de valoración" section that reuses
   `STOCK_EVAL_CACHE_KEY` / `ETF_EVAL_CACHE_KEY` (populated by Acciones/ETFs earlier in the same
-  run — see `_get_or_fetch()`) instead of re-fetching.
+  run — see `_get_or_fetch()`) instead of re-fetching. That same section also shows each
+  holding's drawdown-from-1y-high line (`DRAWDOWN_VALIDATED_BUCKETS`, defined right above
+  `render_capital()`) — the static gate of which (ticker, drawdown-bucket) pairs are validated;
+  don't add a ticker/bucket to it without re-running the same out-of-sample check documented in
+  `CLAUDE.md` — and captures `underlying_prices: dict[str, list[dict]]` while it loops, so the
+  3 sections right after it don't need to re-fetch anything.
+- Right after "Contexto de valoración", 3 more sections in the same `else:` branch (need
+  `purchases` non-empty): "🥧 Diversificación" (bar chart, `PORTFOLIO_CDI_SECTOR`), "📈 Retorno
+  y riesgo del portafolio" (`build_synthetic_portfolio_series()` + the existing
+  `evaluate_risk_return()`), "🎯 Proyección de meta" (`project_future_value()`, depends on the
+  risk/return section's output). None of these three need OOS validation — see `CLAUDE.md` for
+  why (descriptive composition + deterministic financial math, not a price prediction) — but the
+  goal projection carries a strong disclaimer anyway since a dollar figure reads as a forecast.
 - `_cached_portfolio_price()` — current COP price for a held CDI, straight from yfinance
   (`PORTFOLIO_CDI_TICKERS[ticker]`), no FX conversion.
 - `tab_capital` block near the bottom (`st.tabs()` call) — the tab wiring itself.
@@ -30,12 +42,36 @@ shares only) — this skill is only the map of where it lives.
 - `summarize_by_ticker()`, `commission_summary()`, `simulate_additional_purchase()` —
   aggregation and commission math. `DEFAULT_COMMISSION_COP` (7,438 COP) is the per-purchase
   default, editable per row, never retroactive.
+- `build_synthetic_portfolio_series()` — combines each holding's underlying (USD) price history
+  into one weighted synthetic index (today's allocation applied across the whole lookback, not a
+  real historical reconstruction), feeds `evaluate_risk_return()` (`src/valuation/risk_return.py`,
+  untouched — no new risk math).
+- `project_future_value()` — standard future-value formula (lump sum + monthly annuity,
+  compounded monthly) for "🎯 Proyección de meta". Pure deterministic arithmetic; the caller
+  decides what rate to feed it.
+
+## `src/drawdown_dca.py`
+
+- `current_drawdown_from_high()` (bare %, used internally by `current_bucket_reaction()`),
+  `current_drawdown_snapshot()` (the one the UI actually calls — also returns the reference
+  prices and the trailing-high date, for the "AMZN (USD): $231 hoy vs. máximo de $275 el
+  2026-05-06" context line), `classify_drawdown_bucket()`, `compute_drawdown_bucket_reactions()`,
+  `current_bucket_reaction()` — the reusable computation behind the drawdown-bucket line (mirrors
+  `speculation.py`'s regime-reaction functions, same shape). For stocks, runs on
+  `ev.historical_prices` already in memory; `ETFEvaluation` does **not** carry that field (a real
+  bug this session), so the ETF branch fetches separately via `_cached_historical_prices()`. This
+  is a **deliberate exception** to the project's no-timing-language rule (the second one, after
+  Especulación) — see `CLAUDE.md` for why it's scoped to Portfolio and why the language must stay
+  descriptive, not imperative.
 
 ## `src/config.py`
 
 - `PORTFOLIO_CDI_TICKERS` — the only tickers selectable here (Colombian CDIs, not the plain USD
   `TICKERS`). `PORTFOLIO_CDI_UNDERLYING` — maps each CDI to the `TICKERS`/`ETF_TICKERS` company
-  its "Contexto de valoración" card should reference.
+  its "Contexto de valoración" card should reference (also the key `DRAWDOWN_VALIDATED_BUCKETS`
+  is indexed by — `"CSPXCO"`, not `"CSPX"`, for the ETF). `PORTFOLIO_CDI_SECTOR` — static
+  CDI→sector map for "🥧 Diversificación" (not sourced from either provider — see `CLAUDE.md`
+  for why).
 
 ## `src/data/fx.py`
 
