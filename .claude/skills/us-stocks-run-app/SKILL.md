@@ -67,11 +67,48 @@ rm -f streamlit.pid
 ```
 
 If `kill` doesn't work (common when the Bash tool's PID differs from the actual Windows
-process), fall back to:
+process — headless mode has no window, so `taskkill //FI "WINDOWTITLE eq streamlit*"` won't
+match it either), the reliable fallback validated in this environment is a PowerShell command
+matching on the actual command line instead of a window title:
 
-```bash
-taskkill //F //IM python.exe //FI "WINDOWTITLE eq streamlit*"
+```powershell
+Get-CimInstance Win32_Process -Filter "Name='python.exe'" |
+  Where-Object { $_.CommandLine -like '*streamlit run app.py*' } |
+  ForEach-Object { Stop-Process -Id $_.ProcessId -Force }
 ```
 
-Note this last one kills *all* python.exe processes tagged with a streamlit window title, not
-just this app's — prefer the PID-based kill when `streamlit.pid` is valid.
+This kills every `streamlit run app.py` process regardless of which shell spawned it — a real
+incident this project hit: `kill "$(cat streamlit.pid)"` silently failed to stop the old
+process across two separate restarts, leaving a stale process alive that still held stale
+*imported Python submodules* in memory (not just stale bytecode — a fresh `git`-edited
+`src/speculation.py` on disk doesn't help if the already-running process never re-imports it).
+The result was a confusing `ImportError` on a name that demonstrably existed in the file on
+disk. After running the PowerShell kill above, confirm nothing's left before starting a new
+one:
+
+```powershell
+Get-CimInstance Win32_Process -Filter "Name='python.exe'" |
+  Where-Object { $_.CommandLine -like '*streamlit*' } | Select-Object ProcessId, CommandLine
+```
+
+— should return nothing. Also worth clearing `__pycache__` before restarting if you've been
+debugging an import mismatch, purely to rule it out as a variable (it wasn't the actual cause
+in the incident above, but it's a legitimate distinct source of "the running process doesn't
+match the file on disk"):
+
+```bash
+find . -path ./venv -prune -o -name "__pycache__" -print -exec rm -rf {} +
+```
+
+After restarting, don't just trust the health check — a stale process can still answer
+`/_stcore/health` with `ok` while showing an error on actual page render. Verify the *new*
+process is the one actually bound to the port, and that its log has no traceback right after
+startup:
+
+```powershell
+Get-NetTCPConnection -LocalPort 8501 -State Listen | Select-Object LocalPort, OwningProcess
+```
+
+Cross-check `OwningProcess` against the PID `streamlit.pid` implies (or against a fresh
+`Get-CimInstance` query) — if they don't match, an old process is still the one actually
+serving traffic and needs to be found and killed directly by its real PID.
