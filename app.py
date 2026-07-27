@@ -1540,7 +1540,7 @@ def render_levels_chart(historical_prices: list[dict], supports, resistances, ti
 
     fig = go.Figure()
     fig.add_trace(
-        go.Scatter(x=x, y=y, mode="lines", name=f"Precio ({ticker})", line=dict(color=LEVEL_CHART_COLORS["price"], width=2))
+        go.Scatter(x=x, y=y, mode="lines", name=f"Precio ({ticker})", line=dict(color=LEVEL_CHART_COLORS["price"], width=3))
     )
 
     support_value = getattr(supports, spec["support"])
