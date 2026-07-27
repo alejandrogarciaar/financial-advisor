@@ -269,7 +269,36 @@ if that ever changes. Keep any new
 level's `colored_metric()` color in sync with its chart-trace color if one is added. Chart
 background is transparent (`rgba(0,0,0,0)`) rather than theme-matched, so it blends with
 whatever Streamlit theme is active without needing to detect it — there's no reliable way to
-read the client's actual rendered theme from server-side Python here.
+read the client's actual rendered theme from server-side Python here. The price line itself is
+drawn at `width=3` (vs. `width=2` for the dashed/dotted support/resistance reference lines) so
+it reads as the primary series — a deliberate emphasis exception to the dataviz skill's default
+2px mark spec, not an oversight.
+
+**Using more history / multiple touched levels for support-resistance was investigated and
+rejected — same dead-end pattern as Fibonacci below, kept here for the same reason (stop a
+future session from re-treading this).** The request was to extend `yearly`'s support/
+resistance beyond the current trailing-365-day min/max — either by using all ~5 years already
+fetched (`get_historical_prices()` is capped at `period="5y"` regardless — see
+`src/data/yfinance_client.py:223` — so "more years" tops out there), and/or by marking multiple
+support/resistance levels instead of one, specifically to underpin investment-plan/capital-
+management decisions (not just a richer chart). Tested with a leak-free out-of-sample backtest
+(same chronological 60/40 split as `REGIME_VALIDATED_COMBOS`): local-extreme pivots (a close
+that's the min/max within a ±5-trading-day window, only counted as "known" `window` days after
+it occurs — no using a pivot to predict a bounce it wasn't confirmed until later) clustered
+within 2% into multi-touch levels (≥2 touches), then measuring the gap between mean forward
+return when price is within 2% of a level vs. not, across BTC/ETH/SOL/AAPL/TSLA. Two results,
+both against shipping this: (1) no ticker-general, sign-stable-in-train-and-test effect emerged
+for either the current single-level or the multi-touch approach — most combinations either
+flipped sign test-to-train or didn't clear the minimum-observations bar (stocks only have
+~1,255 trading days in that 5y cap, so single-level touch counts were as low as 8-14); (2) the
+one pattern that *did* hold sign across all 4 horizons in both train and test — SOL and TSLA,
+multi-touch method, support proximity — pointed the **wrong direction for the stated goal**:
+being near a well-touched support predicted *lower*, not higher, forward returns (-1% to -8%
+across horizons). Same "momentum, not mean-reversion" signature already documented above for
+RSI oversold: a support level being tested hard is more a sign it's about to break than a sign
+it'll hold. Conclusion: don't build a capital-management/entry-signal feature on support-
+resistance proximity, in either form. The existing single-window visual levels are left as pure
+chart annotations, not a signal — no code changed as a result of this investigation.
 
 **Fibonacci levels were tried and removed.** The full arc (kept here because it explains why
 "Régimen y retorno histórico" below looks the way it does, and to stop a future session from
