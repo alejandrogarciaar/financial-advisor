@@ -114,18 +114,27 @@ record a sale, `purchases.json` only ever grows.)
 `(fair_value - price) / price` into "Acumulación fuerte" / "Acumulación" / "Precio justo" /
 "Sobrevalorado", calibrated to the classic Graham/Buffett margin-of-safety bands.
 
-**`st.tabs()` is not lazy**: all 3 tabs' bodies execute every rerun, in fixed script order
-(`tab_acciones` → `tab_etfs` → `tab_capital`), regardless of which tab is visually active —
-this is a Streamlit characteristic, not a bug here. A slow tab earlier in that order delays
-every tab after it, including its spinner (nothing renders for a later tab until its `with
-tab_X:` block is actually reached). `_parallel_fetch()` in `app.py` (a thin
-`ThreadPoolExecutor` wrapper) is the mitigation: `render_list()` and `render_capital()`
+**`st.tabs()` is not lazy**: all 5 tabs' bodies execute every rerun, in fixed script order —
+`tab_acciones` → `tab_validacion` → `tab_etfs` → `tab_especulacion` → `tab_capital` (Acciones,
+Validación, ETFs, Especulación, then Portafolio always last, by user request) — regardless of
+which tab is visually active; this is a Streamlit characteristic, not a bug here. The tab
+*labels'* order in the `st.tabs([...])` call controls the visual left-to-right order, and the
+`with tab_X:` blocks further down are written in that same order on purpose — the two are
+independent in Streamlit (code order drives execution order regardless of label order), but
+keeping them in sync avoids the dependency between them silently drifting apart. A slow tab
+earlier in that order delays every tab after it, including its spinner (nothing renders for a
+later tab until its `with tab_X:` block is actually reached) — this is exactly why Portafolio
+must stay last: it reuses `STOCK_EVAL_CACHE_KEY`/`ETF_EVAL_CACHE_KEY` populated by Acciones and
+ETFs earlier in the same run (see `_get_or_fetch()` below), so it has to execute after both,
+and Validación/Especulación are safe to sit in between them because neither does any eager
+network fetch of its own (Validación's backtest is button-gated; Especulación only loads the
+one ticker selected). `_parallel_fetch()` in `app.py` (a thin `ThreadPoolExecutor` wrapper) is
+the mitigation for the tabs that DO eager-fetch: `render_list()` and `render_capital()`
 prefetch all their tickers' evaluations concurrently instead of looping sequentially, cutting
 wall-clock time roughly 8x for 8 tickers. Safe to call `@st.cache_data`-wrapped functions from
 worker threads here specifically because they all use `show_spinner=False` and never call any
 other `st.*` internally — they don't need Streamlit's per-thread `ScriptRunContext`. Verified
-with `streamlit.testing.v1.AppTest` (no browser needed): 0 exceptions, full 3-tab script run
-in ~7s post-parallelization vs. 20s+ for the 8-ticker Acciones loop alone before it.
+with `streamlit.testing.v1.AppTest` (no browser needed): 0 exceptions across all 5 tabs.
 
 Job counts are always **dynamic**, derived from whatever's actually filtered/held at that
 moment — `len(selected)` in Acciones (the multiselect, not `len(TICKERS)`), `len(held_tickers)`

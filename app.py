@@ -2022,8 +2022,13 @@ def render_validation():
         st.dataframe(pd.DataFrame(table_rows), hide_index=True, use_container_width=True)
 
 
-tab_acciones, tab_etfs, tab_capital, tab_especulacion, tab_validacion = st.tabs(
-    ["📈 Acciones", "🧺 ETFs", "💰 Portafolio", "🎲 Especulación", "📊 Validación"]
+# Orden pedido por el usuario: Acciones, Validación, ETFs, Especulación, Portafolio SIEMPRE al
+# final. El orden de esta tupla/lista fija tanto el orden visual de las pestañas como el orden
+# de ejecución de los bloques `with` de más abajo (st.tabs() no es lazy — ver nota en
+# CLAUDE.md), así que Portafolio último acá también preserva que corra después de Acciones y
+# ETFs, de donde reusa evaluaciones ya resueltas vía STOCK_EVAL_CACHE_KEY/ETF_EVAL_CACHE_KEY.
+tab_acciones, tab_validacion, tab_etfs, tab_especulacion, tab_capital = st.tabs(
+    ["📈 Acciones", "📊 Validación", "🧺 ETFs", "🎲 Especulación", "💰 Portafolio"]
 )
 
 with tab_acciones:
@@ -2044,6 +2049,9 @@ with tab_acciones:
             with st.spinner("Cargando..."):
                 render_detail(st.session_state.selected_ticker)
 
+with tab_validacion:
+    render_validation()
+
 with tab_etfs:
     etf_slot = st.empty()
     with etf_slot.container():
@@ -2054,13 +2062,10 @@ with tab_etfs:
             with st.spinner("Cargando..."):
                 render_etf_detail(st.session_state.selected_etf)
 
-with tab_capital:
-    with st.spinner("Cargando portafolio..."):
-        render_capital()
-
 with tab_especulacion:
     with st.spinner("Cargando..."):
         render_speculation()
 
-with tab_validacion:
-    render_validation()
+with tab_capital:
+    with st.spinner("Cargando portafolio..."):
+        render_capital()
