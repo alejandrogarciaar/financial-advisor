@@ -604,6 +604,39 @@ unrelated to this change. `compute_adx()` returns `None` (rendered as "no hay su
 historial") if either list is short or a stale pre-this-change cache entry is missing
 `"high"`/`"low"` — self-heals on the next successful live fetch, no migration needed.
 
+**OBV (On-Balance Volume) was investigated the same session, right after ADX, and hit the
+same kind of wall — shown descriptively, not as a validated refinement.** Same regime-
+refinement test (60/40 chronological split, BTC/ETH/SOL, 4 horizons): does "fuerte + OBV rising
+above its own N-day SMA" separate forward returns from "fuerte + OBV falling" better than
+"fuerte" alone? Unlike ADX (which failed cleanly at every threshold tried), OBV's result at one
+specific parameter — a 20-day SMA — looked genuinely clean for ETH: all 4 horizons held the
+same sign train-to-test, with the gap actually growing larger in the test slice (a result that,
+in isolation, would have looked at least as strong as the RSI-overbought finding that did
+validate for BTC). It was **not** shipped as validated anyway, because the two neighboring,
+equally-defensible choices — a 10-day and a 30-day SMA — did NOT reproduce that cleanness (2/4
+and 1/4 horizons holding sign respectively, for the same ticker). A result that appears only at
+one specific parameter value and not at its neighbors, discovered by scanning a few nearby
+values rather than committing to one in advance, is the textbook multiple-comparisons signature
+this project has already been burned by twice (Fibonacci's level/threshold sensitivity, and
+ADX's own threshold sensitivity right above this entry) — reporting the 20-day result alone
+without mentioning that 10/30 didn't replicate it would have been cherry-picking. No
+`REGIME_OBV_VALIDATED_HORIZONS`-style lookup was added.
+
+What shipped: `compute_obv()` (`src/speculation.py`) as a descriptive indicator, rendered right
+after ADX in `render_speculation()`, for all speculation tickers. OBV's raw cumulative value is
+not independently meaningful (it depends on wherever the available history happens to start),
+so unlike RSI/MACD/ADX it isn't interpreted by its absolute level — the UI compares it against
+its own `OBV_SMA_PERIOD`-day (20) moving average purely as a descriptive "is volume flow
+trending up or down lately" read, then cross-references that against the *current* price trend
+(`classify_trend_state(tr)`, recomputed fresh here for the same reason documented below for
+`current_regime` — the EMA/SMA section's own `trend_state` is scoped inside its own `if tr is
+not None:` block) to surface confirmation ("price up and volume agrees") vs. divergence ("price
+up but volume doesn't back it") — the same cross-referencing pattern as `trend_context_note()`/
+`quality_context_note()` elsewhere in this app: a logical read of two present-moment signals,
+not a backtested claim, so it doesn't need its own OOS validation to be shown this way (same
+justification MACD/Bollinger/ADX already rely on). `get_historical_prices()`
+(`yfinance_client.py`) now also returns `"volume"` per day (added alongside `"high"`/`"low"`).
+
 **"📊 Validación" tab (`render_validation()` in `app.py`)**: not a price signal like the other 4
 tabs — it's a check on how well the *existing* signals have performed, added after the user
 asked "what else could we add" and picked this + a rejected support/resistance idea (see above)

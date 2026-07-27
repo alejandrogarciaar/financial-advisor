@@ -31,9 +31,11 @@ from src.portfolio import (
 from src.preferences import load_selected_tickers, save_selected_tickers
 from src.verdict_history import load_verdict_history, record_verdict
 from src.speculation import (
+    OBV_SMA_PERIOD,
     compute_adx,
     compute_bollinger_bands,
     compute_macd,
+    compute_obv,
     compute_regime_reactions,
     compute_regime_rsi_reactions,
     compute_resistance_levels,
@@ -2146,6 +2148,65 @@ def render_speculation():
             "el resultado cambiaba de signo entre entrenamiento y prueba, y variaba según el "
             "umbral de ADX elegido. Por eso queda acá como indicador descriptivo clásico, igual "
             "que el MACD y las Bandas de Bollinger — no ajusta esa sugerencia."
+        )
+
+    st.divider()
+    st.subheader("Volumen (OBV — On-Balance Volume)")
+    st.caption(
+        "El OBV suma el volumen operado los días que el precio sube y lo resta los días que "
+        "baja — es un acumulado, así que el número en sí no significa nada (no se compara entre "
+        "tickers ni tiene una 'zona buena'). Lo que importa es si viene para arriba o para abajo: "
+        "pensalo como un termómetro de convicción — ¿hay mucha gente comprando/vendiendo detrás "
+        "del movimiento del precio, o el precio se mueve con poco respaldo?"
+    )
+    volumes = [p.get("volume") for p in historical_prices]
+    obv = compute_obv(closes, volumes)
+    if obv is None:
+        st.caption("No hay suficiente historial (o datos de volumen) para calcular el OBV.")
+    else:
+        obv_col1, obv_col2 = st.columns(2)
+        obv_col1.metric("OBV", f"{obv.obv:,.0f}")
+        obv_col2.metric(f"OBV — media {OBV_SMA_PERIOD} días", f"{obv.obv_sma:,.0f}")
+
+        price_trend = classify_trend_state(tr) if tr is not None else None
+        if price_trend is None:
+            st.caption("No hay suficiente historial de precio para cruzar el volumen contra la tendencia.")
+        elif price_trend == "fuerte":
+            if obv.rising:
+                st.info(
+                    "🟢 **Confirmación**: el precio viene subiendo Y el volumen lo acompaña "
+                    "(OBV arriba de su propia media). Una suba con este respaldo de volumen "
+                    "detrás suele ser más sólida que una que sube con poco volumen."
+                )
+            else:
+                st.info(
+                    "🟡 **Posible divergencia**: el precio viene subiendo pero el volumen NO "
+                    "lo acompaña (OBV abajo de su propia media) — subas con este patrón a "
+                    "veces pierden fuerza más rápido que las que sí tienen respaldo de volumen."
+                )
+        elif price_trend == "debil":
+            if not obv.rising:
+                st.info(
+                    "🔴 **Confirmación bajista**: el precio viene cayendo Y el volumen lo "
+                    "acompaña (OBV abajo de su propia media) — presión vendedora sostenida "
+                    "detrás de la baja."
+                )
+            else:
+                st.info(
+                    "🟡 **Posible divergencia**: el precio viene cayendo pero el volumen NO "
+                    "confirma la baja (OBV arriba de su propia media) — a veces anticipa que "
+                    "la presión vendedora se está agotando, aunque no es una señal fuerte por "
+                    "sí sola."
+                )
+        else:
+            st.info("➖ Tendencia de precio mixta — sin una dirección clara contra la cual cruzar el volumen.")
+
+        st.caption(
+            "Se probó como posible refuerzo del régimen del '📋 Plan de DCA sugerido' (misma "
+            "prueba fuera de muestra que las anteriores) y el resultado fue demasiado sensible "
+            "al período de la media elegida (10/20/30 días daban conclusiones distintas) para "
+            "confiar en él. Por eso queda acá como cruce descriptivo contra la tendencia, no "
+            "como parte de esa recomendación."
         )
 
 

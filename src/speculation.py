@@ -267,6 +267,51 @@ def compute_adx(
     )
 
 
+OBV_SMA_PERIOD = 20
+
+
+@dataclass
+class OBVResult:
+    obv: float
+    obv_sma: float
+    rising: bool  # obv >= su propia media móvil — "el volumen viene acompañando"
+
+
+def compute_obv(
+    closes: list[float], volumes: list[float | None], sma_period: int = OBV_SMA_PERIOD
+) -> OBVResult | None:
+    """OBV (On-Balance Volume) — acumula el volumen sumándolo en los días que el cierre sube y
+    restándolo en los que baja. El nivel absoluto no significa nada por sí solo (depende de
+    dónde arranca el historial disponible, no es comparable entre tickers ni entre corridas) —
+    lo único que importa es su TENDENCIA, por eso se compara acá contra su propia media móvil
+    de `sma_period` días, el mismo patrón que ya usa el precio contra su SMA.
+
+    Se investigó como posible refuerzo del régimen "fuerte" del "Plan de DCA sugerido" (mismo
+    método de split cronológico 60/40 que validó el refuerzo de RSI) y el resultado fue
+    demasiado sensible al período de la media elegida: con 20 días daba una señal limpia para
+    ETH (mismo signo en los 4 horizontes, train y test), pero con 10 o 30 días esa limpieza
+    desaparecía — la misma fragilidad (resultado que cambia con parámetros cercanos e
+    igualmente defendibles) que ya descartó Fibonacci y el refuerzo de ADX. Por eso se muestra
+    solo como cruce descriptivo contra la tendencia de precio (confirmación/divergencia, mismo
+    patrón que `trend_context_note`/`quality_context_note` en `fair_value.py`/`trend.py`), no
+    como parte de esa recomendación."""
+    n = len(closes)
+    if n < sma_period + 1 or len(volumes) != n:
+        return None
+    volumes_clean = [v if v is not None else 0.0 for v in volumes]
+    closes_series = pd.Series(closes, dtype=float)
+    volume_series = pd.Series(volumes_clean, dtype=float)
+    direction = np.sign(closes_series.diff().fillna(0.0))
+    obv_series = (direction * volume_series).cumsum()
+    obv_sma_series = obv_series.rolling(sma_period).mean()
+
+    if pd.isna(obv_sma_series.iloc[-1]):
+        return None
+    obv_val = float(obv_series.iloc[-1])
+    obv_sma_val = float(obv_sma_series.iloc[-1])
+    return OBVResult(obv=obv_val, obv_sma=obv_sma_val, rising=obv_val >= obv_sma_val)
+
+
 # Reemplaza a los niveles de Fibonacci (removidos): probamos esos niveles a fondo — incluso
 # condicionados por régimen de tendencia y por volumen — y ninguna versión sobrevivió una
 # validación fuera de muestra (train/test), el resultado cambiaba de signo con cambios chicos

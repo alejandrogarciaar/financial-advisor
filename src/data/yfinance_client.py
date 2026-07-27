@@ -230,6 +230,7 @@ def get_historical_prices(ticker: str) -> tuple[list[dict], dict]:
                 "close": float(row["Close"]),
                 "high": float(row["High"]),
                 "low": float(row["Low"]),
+                "volume": float(row["Volume"]),
             }
             for idx, row in hist.iterrows()
             if pd.notna(row["Close"])

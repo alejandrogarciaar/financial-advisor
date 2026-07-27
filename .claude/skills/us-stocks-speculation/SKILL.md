@@ -1,6 +1,6 @@
 ---
 name: us-stocks-speculation
-description: Use when the user's request is scoped to the "🎲 Especulación" tab of the USStocks (Precio Justo) dashboard — RSI, support/resistance, MACD, Bollinger Bands, ADX, the DCA suggestion box, or the BTC/ETH/SOL crypto tickers. Points to the files that make up this tab so work stays scoped to them.
+description: Use when the user's request is scoped to the "🎲 Especulación" tab of the USStocks (Precio Justo) dashboard — RSI, support/resistance, MACD, Bollinger Bands, ADX, OBV/volume, the DCA suggestion box, or the BTC/ETH/SOL crypto tickers. Points to the files that make up this tab so work stays scoped to them.
 ---
 
 # Especulación tab — context map
@@ -17,7 +17,7 @@ read it before adding a new speculative signal; this skill is only the map of wh
 - `render_speculation()` — the whole tab: ticker selectbox (`TICKERS +
   SPECULATION_CRYPTO_TICKERS`), price display, EMA/SMA section, support/resistance section
   (`render_levels_chart()`, driven by `SPECULATION_CHART_VIEWS` + the `st.segmented_control`),
-  MACD, Bollinger Bands, ADX, and the "📋 Plan de DCA sugerido" box.
+  MACD, Bollinger Bands, ADX, OBV, and the "📋 Plan de DCA sugerido" box.
 - `render_sticky_price()` — shared helper (also used by Acciones' `render_detail()`) for the
   floating price card; don't fork a speculation-only copy.
 - `REGIME_VALIDATED_COMBOS`, `REGIME_RSI_OVERBOUGHT_VALIDATED_HORIZONS` — static lookups from
@@ -41,6 +41,12 @@ read it before adding a new speculative signal; this skill is only the map of wh
   indicator in this file that does. Investigated as a regime refinement (same pattern as
   RSI-overbought) and did NOT validate out-of-sample; shown only as a descriptive indicator,
   same tier as MACD/Bollinger. See CLAUDE.md before trying to fold it into the DCA box.
+- `compute_obv()` — On-Balance Volume vs. its own `OBV_SMA_PERIOD`-day (20) SMA. Needs daily
+  volume. Investigated as a regime refinement too — looked clean for ETH at exactly one SMA
+  period (20) but NOT at neighboring ones (10/30), the same fragility signature as ADX/
+  Fibonacci, so it did NOT ship as validated either. Shown as a confirmation/divergence cross-
+  reference against the current price trend (same pattern as `trend_context_note()`/
+  `quality_context_note()`), not tied into the DCA box.
 - `classify_regime_series()` / `RegimeReaction` / `compute_regime_reactions()` /
   `compute_regime_rsi_reactions()` — the reproducibility path for the two validated-combo
   lookups in `app.py`; keep even if `app.py` stops calling one of them directly.
@@ -52,9 +58,10 @@ read it before adding a new speculative signal; this skill is only the map of wh
 
 ## `src/data/yfinance_client.py`
 
-- `get_historical_prices()` now returns `"high"`/`"low"` per day alongside `"date"`/`"close"`
-  (added for ADX). `_cached_historical_prices()` in `app.py` is hardcoded to this provider for
-  this whole tab regardless of which provider is active elsewhere — pre-existing, not ADX-specific.
+- `get_historical_prices()` now returns `"high"`/`"low"`/`"volume"` per day alongside
+  `"date"`/`"close"` (high/low added for ADX, volume added for OBV). `_cached_historical_prices()`
+  in `app.py` is hardcoded to this provider for this whole tab regardless of which provider is
+  active elsewhere — pre-existing, not specific to either indicator.
 
 ## `src/valuation/trend.py`
 
@@ -69,3 +76,7 @@ read it before adding a new speculative signal; this skill is only the map of wh
 - ADX as a `REGIME_ADX_VALIDATED_HORIZONS`-style refinement of the DCA box's regime signal
   (tested, sign flipped train/test and across nearby thresholds — failed the same bar the RSI
   refinement cleared). ADX itself stays, but only as a descriptive indicator.
+- OBV as a `REGIME_OBV_VALIDATED_HORIZONS`-style refinement (tested, clean result at exactly
+  one SMA period — 20 days — but not at 10 or 30, the same nearby-parameter fragility as ADX;
+  do not re-add on the strength of the 20-day result alone). OBV itself stays, but only as a
+  descriptive confirmation/divergence cross-reference.
