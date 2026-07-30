@@ -227,6 +227,7 @@ def get_historical_prices(ticker: str) -> tuple[list[dict], dict]:
         return [
             {
                 "date": idx.strftime("%Y-%m-%d"),
+                "open": float(row["Open"]),
                 "close": float(row["Close"]),
                 "high": float(row["High"]),
                 "low": float(row["Low"]),

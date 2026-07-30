@@ -47,6 +47,7 @@ PORTFOLIO_CDI_TICKERS = {
     "CSPXCO": "CSPXCO.CL",
     "AAPLCO": "AAPLCO.CL",
     "MSFTCO": "MSFTCO.CL",
+    "METACO": "METACO.CL",
 }
 
 # Para el Portafolio: qué evaluación de la pestaña Acciones/ETFs reusar como contexto de cada
@@ -58,30 +59,34 @@ PORTFOLIO_CDI_UNDERLYING = {
     "AAPLCO": ("stock", "AAPL"),
     "MSFTCO": ("stock", "MSFT"),
     "CSPXCO": ("etf", "CSPXCO"),
+    "METACO": ("stock", "META"),
 }
 
 # Clasificación GICS aproximada de cada subyacente, para la sección de diversificación del
 # Portafolio. Estática (no viene de ninguna API — yfinance/FMP no la exponen de forma
 # confiable en este proyecto) porque el universo es chico y fijo y estas clasificaciones no
-# cambian seguido: Alphabet es Comunicación desde la reclasificación GICS de 2018, Amazon
-# Consumo discrecional, Apple/Microsoft Tecnología — no ambiguas. CSPX es un fondo diversificado
-# (S&P 500 completo), no un sector puntual.
+# cambian seguido: Alphabet y Meta son Comunicación desde la reclasificación GICS de 2018,
+# Amazon Consumo discrecional, Apple/Microsoft Tecnología — no ambiguas. CSPX es un fondo
+# diversificado (S&P 500 completo), no un sector puntual.
 PORTFOLIO_CDI_SECTOR = {
     "GOOGLCO": "Comunicación",
     "AMZNCO": "Consumo discrecional",
     "AAPLCO": "Tecnología",
     "MSFTCO": "Tecnología",
     "CSPXCO": "Diversificado (ETF S&P 500)",
+    "METACO": "Comunicación",
 }
 
-# Cripto para la pestaña Especulación (no participa en Acciones/Portafolio: no tiene estados
-# financieros, ninguna de las 6 fórmulas de valoración aplicaría). yfinance exige el sufijo
-# "-USD" para spot cripto; el usuario elige el símbolo pelado, el sufijo se resuelve al hacer
-# el fetch.
-SPECULATION_CRYPTO_TICKERS = {
-    "BTC": "BTC-USD",
-    "ETH": "ETH-USD",
-    "SOL": "SOL-USD",
+# Cripto para la pestaña "🪙 Cripto" (no participa en Acciones/Portafolio: no tiene estados
+# financieros, ninguna de las 6 fórmulas de valoración aplicaría) — Binance en vez de yfinance
+# (klines de 4h nativos, sin el tope de ~730 días que yfinance impone al reagregar barras de
+# 60m, y hasta el historial completo del par listado: BTC/ETH desde 2017, SOL desde ~2020, muy
+# por encima del tope de "5y" de yfinance). Especulación (acciones) no usa esto — quedó
+# solo-acciones cuando estas 3 monedas se movieron a su propia pestaña.
+CRYPTO_BINANCE_SYMBOLS = {
+    "BTC": "BTCUSDT",
+    "ETH": "ETHUSDT",
+    "SOL": "SOLUSDT",
 }
 
 RISK_FREE_RATE = 0.042          # tasa libre de riesgo aprox. (bono 10Y US)

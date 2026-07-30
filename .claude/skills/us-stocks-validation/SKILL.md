@@ -12,21 +12,30 @@ full design rationale for everything listed here — including why the backtest 
 why `years_ago` isn't a configurable control, and why the verdict-history chart hides itself
 below 2 data points — this skill is only the map of where it lives.
 
-## `app.py`
+## `src/ui/validation.py`
+
+App code used to be one 2821-line `app.py`; it's split into `src/ui/*.py` (one file per tab,
+plus `shared.py` for cross-tab plumbing) with `app.py` now just the thin entry point (page
+config + tab wiring). This tab's code lives in `src/ui/validation.py`:
 
 - `render_validation()` — the whole tab: the backtest button + results table + caveats
   (`st.info`), and the verdict-history ticker selectbox + chart + table.
 - `_cached_backtest_ticker()` — wraps `src/backtest.py`'s `backtest_ticker()`,
   `@st.cache_data(ttl=86400)` (a day, not the usual 900s — financials don't move intraday).
-  Submitted to `_parallel_fetch()` per ticker on button click, not auto-run.
+  Submitted to `_parallel_fetch()` (`src/ui/shared.py`) per ticker on button click, not auto-run.
 - `BACKTEST_YEARS_AGO` — fixed at 1, not a UI control (see `src/backtest.py`'s docstring for
   why `years_ago=2` doesn't work for any ticker).
 - `_maybe_record_verdict()` / the `record_verdict()` call sites — these actually live in
-  `render_list()` / `render_detail()` (Acciones), not here; this tab only *reads*
+  `render_list()` / `render_detail()` (`src/ui/stocks.py`), not here; this tab only *reads*
   `load_verdict_history()`. See `us-stocks-stocks` skill if the recording logic itself needs to
   change.
-- `VERDICT_COLOR` / `VERDICT_LABEL` — reused for the chart, not redefined here; keep in sync
-  with `triangulation_badge()`'s colors if either changes.
+- `VERDICT_COLOR` / `VERDICT_LABEL` (`src/ui/shared.py`) — reused for the chart, not redefined
+  here; keep in sync with `triangulation_badge()`'s colors if either changes.
+
+## `app.py`
+
+- Just the tab wiring now (`st.tabs()` call + one `with tab_validacion:` block importing
+  `render_validation` from `src/ui/validation.py`).
 
 ## `src/verdict_history.py`
 
@@ -37,7 +46,8 @@ below 2 data points — this skill is only the map of where it lives.
 ## `src/backtest.py`
 
 - `backtest_ticker()` — per-ticker backtest logic, called directly (not through
-  `run_backtest()`'s loop) so `app.py` can parallelize it via `_parallel_fetch()`. Read the
+  `run_backtest()`'s loop) so `src/ui/validation.py` can parallelize it via `_parallel_fetch()`.
+  Read the
   module docstring before changing `years_ago` handling or the caveats shown in the UI — they're
   real, documented data limits (yfinance EPS history gaps, today's beta not the historical one,
   small survivorship-biased sample), not boilerplate disclaimers.

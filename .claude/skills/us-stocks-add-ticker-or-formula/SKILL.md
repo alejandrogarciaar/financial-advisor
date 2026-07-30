@@ -23,8 +23,24 @@ explains the family/signal split this skill depends on.
 3. If a provider can't serve it, don't silently add the ticker — either exclude it with a
    comment explaining why (matching the CSPXCO/NU precedent), or proceed with only the working
    provider and note the limitation.
-4. No other code changes needed — `app.py`'s ticker selector and `evaluate_ticker()` both
-   iterate over `TICKERS` generically.
+4. No other code changes needed — `src/ui/stocks.py`'s ticker selector and `evaluate_ticker()`
+   both iterate over `TICKERS` generically.
+5. **Check for a Colombian BVC homolog (CDI) and offer to add it to Portfolio too** — standing
+   user preference: whenever a stock ticker is added, also look for its Colombian exchange CDI,
+   normally `{TICKER}CO` (e.g. `META` → `METACO`), on yfinance as `{TICKER}CO.CL` (matches
+   `GOOGLCO.CL`/`AMZNCO.CL`/`AAPLCO.CL`/`MSFTCO.CL`/`METACO.CL` already in
+   `PORTFOLIO_CDI_TICKERS`). Verify it actually returns price history
+   (`yf.Ticker("{TICKER}CO.CL").history(period="5d")` non-empty) before adding — don't assume
+   the `{TICKER}CO.CL` pattern holds for every ticker without checking. If it exists, add it to
+   all 3 dicts in `src/config.py` together: `PORTFOLIO_CDI_TICKERS` (`"{TICKER}CO":
+   "{TICKER}CO.CL"`), `PORTFOLIO_CDI_UNDERLYING` (`"{TICKER}CO": ("stock", "{TICKER}")`), and
+   `PORTFOLIO_CDI_SECTOR` (GICS sector — reuse an existing sector if the company clearly matches
+   one already in the map, e.g. Communication Services for another media/tech-platform name; ask
+   if genuinely ambiguous). Do NOT add it to `DRAWDOWN_VALIDATED_BUCKETS`
+   (`src/ui/portfolio.py`) — that requires its own out-of-sample validation per ticker, adding an
+   unvalidated entry there would violate this project's core validate-before-shipping rule (see
+   `us-stocks-portfolio`'s Design history). If no BVC homolog exists for a given ticker, just
+   say so — not every US stock has one.
 
 ## Workflow B: Add a new valuation formula/signal
 
@@ -64,11 +80,12 @@ participate in the cheap/expensive vote)? This determines whether it joins `SIGN
    backtest, so a new field flows through automatically. No changes required unless the new
    signal needs data that the backtest's truncated historical slicing doesn't provide.
 
-4. **Update `app.py`**: add a render block in `render_detail()` (and an `explain_foo()` helper
-   if it's a price signal, following `explain_book_value`/`explain_growth` for tone — plain-
-   language Spanish, no imperative "buy/sell" language per the existing `FRIENDLY_ZONE`
-   comment). If it's a price signal, also add it to the `st.write(details)` block in the
-   "detalle técnico" expander if it has an interesting internal parameter to expose.
+4. **Update `src/ui/stocks.py`**: add a render block in `render_detail()` (and an
+   `explain_foo()` helper if it's a price signal, following `explain_book_value`/
+   `explain_growth` for tone — plain-language Spanish, no imperative "buy/sell" language per the
+   existing `FRIENDLY_ZONE` comment). If it's a price signal, also add it to the
+   `st.write(details)` block in the "detalle técnico" expander if it has an interesting internal
+   parameter to expose.
 
 5. Manually sanity-check by running the app (`streamlit run app.py`) against a couple of
    tickers, including at least one where you expect the new formula to raise `ValueError` (to

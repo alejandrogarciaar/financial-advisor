@@ -11,13 +11,31 @@ that's what was validated to work in this environment.
 
 ## Start
 
-From the project root:
+First check for a reusable existing instance (see "Before starting a new one" below). If none,
+pick a free port — the user runs other things locally, so don't assume 8501 is available or
+fight another process for it:
 
 ```bash
-./venv/Scripts/python.exe -m streamlit run app.py --server.headless true --server.port 8501 \
+PORT=8501
+while powershell.exe -NoProfile -Command \
+  "if (Get-NetTCPConnection -LocalPort $PORT -State Listen -ErrorAction SilentlyContinue) { 'busy' }" \
+  | grep -q busy; do
+  PORT=$((PORT+1))
+done
+echo "$PORT" > streamlit.port
+```
+
+Then, from the project root:
+
+```bash
+./venv/Scripts/python.exe -m streamlit run app.py --server.headless true --server.port "$PORT" \
   > streamlit.log 2>&1 &
 echo $! > streamlit.pid
 ```
+
+`streamlit.port` records whichever port actually got used — every later step (health check,
+stop, viewing) reads from it rather than hardcoding 8501, since a busy 8501 means the running
+instance could be on 8502, 8503, etc.
 
 If `venv/` doesn't exist yet or dependencies look stale:
 
@@ -36,34 +54,38 @@ Don't just trust that the background command didn't error — poll the health en
 treating the app as running:
 
 ```bash
-curl -sf http://localhost:8501/_stcore/health
+PORT=$(cat streamlit.port 2>/dev/null || echo 8501)
+curl -sf "http://localhost:$PORT/_stcore/health"
 ```
 
 Empty/`ok` response with exit code 0 means it's ready. If it fails, check `streamlit.log` for
-the actual error (missing `FMP_API_KEY`, port already in use, import error, etc.) before
-retrying.
+the actual error (missing `FMP_API_KEY`, import error, etc.) before retrying — port conflicts
+shouldn't happen anymore since the port is picked to be free before launch, but a
+never-cleaned-up `streamlit.port` from a killed process could still point somewhere stale.
 
-To view it: open `http://localhost:8501` (use the PowerShell tool with `Start-Process
-"http://localhost:8501"`, or claude-in-chrome if you need to interact with/screenshot the
-page).
+To view it: open `http://localhost:$PORT` (use the PowerShell tool with `Start-Process
+"http://localhost:$PORT"`, or claude-in-chrome if you need to interact with/screenshot the
+page) — substitute the actual value of `$PORT`/`streamlit.port`, not always 8501.
 
 ## Before starting a new one — check for a stale process
 
-`streamlit.pid` may already point at a live process from a previous session. Check first:
+`streamlit.pid`/`streamlit.port` may already point at a live process from a previous session.
+Check first:
 
 ```bash
 cat streamlit.pid 2>/dev/null
-curl -sf http://localhost:8501/_stcore/health
+PORT=$(cat streamlit.port 2>/dev/null || echo 8501)
+curl -sf "http://localhost:$PORT/_stcore/health"
 ```
 
-If the health check succeeds, reuse that running instance instead of launching a second one on
-the same port (the second `streamlit run` will fail to bind :8501 anyway).
+If the health check succeeds, reuse that running instance instead of launching a second one —
+don't run the port-picking loop or start a new process at all in that case.
 
 ## Stop
 
 ```bash
 kill "$(cat streamlit.pid)" 2>/dev/null
-rm -f streamlit.pid
+rm -f streamlit.pid streamlit.port
 ```
 
 If `kill` doesn't work (common when the Bash tool's PID differs from the actual Windows
@@ -106,8 +128,10 @@ process is the one actually bound to the port, and that its log has no traceback
 startup:
 
 ```powershell
-Get-NetTCPConnection -LocalPort 8501 -State Listen | Select-Object LocalPort, OwningProcess
+Get-NetTCPConnection -LocalPort <PORT> -State Listen | Select-Object LocalPort, OwningProcess
 ```
+
+(substitute the actual port from `streamlit.port`, not always 8501)
 
 Cross-check `OwningProcess` against the PID `streamlit.pid` implies (or against a fresh
 `Get-CimInstance` query) — if they don't match, an old process is still the one actually

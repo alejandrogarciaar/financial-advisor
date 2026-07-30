@@ -8,4 +8,5 @@ portfolio_data/
 app_data/
 streamlit.log
 streamlit.pid
+streamlit.port
 .claude/settings.local.json

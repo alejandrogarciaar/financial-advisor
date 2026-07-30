@@ -10,15 +10,27 @@ requested for this tab doesn't drift into Acciones/Portafolio/Especulación code
 re-discovering the file layout from scratch. `CLAUDE.md` (already in context) has the full
 design rationale for everything listed here; this is only the map of where it lives.
 
-## `app.py`
+## `src/ui/etfs.py`
+
+App code used to be one 2821-line `app.py`; it's split into `src/ui/*.py` (one file per tab,
+plus `shared.py` for cross-tab plumbing) with `app.py` now just the thin entry point (page
+config + tab wiring). This tab's code lives in `src/ui/etfs.py`:
 
 - `render_etf_list()` — the ETF cards/list view; prefetches all `ETF_TICKERS` concurrently via
   `_get_or_fetch(ETF_EVAL_CACHE_KEY, ...)`, same pattern as Acciones.
 - `render_etf_detail(ticker)` — single-ETF detail page.
-- `ETF_EVAL_CACHE_KEY`, `_cached_etf_evaluation()` — cache key that Portafolio's "Contexto de
-  valoración" section also reads from when a held CDI's underlying ETF (CSPX) was already
-  evaluated here this run.
-- `tab_etfs` block near the bottom (`st.tabs()` call) — the tab wiring itself.
+
+## `src/ui/shared.py`
+
+- `ETF_EVAL_CACHE_KEY`, `_cached_etf_evaluation()`, `_cached_portfolio_price()` — cache keys/
+  functions that Portafolio's "Contexto de valoración" section (and this tab's own BVC-price
+  reference) also read from. Genuinely shared across ETFs/Portafolio (confirmed by usage) —
+  that's why they aren't in `etfs.py` alongside the rest of this tab's code.
+
+## `app.py`
+
+- Just the tab wiring now (`st.tabs()` call + one `with tab_etfs:` block importing
+  `render_etf_list`/`render_etf_detail` from `src/ui/etfs.py`).
 
 ## `src/valuation/`
 
