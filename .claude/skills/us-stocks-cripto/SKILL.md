@@ -30,10 +30,12 @@ config + tab wiring). This tab's code lives in `src/ui/cripto.py`:
   shared indicator stack, see `us-stocks-speculation`), and then the "🧭 Market Reaction Zone
   Engine" section (renamed from "Soportes y Resistencias — multi-metodología", see Design
   history): the "⚙️ Configuración avanzada" expander (method toggles, top_n, min_touch_points —
-  default 3, was 2 — `sr_include_4h`, `sr_include_1h`), the compute button, the display filters
-  (`sr_max_distance_pct`, `sr_timeframe_filter`), the levels table (now includes a "Magnitud
-  rebote (ATR)" column, `lv.avg_rebound_magnitude_atr`), the chart
-  (`render_advanced_levels_chart()`), and the "📋 Lectura validada fuera de muestra" section.
+  default 3, was 2 — and `sr_include_1h`; `sr_include_4h` was REMOVED, 4h is now mandatory/always
+  fetched, see Design history), the compute button, the display filters (`sr_max_distance_pct`,
+  `sr_timeframe_filter`), the levels table (now includes "Magnitud rebote (ATR)",
+  `lv.avg_rebound_magnitude_atr`, and "Antigüedad (días)" — `lv.age_bars / 6`, since `age_bars`
+  is now in 4h-bar units, not daily), the chart (`render_advanced_levels_chart()`), and the
+  "📋 Lectura validada fuera de muestra" section.
 - `render_speculation_indicators(key_prefix, ticker, historical_prices, closes, current_price,
   is_crypto)` — lives in `src/ui/speculation.py`, imported here and called with
   `key_prefix="crypto"`, `is_crypto=True` (Especulación calls the same function with
@@ -47,14 +49,22 @@ config + tab wiring). This tab's code lives in `src/ui/cripto.py`:
   it's the same code either way, just fed Binance data here instead of yfinance.
 - `_cached_binance_historical_prices()` / `_cached_binance_historical_prices_4h()` /
   `_cached_binance_historical_prices_1h()` — thin `@st.cache_data(ttl=900)` wrappers over
-  `src/data/binance_client.py`. `_cached_sr_levels()` (the engine's cache, `ttl=21600` — CPU
-  cost, not network) resolves `CRYPTO_BINANCE_SYMBOLS[ticker]` and calls through these directly;
-  there's no yfinance-vs-Binance branch anymore, since every ticker this tab ever sees is crypto.
+  `src/data/binance_client.py`. The 4h wrapper now requests `years_back=2.0` explicitly (not
+  Binance's 5.0 default) — it's the engine's reference series now (see the
+  `src/support_resistance.py` section above), and it's the only caller of that wrapper, so the
+  override is safe. `_cached_sr_levels()` (the engine's cache, `ttl=21600` — CPU cost, not
+  network) resolves `CRYPTO_BINANCE_SYMBOLS[ticker]`, fetches daily (for `daily_prices=`) and 4h
+  (the new primary arg to `detect_levels()`) unconditionally, plus 1h if `include_1h` is checked.
 - `render_advanced_levels_chart()` — draws the top levels as lines (colored by kind:
   green=support, red=resistance, purple=channel; opacity scaled by `confidence_score`) with
-  shaded zone bands, over the last `window_days` (default 365) of the daily series. Deliberately
-  NOT `LEVEL_CHART_COLORS` (Especulación's fixed per-category palette) — the number of levels
-  here is dynamic, so color-by-type + score-driven opacity is used instead (`SR_KIND_RGB`).
+  shaded zone bands, over the last `window_days` (default 365) of the DAILY series (nicer x-axis
+  than 4h bars) — but `SRLevel.value_at(bar_index)` expects an index in the 4h reference series
+  now, so the chart takes a second param (`reference_prices`, the 4h series, fetched again via
+  the already-cached `_cached_binance_historical_prices_4h()` — instant, not a new network call)
+  and converts each visible daily date to its nearest 4h bar (a local bisect closure) before
+  calling `value_at()`. Deliberately NOT `LEVEL_CHART_COLORS` (Especulación's fixed per-category
+  palette) — the number of levels here is dynamic, so color-by-type + score-driven opacity is
+  used instead (`SR_KIND_RGB`).
 - `SR_METHOD_LABELS` — Spanish labels for the `multiselect` that toggles
   `SRConfig.enabled_methods`.
 - `sr_max_distance_pct` (`st.slider`, "Mostrar niveles a menos de X% del precio actual") and
@@ -66,16 +76,18 @@ config + tab wiring). This tab's code lives in `src/ui/cripto.py`:
   `distance_to_price_pct` is always 0, set that way in `_detect_channels()`) it uses the closer
   of `channel_support`/`channel_resistance`'s distance instead. The timeframe filter's *options*
   are derived from whatever's actually present in `sr_levels` (`SR_TIMEFRAME_ORDER` just controls
-  display order — updated to `{"1h": 0, "4h": 1, "daily": 2, "weekly": 3, "monthly": 4}`, finest
-  to coarsest) — "4h"/"1h" only appear when the matching checkbox was on for that computation.
+  display order — `{"1h": 0, "4h": 1, "daily": 2, "weekly": 3, "monthly": 4}`, finest to
+  coarsest) — "4h" now always appears (it's mandatory); "1h" only appears when its checkbox was
+  on for that computation.
   Deselecting every timeframe (or narrowing the % to where nothing qualifies) correctly shows the
   empty-state caption — it does NOT silently fall back to "show everything." The "📋 Lectura
   validada fuera de muestra" section deliberately keeps reading the **unfiltered** `sr_levels` —
   the validated finding shouldn't disappear just because the display filters happen to be narrow.
-- `sr_include_4h` / `sr_include_1h` (`st.checkbox`, inside "⚙️ Configuración avanzada") —
-  opt-in, off by default, same shape for both. Binance has native 4h/1h klines (no reaggregation
-  needed, unlike yfinance's old 60m-based version — see "Design history"), so the only real cost
-  left for either is the extra network round-trip.
+- `sr_include_1h` (`st.checkbox`, inside "⚙️ Configuración avanzada") — opt-in, off by default.
+  4h no longer has a matching checkbox — it's mandatory now (the engine's reference series), so
+  toggling it made no sense once it stopped being an optional extra. Binance has native 4h/1h
+  klines (no reaggregation needed, unlike yfinance's old 60m-based version — see "Design
+  history"), so the only real cost left for 1h is the extra network round-trip.
 - `SR_VALIDATED_SCORE_PERCENTILE` (55.0), `SR_VALIDATED_HORIZONS_DAYS` ([5, 10, 20, 30]),
   `SR_VALIDATED_TICKERS` — the out-of-sample-derived lookup gating the "📋 Lectura validada fuera
   de muestra" section's `st.success` message, same pattern as `REGIME_VALIDATED_COMBOS` in
@@ -97,16 +109,42 @@ Renamed from an informal "support/resistance engine" after a user-driven redesig
 history): the score now prioritizes REACTION QUALITY (rebound size + volume) over touch count,
 which used to be the dominant weight.
 
+**The engine's REFERENCE series is 4h, not daily** (a later follow-up change, same session — see
+Design history). Every touch/rebound/breakout is walked against 4h candles (capped at 2 years,
+`src/ui/cripto.py`) instead of daily ones — BTC/ETH/SOL only have ~1825 daily bars in 5 years,
+too few for the Wilson/confidence adjustments below to have much to work with; 4h gives ~6x more
+touch opportunities in the same calendar span. `daily_prices` (a new, optional `detect_levels()`
+param) is still used, but only to resample weekly/monthly candidates and generate native "daily"
+candidates — not as the walking substrate anymore. Every `SRConfig` field expressed in bar counts
+(not ATR multiples) is rescaled ×6 accordingly: `atr_period` 14→84, `breakout_confirm_bars`
+3→18, `episode_gap_bars` 3→18, `age_full_credit_bars` 180→1080,
+`volume_confirmation_avg_period` 20→120, `short_lifespan_bars` (in `DEFAULT_PENALTIES`) 10→60,
+`pivot_lookback_4h` 5→30 (4h's role changed from optional-secondary to primary-reference, so it
+now gets the same ±5-DAY pivot window `pivot_lookback_daily` always represented, not ±5 raw 4h
+bars ≈ 20 hours). ATR-multiple fields (`dbscan_eps_atr_mult`, `reaction_magnitude_full_credit_
+atr_mult`, etc.) are untouched — they're already self-scaling to whatever resolution is in use.
+`BARS_PER_UNIT` is now barras-de-4h-per-unit (`{"4h": 1.0, "daily": 6.0, "weekly": 42.0,
+"monthly": 182.64, "1h": 0.25}`), and `_nearest_daily_index` was renamed
+`_nearest_reference_index` (same bisect logic, name no longer lies about granularity).
+`SRLevel.value_at(bar_index)` (renamed from `day_index`) now expects a 4h-series index —
+`src/ui/cripto.py`'s chart converts each visible daily date to its nearest 4h bar before calling
+it (see that file's section below). `compute_level_zone_reactions()` deliberately did NOT
+change — it still walks the DAILY series to measure N-day forward returns, since `zone_low`/
+`zone_high` are plain prices that don't depend on which index space produced them, and the
+project's horizon convention (5/10/20/30 **days**) is shared with backtest.py/regime-reactions/
+drawdown-buckets.
+
 - `SRConfig` — every parameter (pivot lookback per timeframe including `pivot_lookback_1h`, ATR
   period/tolerance, DBSCAN eps, KDE bandwidth, Hough resolution, optimizer bounds, scoring
-  weights/penalties, `enabled_methods`, `timeframes`, `top_n`, `min_touch_points` (3, was 2),
-  `sane_price_min_mult`/`sane_price_max_mult`, `reaction_magnitude_full_credit_atr_mult` (new,
-  2.0 — a rebound of ≥2x ATR gets full credit for that component)) is externally configurable,
-  per the original spec's "completamente configurable" requirement. `dbscan_eps_atr_mult` is now
-  `0.15` (was `1.5`) — ATR(14)×0.15, the "Cluster Tolerance" the redesign asked for, applied to
-  both DBSCAN/KDE clustering and candidate-merging, same shared field as before, just a much
-  tighter default (narrower zones). Nothing here is crypto-specific — this module doesn't know
-  or care that its only caller now is the Cripto tab.
+  weights/penalties, `enabled_methods`, `timeframes` (now defaults to
+  `("4h", "daily", "weekly", "monthly")`, `4h` no longer optional), `top_n`, `min_touch_points`
+  (3, was 2), `sane_price_min_mult`/`sane_price_max_mult`, `reaction_magnitude_full_credit_atr_
+  mult` (2.0 — a rebound of ≥2x ATR gets full credit for that component)) is externally
+  configurable, per the original spec's "completamente configurable" requirement.
+  `dbscan_eps_atr_mult` is `0.15` (was `1.5`) — ATR(14)×0.15, the "Cluster Tolerance" the
+  redesign asked for, applied to both DBSCAN/KDE clustering and candidate-merging, same shared
+  field as before, just a much tighter default (narrower zones). Nothing here is crypto-specific
+  — this module doesn't know or care that its only caller now is the Cripto tab.
 - `TIMEFRAME_IMPORTANCE` (new) — institutional→operational hierarchy:
   `{"monthly": 1.0, "weekly": 0.9, "daily": 0.75, "4h": 0.5, "1h": 0.3}`. Feeds the
   `timeframe_weight` score component (see below) — a level found on a longer timeframe is
@@ -250,7 +288,46 @@ which used to be the dominant weight.
 
 ## Design history
 
-**Market Reaction Zone Engine redesign (score philosophy change, most recent).** The user gave a
+**Walking touches against the 4h reference series instead of daily (most recent).** Follow-up to
+the statistical-consistency fix (below): with only ~1825 daily bars in 5 years, BTC/ETH/SOL
+levels accumulated too few touches for the Wilson/confidence adjustments to have much to work
+with — that's what broke the previous OOS validation. The user's idea: walk against 4h candles
+instead, giving ~6x more touch/rebound opportunities in the same calendar span. Confirmed with
+the user first (`EnterPlanMode`, since this touches core engine architecture): the 4h reference
+is capped at 2 years (same cost-control precedent as 1h), and this went into `detect_levels()` as
+the new primary series with `daily_prices` demoted to an optional input for weekly/monthly
+resampling + native "daily" candidates only (see the `src/support_resistance.py` section above
+for the full parameter-rescaling list). A real bug surfaced during implementation:
+`_rolling_vwap()` parsed dates with a hardcoded `"%Y-%m-%d"` format, which broke once the
+reference series' dates started carrying a time component (4h dates are
+`"YYYY-MM-DD HH:MM:SS"`) — fixed by slicing `d[:10]` before parsing, since that function only
+ever needed the calendar day.
+
+Measured effect on BTC: touch counts per level went from ~3-7 (daily-walked) to ~9-14 (4h-walked)
+— exactly the intended effect — and computation time for the app's real config (`top_n=8`) came
+out to ~8.7s, well within what a button-gated, 6h-cached computation can absorb.
+
+**Re-validation result: mixed, and reported honestly rather than smoothed over.** Under the
+strict rule this project always applies (same sign at every one of 3 percentile cuts — 40/55/70
+— all 4 horizons, both train and test), the verdict is still `NO VALIDADO` for all 6 (ticker,
+kind) combinations — same bottom line as before this change, so `SR_VALIDATED_TICKERS` stays
+`{}`. The underlying pattern did shift: BTC-resistance and ETH-resistance now hold the same sign
+across all 4 horizons at both the 40th and 55th percentile, breaking only at the 70th.
+
+**First read of that pattern ("the 70th percentile is just too thin a sample") was wrong, and
+was corrected after checking the actual `n` per cut, not just the sign.** BTC-resistance's break
+at 70 has train n=21 — barely smaller than the n=24 that passed at 55, not a collapse to
+statistical noise. ETH-resistance's break at 70 has train n=69, not small at all. And critically,
+**SOL-support breaks in the OPPOSITE direction** — it fails at the loosest cut (40, n=96) and
+passes cleanly at both 55 and 70. If "too few observations" were the real explanation, SOL should
+have broken at its tightest cut too, not its loosest. This is the exact "sign flips depending on
+which nearby, equally-defensible threshold you pick" signature that already disqualified
+Fibonacci/ADX/OBV in this project — the 3-percentile check is doing its job here, not being
+oversensitive. Discussed directly with the user, who agreed: **do not loosen or drop the 70th
+percentile check** — `SR_VALIDATED_TICKERS` staying `{}` is the correct, honest conclusion, not
+an artifact of an overly strict methodology.
+
+**Market Reaction Zone Engine redesign (score philosophy change).** The user gave a
 formal spec for the S/R engine demanding a change of philosophy: touch count should NOT be the
 primary scoring criterion — reaction QUALITY (rebound size + volume during the rebound) should
 dominate instead ("three strong rebounds with high volume are worth more than ten touches with

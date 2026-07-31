@@ -30,17 +30,25 @@ volver a correr el mismo test tren/prueba). `SR_VALIDATED_TICKERS` (en `src/ui/c
 vació a `{}` por este motivo — ver el "Design history" de la skill `us-stocks-cripto` para el
 detalle y el paso pendiente (re-correr la validación bajo el score nuevo).
 
-Multi-timeframe se resuelve reagregando las velas DIARIAS a semanal/mensual con
-pandas.resample (sin fetch intradía) más 4h/1h nativos de Binance cuando el caller los pasa
-(`intraday_4h_prices`/`intraday_1h_prices`). Cada línea/nivel encontrado en una temporalidad se
-re-expresa en el espacio de índice DIARIO (día 0 = la barra diaria más antigua) para poder medir
-touches/rebotes/rupturas siempre contra la serie diaria real — la pendiente se reescala
-dividiendo por los días-calendario aproximados de esa unidad (`BARS_PER_UNIT`) y el intercepto
-se ancla al valor de la línea en su última barra de esa temporalidad, ubicada en el índice diario
-más cercano (`_nearest_daily_index`). `TIMEFRAME_IMPORTANCE` pondera esas temporalidades de más
-institucional (mensual/semanal) a más operativa (1h), reflejando que un nivel visible en un
-timeframe más largo es intrínsecamente más significativo, no solo más "confirmado por
-confluencia" (que sigue sumando como bonus aparte).
+**La serie de REFERENCIA del motor es de 4H, no diaria** (cambio pedido explícitamente: con solo
+~1825 velas diarias en 5 años, cada nivel acumulaba muy pocos touches para que el ajuste
+estadístico de consistencia — ver más abajo — tuviera margen real; caminar contra 4h da ~6x más
+oportunidades de touch/rebote en el mismo período calendario). Todo touch/rebote/ruptura se mide
+contra esta serie de 4h (acotada a 2 años de historial por costo computacional, ver
+`src/ui/cripto.py`), sin importar qué temporalidad propuso cada candidato. Multi-timeframe se
+resuelve con daily/weekly/monthly (reagregados de una serie diaria aparte que el caller pasa como
+`daily_prices`, vía pandas.resample) más 1h nativo de Binance si el caller lo pasa
+(`intraday_1h_prices`) — cada línea/nivel encontrado en cualquiera de esas temporalidades se
+re-expresa en el espacio de índice de 4H (barra 0 = la barra de 4h más antigua) — la pendiente se
+reescala dividiendo por las barras-de-4h aproximadas de esa unidad (`BARS_PER_UNIT`) y el
+intercepto se ancla al valor de la línea en su última barra, ubicada en la barra de 4h más
+cercana (`_nearest_reference_index`). Los parámetros de `SRConfig` expresados en cantidad de
+barras (ATR, confirmación de ruptura, antigüedad, etc.) están reescalados ×6 respecto a sus
+valores históricos en días, para preservar el mismo significado en tiempo real bajo la nueva
+resolución. `TIMEFRAME_IMPORTANCE` pondera esas temporalidades de más institucional (mensual/
+semanal) a más operativa (1h), reflejando que un nivel visible en un timeframe más largo es
+intrínsecamente más significativo, no solo más "confirmado por confluencia" (que sigue sumando
+como bonus aparte).
 """
 
 from __future__ import annotations
@@ -100,7 +108,7 @@ DEFAULT_PENALTIES = {
     "breakout_penalty_per_break": 8.0,
     "dispersion_threshold_atr_mult": 2.0,
     "dispersion_penalty": 10.0,
-    "short_lifespan_bars": 10,
+    "short_lifespan_bars": 60,  # ≈ 10 días (reescalado ×6 — 4h es ahora la serie de referencia)
     "short_lifespan_penalty": 10.0,
 }
 
@@ -112,14 +120,22 @@ class SRConfig:
     pivot_lookback_daily: int = 5
     pivot_lookback_weekly: int = 3
     pivot_lookback_monthly: int = 2
-    pivot_lookback_4h: int = 5  # similar densidad de barras que "daily" (ver BARS_PER_UNIT)
-    pivot_lookback_1h: int = 5  # mismo criterio que 4h
+    # 30 barras de 4h ≈ 5 días — antes era 5 ("similar densidad de barras que daily") de cuando
+    # 4h era una temporalidad secundaria/opcional; ahora que 4h ES la serie de referencia del
+    # motor, merece la misma ventana de ±5 DÍAS que `pivot_lookback_daily` siempre representó,
+    # no ±5 barras de 4h (≈20 horas, demasiado ruidoso para detectar pivotes reales).
+    pivot_lookback_4h: int = 30
+    pivot_lookback_1h: int = 5  # 1h sigue siendo secundaria/opcional, sin cambios acá
 
-    atr_period: int = 14
+    # Reescalado ×6 (1 día = 6 barras de 4h) para los campos siguientes, ahora que 4h es la serie
+    # de referencia (antes estaban en unidades de barra DIARIA) — preserva el mismo significado
+    # en tiempo real (mismas ~2 semanas de ATR, mismos ~3 días de confirmación, etc.), no un
+    # recorte real de esas ventanas.
+    atr_period: int = 84  # ≈ 14 días
     atr_tolerance_pct: float = 0.5  # tolerancia de "touch" = 0.5x ATR actual
     breakout_tolerance_pct: float = 1.0  # más allá de esto = candidato a ruptura, no touch
-    breakout_confirm_bars: int = 3  # debe sostenerse rota este # de barras para confirmarse
-    episode_gap_bars: int = 3  # touches separados por ≤ esto se agrupan en un mismo "episodio"
+    breakout_confirm_bars: int = 18  # ≈ 3 días — debe sostenerse rota este # de barras para confirmarse
+    episode_gap_bars: int = 18  # ≈ 3 días — touches separados por ≤ esto se agrupan en un mismo "episodio"
 
     # Cluster Tolerance pedida: ATR(14) x 0.15 — comparte este único campo con DBSCAN/KDE
     # (agrupar pivotes) y con la fusión de candidatos en zonas (_merge_candidates), igual que
@@ -143,13 +159,15 @@ class SRConfig:
     vwap_confluence_bonus: float = 0.15
 
     volume_confirmation_mult: float = 1.5
-    volume_confirmation_avg_period: int = 20
+    volume_confirmation_avg_period: int = 120  # ≈ 20 días (reescalado ×6, ver arriba)
 
     optimize_max_slope_shift_atr_mult: float = 1.0  # cuánto puede mover el slope (por día) el refinamiento
     optimize_max_intercept_shift_atr_mult: float = 3.0  # cuánto puede mover el intercepto (en ATRs)
 
+    # NO reescalado ×6: mide cantidad de EPISODIOS (ya agrupados por episode_gap_bars, que sí se
+    # reescala), no cantidad de barras crudas — 6 visitas distintas sigue significando lo mismo.
     touch_component_full_credit: int = 6  # touches para el 100% de ese componente (rango ideal pedido: 4-8)
-    age_full_credit_bars: int = 180  # barras de vigencia para el 100% de "antigüedad"
+    age_full_credit_bars: int = 1080  # ≈ 180 días / 6 meses (reescalado ×6, ver arriba)
     proximity_full_range_atr_mult: float = 5.0  # a esta distancia (en ATRs) la cercanía vale 0
     retest_bonus: float = 8.0
     # Tamaño de rebote (en múltiplos de ATR) que da 100% de crédito en "reaction_magnitude" — el
@@ -171,7 +189,7 @@ class SRConfig:
     min_touch_points: int = 3  # mínimo pedido; "ideal" es 4-8 (ver touch_component_full_credit)
     top_n: int = 8
 
-    timeframes: tuple[str, ...] = ("daily", "weekly", "monthly")
+    timeframes: tuple[str, ...] = ("4h", "daily", "weekly", "monthly")
     enabled_methods: set[str] = field(default_factory=lambda: set(ALL_METHODS))
     weights: dict[str, float] = field(default_factory=lambda: dict(DEFAULT_WEIGHTS))
     penalties: dict[str, float] = field(default_factory=lambda: dict(DEFAULT_PENALTIES))
@@ -203,8 +221,10 @@ class SRLevel:
     channel_support: "SRLevel | None" = None
     channel_resistance: "SRLevel | None" = None
 
-    def value_at(self, day_index: int) -> float:
-        return _line_value(self.slope or 0.0, self.intercept or self.price or 0.0, day_index)
+    def value_at(self, bar_index: int) -> float:
+        """`bar_index` es un índice en la serie de REFERENCIA del motor (4h, ver módulo
+        docstring) — antes era un índice diario, de cuando la referencia era la serie diaria."""
+        return _line_value(self.slope or 0.0, self.intercept or self.price or 0.0, bar_index)
 
 
 @dataclass
@@ -323,12 +343,18 @@ def _detect_pivots(dates: list[str], highs: list[float], lows: list[float], look
     return pivots
 
 
-def _nearest_daily_index(daily_dates: list[str], target_date: str) -> int | None:
-    pos = bisect.bisect_right(daily_dates, target_date) - 1
+def _nearest_reference_index(reference_dates: list[str], target_date: str) -> int | None:
+    """Bisect genérico sobre la serie que hace de "índice de referencia" del motor — hoy la de
+    4h (antes era la diaria). No le importa la granularidad de `reference_dates`, solo que esté
+    ordenada; el nombre solía ser `_nearest_daily_index` de cuando la referencia era diaria."""
+    pos = bisect.bisect_right(reference_dates, target_date) - 1
     return pos if pos >= 0 else None
 
 
-BARS_PER_UNIT = {"daily": 1.0, "weekly": 7.0, "monthly": 30.44, "4h": 4 / 24, "1h": 1 / 24}
+# Barras-de-4h por unidad (antes era días-por-unidad, de cuando la serie diaria era la
+# referencia) — 4h=1.0 es la propia referencia; el resto se expresa en cuántas barras de 4h
+# entran en una barra de esa temporalidad (1 día = 6 barras de 4h).
+BARS_PER_UNIT = {"4h": 1.0, "daily": 6.0, "weekly": 42.0, "monthly": 182.64, "1h": 0.25}
 
 
 def _cluster_prices_dbscan(prices: list[float], eps: float, min_samples: int) -> list[list[int]]:
@@ -446,17 +472,19 @@ def _volume_profile(prices: list[float], volumes: list[float], num_bins: int) ->
 
 
 def _rolling_vwap(dates: list[str], highs: list[float], lows: list[float], closes: list[float], volumes: list[float], window_days: int) -> float | None:
-    """Punto 9, adaptado a solo-diario: VWAP "ancla móvil" sobre los últimos `window_days`
-    días de calendario, usando precio típico (H+L+C)/3 por barra diaria en vez de trades
-    intradía reales (que esta app nunca fetchea) — mismo patrón de ventana por días de
-    `_extreme_since` en speculation.py, no buckets calendario (semana ISO, etc.)."""
+    """Punto 9: VWAP "ancla móvil" sobre los últimos `window_days` días de calendario, usando
+    precio típico (H+L+C)/3 por barra en vez de trades reales (que esta app nunca fetchea) —
+    mismo patrón de ventana por días de `_extreme_since` en speculation.py, no buckets calendario
+    (semana ISO, etc.). `dates[i][:10]` toma solo la parte "YYYY-MM-DD" — la serie de referencia
+    puede traer hora ("YYYY-MM-DD HH:MM:SS", ej. la de 4h) o no (diaria), y a esta función solo le
+    importa el día calendario, no la hora exacta."""
     if not dates:
         return None
-    last_date = datetime.strptime(dates[-1], "%Y-%m-%d")
+    last_date = datetime.strptime(dates[-1][:10], "%Y-%m-%d")
     cutoff = last_date - timedelta(days=window_days)
     typical, vols = [], []
     for d, h, l, c, v in zip(dates, highs, lows, closes, volumes):
-        if datetime.strptime(d, "%Y-%m-%d") >= cutoff and v is not None:
+        if datetime.strptime(d[:10], "%Y-%m-%d") >= cutoff and v is not None:
             typical.append((h + l + c) / 3)
             vols.append(v)
     total_vol = sum(vols)
@@ -734,7 +762,7 @@ def _optimize_line(
 def _build_candidates_for_timeframe(
     tf: str,
     tf_prices: list[dict],
-    daily_dates: list[str],
+    reference_dates: list[str],
     config: SRConfig,
 ) -> list[_Candidate]:
     tf_dates = [p["date"] for p in tf_prices]
@@ -759,15 +787,15 @@ def _build_candidates_for_timeframe(
 
     bars_per_unit = BARS_PER_UNIT[tf]
 
-    def to_daily(slope_tf: float, intercept_tf: float, anchor_j: int) -> tuple[float, float] | None:
+    def to_reference(slope_tf: float, intercept_tf: float, anchor_j: int) -> tuple[float, float] | None:
         anchor_date = tf_dates[anchor_j]
-        daily_idx = _nearest_daily_index(daily_dates, anchor_date)
-        if daily_idx is None:
+        reference_idx = _nearest_reference_index(reference_dates, anchor_date)
+        if reference_idx is None:
             return None
         anchor_value = _line_value(slope_tf, intercept_tf, anchor_j)
-        slope_d = slope_tf / bars_per_unit
-        intercept_d = anchor_value - slope_d * daily_idx
-        return slope_d, intercept_d
+        slope_ref = slope_tf / bars_per_unit
+        intercept_ref = anchor_value - slope_ref * reference_idx
+        return slope_ref, intercept_ref
 
     candidates: list[_Candidate] = []
     last_j = len(tf_closes) - 1
@@ -807,22 +835,22 @@ def _build_candidates_for_timeframe(
                 continue
             slope_tf, intercept_tf = fit
             residual_std = float(np.std([y - _line_value(slope_tf, intercept_tf, x) for x, y in zip(xs, ys)]))
-            daily_line = to_daily(slope_tf, intercept_tf, last_j)
-            if daily_line is None:
+            reference_line = to_reference(slope_tf, intercept_tf, last_j)
+            if reference_line is None:
                 continue
-            candidates.append(_Candidate(kind, daily_line[0], daily_line[1], {method}, {tf}, prices, residual_std))
+            candidates.append(_Candidate(kind, reference_line[0], reference_line[1], {method}, {tf}, prices, residual_std))
         if "hough" in config.enabled_methods:
             fit = _hough_line(xs, ys, atr_est, config.hough_num_slopes, config.hough_slope_range_atr_mult)
             if fit is not None:
                 residual_std = float(np.std([y - _line_value(fit[0], fit[1], x) for x, y in zip(xs, ys)]))
-                daily_line = to_daily(fit[0], fit[1], last_j)
-                if daily_line is not None:
-                    candidates.append(_Candidate(kind, daily_line[0], daily_line[1], {"hough"}, {tf}, prices, residual_std))
+                reference_line = to_reference(fit[0], fit[1], last_j)
+                if reference_line is not None:
+                    candidates.append(_Candidate(kind, reference_line[0], reference_line[1], {"hough"}, {tf}, prices, residual_std))
 
     return candidates
 
 
-def _merge_candidates(candidates: list[_Candidate], current_day_idx: int, atr_current: float, config: SRConfig) -> list[_Candidate]:
+def _merge_candidates(candidates: list[_Candidate], current_bar_idx: int, atr_current: float, config: SRConfig) -> list[_Candidate]:
     """Fusiona candidatos del mismo tipo cuyo valor (hoy) y pendiente son parecidos — vienen de
     metodologías/temporalidades distintas mirando el mismo nivel real. El resultado promedia
     pendiente/intercepto y UNE los sets de métodos/temporalidades (así "multi_timeframe" cuenta
@@ -830,19 +858,19 @@ def _merge_candidates(candidates: list[_Candidate], current_day_idx: int, atr_cu
     merged: list[_Candidate] = []
     for kind in ("support", "resistance"):
         group = [c for c in candidates if c.kind == kind]
-        group.sort(key=lambda c: _line_value(c.slope, c.intercept, current_day_idx))
+        group.sort(key=lambda c: _line_value(c.slope, c.intercept, current_bar_idx))
         used = [False] * len(group)
         for i, c in enumerate(group):
             if used[i]:
                 continue
             bucket = [c]
             used[i] = True
-            value_i = _line_value(c.slope, c.intercept, current_day_idx)
+            value_i = _line_value(c.slope, c.intercept, current_bar_idx)
             for j in range(i + 1, len(group)):
                 if used[j]:
                     continue
                 c2 = group[j]
-                value_j = _line_value(c2.slope, c2.intercept, current_day_idx)
+                value_j = _line_value(c2.slope, c2.intercept, current_bar_idx)
                 slope_scale = max(abs(c.slope), abs(c2.slope), 1e-9)
                 slope_close = abs(c.slope - c2.slope) / slope_scale <= 0.5 or (abs(c.slope) < 1e-6 and abs(c2.slope) < 1e-6)
                 if abs(value_i - value_j) <= config.dbscan_eps_atr_mult * atr_current and slope_close:
@@ -1080,19 +1108,22 @@ def _detect_channels(levels: list[SRLevel], config: SRConfig) -> list[SRLevel]:
 def detect_levels(
     historical_prices: list[dict],
     config: SRConfig | None = None,
-    intraday_4h_prices: list[dict] | None = None,
+    daily_prices: list[dict] | None = None,
     intraday_1h_prices: list[dict] | None = None,
 ) -> list[SRLevel]:
-    """Punto de entrada. `historical_prices` son las velas DIARIAS completas (necesita
+    """Punto de entrada. `historical_prices` son las velas de **4H** completas (necesita
     date/open/high/low/close/volume — un caché viejo sin "open" hace que esto devuelva []
-    y se autocorrija en el próximo fetch, mismo patrón que ADX/OBV en speculation.py).
+    y se autocorrija en el próximo fetch, mismo patrón que ADX/OBV en speculation.py) — es la
+    serie de REFERENCIA del motor (ver módulo docstring): todo touch/rebote/ruptura se camina
+    contra esta serie, sin importar qué temporalidad propuso cada candidato.
 
-    `intraday_4h_prices`/`intraday_1h_prices` son opcionales y, a diferencia de "weekly"/
-    "monthly" (que se arman reagregando `historical_prices` acá mismo, sin red), tienen que venir
-    YA fetcheados por quien llama — esta función se mantiene pura (sin I/O), mismo patrón que
-    `_evaluate_from_data()` en fair_value.py. Si "4h"/"1h" está en `config.timeframes` pero no se
-    pasó la lista correspondiente (o vino vacía/corta), esa temporalidad simplemente se salta —
-    no rompe el resto del pipeline."""
+    `daily_prices`/`intraday_1h_prices` son opcionales y, a diferencia de "weekly"/"monthly"
+    (que se arman reagregando `daily_prices` acá mismo, sin red — necesitan la serie diaria, no
+    la de 4h, para tener suficiente profundidad histórica), tienen que venir YA fetcheados por
+    quien llama — esta función se mantiene pura (sin I/O), mismo patrón que
+    `_evaluate_from_data()` en fair_value.py. Si "daily"/"weekly"/"monthly"/"1h" está en
+    `config.timeframes` pero falta el dato correspondiente (o vino vacío/corto), esa temporalidad
+    simplemente se salta — no rompe el resto del pipeline."""
     config = config or SRConfig()
     dated = sorted(historical_prices, key=lambda p: p["date"])
     if len(dated) < 30:
@@ -1107,6 +1138,8 @@ def detect_levels(
     closes = [p["close"] for p in dated]
     volumes = [p["volume"] for p in dated]
     n = len(closes)
+
+    daily_dated = sorted(daily_prices, key=lambda p: p["date"]) if daily_prices else []
 
     atr_arr = _atr_series(highs, lows, closes, config.atr_period).to_numpy()
     atr_valid = atr_arr[~np.isnan(atr_arr)]
@@ -1123,23 +1156,23 @@ def detect_levels(
     )
     all_vol_mean = float(np.nanmean([v for v in volumes if v is not None])) or 1.0
 
-    timeframes_to_run = config.timeframes if "multi_timeframe" in config.enabled_methods else ("daily",)
+    timeframes_to_run = config.timeframes if "multi_timeframe" in config.enabled_methods else ("4h",)
 
-    # Las 3 temporalidades son independientes entre sí (cada una arma sus propios pivotes/
+    # Las temporalidades son independientes entre sí (cada una arma sus propios pivotes/
     # clusters/líneas sin leer nada de las otras) — ThreadPoolExecutor las corre en paralelo
     # aprovechando que DBSCAN/KDE/RANSAC/Theil-Sen/Huber (numpy/scipy/sklearn) liberan el GIL
     # durante su trabajo en C, mismo patrón que `_parallel_fetch()` en app.py para tareas
     # independientes por ticker.
     tf_inputs = []
     for tf in timeframes_to_run:
-        if tf == "daily":
+        if tf == "4h":
             tf_prices = dated
-        elif tf == "4h":
-            tf_prices = sorted(intraday_4h_prices, key=lambda p: p["date"]) if intraday_4h_prices else []
+        elif tf == "daily":
+            tf_prices = daily_dated
         elif tf == "1h":
             tf_prices = sorted(intraday_1h_prices, key=lambda p: p["date"]) if intraday_1h_prices else []
         else:
-            tf_prices = _resample_ohlcv(dated, "W" if tf == "weekly" else "ME")
+            tf_prices = _resample_ohlcv(daily_dated, "W" if tf == "weekly" else "ME") if daily_dated else []
         if len(tf_prices) >= 10:
             tf_inputs.append((tf, tf_prices))
 

@@ -7,6 +7,7 @@ Extraído de app.py (que llegó a 2821 líneas) para modularizar — ver `us-sto
 para el diseño completo, los bugs reales encontrados construyendo el motor, y el estado de la
 validación fuera de muestra (pendiente de re-correr tras el rediseño)."""
 
+import bisect
 from datetime import datetime, timedelta
 
 import pandas as pd
@@ -34,7 +35,13 @@ def _cached_binance_historical_prices(binance_symbol: str):
 
 @st.cache_data(ttl=900, show_spinner=False)
 def _cached_binance_historical_prices_4h(binance_symbol: str):
-    return binance_client.get_historical_prices_intraday_4h(binance_symbol)
+    # years_back=2.0 (no el default de 5.0 de binance_client): esta es ahora la serie de
+    # REFERENCIA del Market Reaction Zone Engine (ver src/support_resistance.py) — cada touch se
+    # camina contra esta serie, y ese recorrido se llama cientos de veces por candidato durante
+    # la optimización, así que su longitud domina el costo del pipeline. 2 años ≈ 4380 velas de
+    # 4h es el mismo criterio ya usado para 1h más abajo. Es el único caller de este wrapper, así
+    # que el cambio de default es seguro.
+    return binance_client.get_historical_prices_intraday_4h(binance_symbol, years_back=2.0)
 
 
 @st.cache_data(ttl=900, show_spinner=False)
@@ -44,37 +51,36 @@ def _cached_binance_historical_prices_1h(binance_symbol: str):
 
 # TTL largo (6h) a propósito, a diferencia de _cached_evaluation (900s, sigue el precio en
 # vivo) — los niveles de soporte/resistencia no se mueven al ritmo del precio intradía, así que
-# no hay necesidad de recomputar este pipeline pesado (~5-25s según ticker — DBSCAN/KDE/RANSAC/
-# Theil-Sen/Huber/Hough x 3 temporalidades x soporte y resistencia, más el refinamiento por
-# optimización) cada 15 minutos. Mismo criterio que el TTL de 86400s de _cached_backtest_ticker
-# (Validación): el costo real acá es de CÓMPUTO, no de red, así que el botón en render_crypto()
-# (pestaña "🪙 Cripto") no lo dispara automáticamente en cada carga.
+# no hay necesidad de recomputar este pipeline pesado (~9-15s según ticker, caminando contra la
+# serie de 4h — ver src/support_resistance.py — más DBSCAN/KDE/RANSAC/Theil-Sen/Huber/Hough x
+# temporalidad x soporte y resistencia, más el refinamiento por optimización) cada 15 minutos.
+# Mismo criterio que el TTL de 86400s de _cached_backtest_ticker (Validación): el costo real acá
+# es de CÓMPUTO, no de red, así que el botón en render_crypto() (pestaña "🪙 Cripto") no lo
+# dispara automáticamente en cada carga.
 @st.cache_data(ttl=21600, show_spinner=False)
 def _cached_sr_levels(
     ticker: str,
     enabled_methods: tuple[str, ...],
     top_n: int,
     min_touch_points: int,
-    include_4h: bool,
     include_1h: bool,
 ):
     binance_symbol = CRYPTO_BINANCE_SYMBOLS[ticker]
-    historical_prices, _ = _cached_binance_historical_prices(binance_symbol)
-    timeframes = ("daily", "weekly", "monthly")
-    if include_4h:
-        timeframes += ("4h",)
+    # La serie de 4h es ahora la referencia obligatoria del motor (ver detect_levels()) — ya no
+    # es opcional/togglable como antes. La diaria se sigue usando, pero solo para reagregar
+    # weekly/monthly y generar candidatos "daily" nativos (daily_prices=), no como referencia.
+    daily_prices, _ = _cached_binance_historical_prices(binance_symbol)
+    intraday_4h, _ = _cached_binance_historical_prices_4h(binance_symbol)
+    timeframes = ("4h", "daily", "weekly", "monthly")
     if include_1h:
         timeframes += ("1h",)
-    intraday_4h = None
-    if include_4h:
-        intraday_4h, _ = _cached_binance_historical_prices_4h(binance_symbol)
     intraday_1h = None
     if include_1h:
         intraday_1h, _ = _cached_binance_historical_prices_1h(binance_symbol)
     config = SRConfig(
         enabled_methods=set(enabled_methods), top_n=top_n, min_touch_points=min_touch_points, timeframes=timeframes
     )
-    return detect_levels(historical_prices, config, intraday_4h_prices=intraday_4h, intraday_1h_prices=intraday_1h)
+    return detect_levels(intraday_4h, config, daily_prices=daily_prices, intraday_1h_prices=intraday_1h)
 
 
 SR_METHOD_LABELS = {
@@ -146,7 +152,14 @@ SR_VALIDATED_HORIZONS_DAYS = [5, 10, 20, 30]
 SR_VALIDATED_TICKERS: dict[str, set[str]] = {}
 
 
-def render_advanced_levels_chart(historical_prices: list[dict], levels: list, ticker: str, window_days: int = 365) -> None:
+def render_advanced_levels_chart(
+    historical_prices: list[dict], reference_prices: list[dict], levels: list, ticker: str, window_days: int = 365
+) -> None:
+    """`historical_prices` (diaria) maneja el eje X del gráfico — se ve mejor con una barra por
+    día que por 4h. `reference_prices` (4h, la serie que realmente vio `detect_levels()`) es
+    necesaria aparte porque `lv.value_at(bar_index)` espera un índice en ESA serie (ver
+    `SRLevel.value_at` en support_resistance.py) — cada fecha diaria de la ventana visible se
+    convierte a su barra de 4h más cercana antes de evaluar la línea."""
     dated = sorted(historical_prices, key=lambda p: p["date"])
     if not dated:
         return
@@ -154,11 +167,13 @@ def render_advanced_levels_chart(historical_prices: list[dict], levels: list, ti
     window = [p for p in dated if datetime.strptime(p["date"], "%Y-%m-%d") >= cutoff]
     if len(window) < 2:
         return
-    # offset = índice diario (en la serie COMPLETA que vio detect_levels) del primer día visible
-    # acá — necesario porque slope/intercept de cada nivel están expresados en ese índice
-    # completo, no en el recorte de la ventana visible.
-    offset = len(dated) - len(window)
-    day_indices = list(range(offset, len(dated)))
+    reference_dates = [p["date"] for p in sorted(reference_prices, key=lambda p: p["date"])]
+
+    def _nearest_reference_index(target_date: str) -> int:
+        pos = bisect.bisect_right(reference_dates, target_date) - 1
+        return max(pos, 0)
+
+    bar_indices = [_nearest_reference_index(p["date"]) for p in window]
     x = [p["date"] for p in window]
 
     fig = go.Figure()
@@ -171,7 +186,7 @@ def render_advanced_levels_chart(historical_prices: list[dict], levels: list, ti
             continue
         color = SR_KIND_RGB[lv.kind]
         alpha = 0.4 + 0.5 * (lv.confidence_score / 100)
-        line_y = [lv.value_at(i) for i in day_indices]
+        line_y = [lv.value_at(i) for i in bar_indices]
         label = f"{'Soporte' if lv.kind == 'support' else 'Resistencia'} (score {lv.confidence_score:.0f})"
         fig.add_trace(
             go.Scatter(
@@ -195,7 +210,7 @@ def render_advanced_levels_chart(historical_prices: list[dict], levels: list, ti
         for side_lv, dash in ((ch.channel_support, "dash"), (ch.channel_resistance, "dot")):
             if side_lv is None:
                 continue
-            line_y = [side_lv.value_at(i) for i in day_indices]
+            line_y = [side_lv.value_at(i) for i in bar_indices]
             fig.add_trace(
                 go.Scatter(
                     x=x, y=line_y, mode="lines", name=f"Canal {ch.channel_direction} (score {ch.confidence_score:.0f})",
@@ -256,12 +271,14 @@ def render_crypto():
     st.caption(
         "Identifica zonas de soporte/resistencia con evidencia estadística suficiente, priorizando "
         "la CALIDAD de la reacción del mercado por sobre la cantidad de toques — tres rebotes "
-        "fuertes con volumen alto valen más que diez toques sin reacción relevante. Combina "
-        "clustering (DBSCAN), densidad (KDE), líneas de tendencia robustas (RANSAC/Theil-Sen/"
-        "Huber), Transformada de Hough y multi-timeframe con jerarquía institucional→operativa "
-        "(mensual/semanal/diario, + 4h/1h si los activás abajo) en un único score 0-100 por zona, "
-        "con un paso de optimización que ajusta cada línea para maximizar la calidad de reacción "
-        "mientras penaliza rupturas y distancia."
+        "fuertes con volumen alto valen más que diez toques sin reacción relevante. Cada touch se "
+        "camina contra velas de 4h (2 años de historia) en vez de diarias, dándole a cada nivel "
+        "muchas más oportunidades reales de tocar/rebotar. Combina clustering (DBSCAN), densidad "
+        "(KDE), líneas de tendencia robustas (RANSAC/Theil-Sen/Huber), Transformada de Hough y "
+        "multi-timeframe con jerarquía institucional→operativa (mensual/semanal/diario/4h, + 1h "
+        "si lo activás abajo) en un único score 0-100 por zona, con un paso de optimización que "
+        "ajusta cada línea para maximizar la calidad de reacción mientras penaliza rupturas y "
+        "distancia."
     )
     st.warning(
         "⚠️ **Es descriptivo, no una señal de trading**: identifica y puntúa zonas, no dice si "
@@ -285,27 +302,15 @@ def render_crypto():
         sr_col1, sr_col2 = st.columns(2)
         top_n = sr_col1.slider("Cantidad de niveles a mostrar", 3, 15, 8, key="sr_top_n")
         min_touch_points = sr_col2.slider("Mínimo de touch points", 1, 5, 3, key="sr_min_touches")
-        sr_tf_col1, sr_tf_col2 = st.columns(2)
-        include_4h = sr_tf_col1.checkbox(
-            "Incluir temporalidad 4h (velas nativas de Binance)",
-            value=False,
-            key="sr_include_4h",
-            help=(
-                "Binance ofrece velas de 4h nativas (a diferencia de yfinance, que no tiene ese "
-                "intervalo) con hasta ~5 años de historia — pero sigue siendo una consulta de "
-                "red nueva (no reusa datos ya en memoria como semanal/mensual), así que tarda un "
-                "poco más en calcular."
-            ),
-        )
-        include_1h = sr_tf_col2.checkbox(
+        include_1h = st.checkbox(
             "Incluir temporalidad 1h (velas nativas de Binance)",
             value=False,
             key="sr_include_1h",
             help=(
                 "Temporalidad 'operativa' del Market Reaction Zone Engine — pesa menos que "
-                "diario/semanal/mensual en el score (ver jerarquía de temporalidad), pero suma "
-                "confluencia y detecta niveles de más corto plazo. También implica una consulta "
-                "de red nueva."
+                "diario/semanal/mensual/4h en el score (ver jerarquía de temporalidad), pero suma "
+                "confluencia y detecta niveles de más corto plazo. Implica una consulta de red "
+                "adicional (4h, la referencia del motor, siempre se consulta — ya no es opcional)."
             ),
         )
 
@@ -313,7 +318,7 @@ def render_crypto():
     if st.button("🔍 Calcular niveles multi-metodología", key="sr_compute_button"):
         with st.spinner("Corriendo clustering, KDE, líneas robustas, Hough y más — puede tardar unos segundos..."):
             st.session_state[result_key] = _cached_sr_levels(
-                ticker, tuple(sorted(selected_methods)), top_n, min_touch_points, include_4h, include_1h
+                ticker, tuple(sorted(selected_methods)), top_n, min_touch_points, include_1h
             )
 
     sr_levels = st.session_state.get(result_key)
@@ -397,14 +402,18 @@ def render_crypto():
                         "Magnitud rebote (ATR)": round(lv.avg_rebound_magnitude_atr, 2),
                         "Rupturas": lv.breaks,
                         "Re-test": "Sí" if lv.retested else "—",
-                        "Antigüedad (barras)": lv.age_bars,
+                        # age_bars está en barras de 4h desde el rediseño (antes eran barras
+                        # diarias) — se muestra en días (÷6, 1 día = 6 barras de 4h) para que
+                        # siga siendo legible sin tener que saber la conversión interna.
+                        "Antigüedad (días)": round(lv.age_bars / 6),
                         "Temporalidades": ", ".join(lv.timeframes),
                         "Métodos": ", ".join(lv.methods),
                         "Dist. al precio actual": f"{lv.distance_to_price_pct:+.1%}" if lv.kind != "channel" else "—",
                     }
                 )
             st.dataframe(pd.DataFrame(rows), use_container_width=True, hide_index=True)
-            render_advanced_levels_chart(historical_prices, filtered_levels, ticker)
+            intraday_4h_for_chart, _ = _cached_binance_historical_prices_4h(CRYPTO_BINANCE_SYMBOLS[ticker])
+            render_advanced_levels_chart(historical_prices, intraday_4h_for_chart, filtered_levels, ticker)
 
         st.divider()
         st.subheader("📋 Lectura validada fuera de muestra")
