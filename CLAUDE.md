@@ -31,6 +31,14 @@ For requests spanning multiple tabs, invoke each relevant skill. This is in addi
 general-purpose `dataviz` skill (any chart/plot work) — that one already triggers on its own
 description and isn't specific to this repo.
 
+## Keeping `README.md` in sync
+
+`README.md` keeps a one-line-per-file map of every `.py` module with real logic (not an empty
+`__init__.py`) and every skill in `.claude/skills/`. **Any new `.py` file with real logic, or any
+new skill, gets a row added to the matching table in `README.md` in the same change that creates
+it** — one line of role/responsibility, not a full description (the detail belongs in that
+file's own docstring or in the skill's `references/design-history.md`, not duplicated here).
+
 ## Running the app
 
 ```
