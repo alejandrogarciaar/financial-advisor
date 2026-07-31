@@ -4,7 +4,7 @@ llegó a 2821 líneas) para modularizar. Siempre corre DESPUÉS de Acciones/ETFs
 pestañas de app.py (st.tabs() no es lazy) para poder reusar `STOCK_EVAL_CACHE_KEY`/
 `ETF_EVAL_CACHE_KEY` de `shared.py` en vez de re-consultar lo que esas dos ya trajeron."""
 
-from datetime import date
+from datetime import date, datetime
 
 import pandas as pd
 import plotly.graph_objects as go
@@ -133,86 +133,22 @@ DRAWDOWN_VALIDATED_BUCKETS = {
     "CSPXCO": set(),
 }
 
+# La caché de precios/evaluaciones subyacente (_cached_portfolio_price, _cached_evaluation,
+# _cached_etf_evaluation, _cached_historical_prices en shared.py) vence cada 900s (15 min) —
+# ese es el piso real de frescura de los datos. 5 min es más seguido de lo estrictamente
+# necesario mirando solo ese ttl, elegido para acortar la ventana de precio desactualizado tras
+# el vencimiento (pedido explícito del usuario) a costa de más re-renders del fragmento (la
+# mayoría son cache-hit y por lo tanto baratos).
+PORTFOLIO_AUTOREFRESH_INTERVAL = "5m"
 
-def render_capital():
-    st.title("💰 Portafolio")
-    st.caption(
-        "Registrá tus compras reales de estas acciones y seguí cuánto llevás invertido en "
-        "pesos, a qué precio promedio, y cómo viene la rentabilidad hoy."
-    )
 
-    st.divider()
-    st.subheader("Tus compras")
-    st.caption(
-        "Editá cualquier celda para corregir una compra, tocá el **+** para agregar una nueva fila, "
-        "o el ícono de papelera para borrarla (te vamos a pedir confirmación antes de borrar nada "
-        "de verdad). Las acciones son unidades enteras — no se aceptan compras fraccionarias "
-        "(1.2, 2.3, etc.). La comisión viene precargada en "
-        f"${DEFAULT_COMMISSION_COP:,.0f} COP para compras nuevas, pero se puede ajustar compra a "
-        "compra (no cambia las que ya guardaste)."
-    )
-
-    EDITOR_KEY = "purchases_editor"
-    saved_purchases = load_purchases()
-
-    edited = st.data_editor(
-        saved_purchases,
-        num_rows="dynamic",
-        use_container_width=True,
-        hide_index=True,
-        key=EDITOR_KEY,
-        column_config={
-            "ticker": st.column_config.SelectboxColumn("Ticker", options=PORTFOLIO_TICKERS, required=True),
-            "shares": st.column_config.NumberColumn(
-                "Acciones", min_value=1, step=1, format="%d", required=True
-            ),
-            "price_cop": st.column_config.NumberColumn(
-                "Precio de compra (COP)", min_value=1, step=1000, format="$%.0f", required=True
-            ),
-            "commission_cop": st.column_config.NumberColumn(
-                "Comisión (COP)",
-                min_value=0,
-                step=100,
-                format="$%.0f",
-                default=DEFAULT_COMMISSION_COP,
-                required=True,
-            ),
-            "date": st.column_config.DateColumn(
-                "Fecha de compra", format="DD/MM/YYYY", max_value=date.today(), required=True
-            ),
-        },
-    )
-
-    errors = validate_purchases(edited, PORTFOLIO_TICKERS)
-    # las filas eliminadas con el ícono de papelera desaparecen del `edited` que devuelve el
-    # editor ANTES de que nosotros veamos nada — no hay forma de interceptarlo ahí. Por eso la
-    # confirmación funciona al revés: detectamos qué índices de `saved_purchases` (el último
-    # estado guardado en disco) ya no están en `edited`, y no llamamos a save_purchases() hasta
-    # que el usuario confirme. Si cancela, reseteamos el editor para que la fila "vuelva".
-    deleted_rows = (
-        saved_purchases.loc[saved_purchases.index.difference(edited.index)] if not errors else pd.DataFrame()
-    )
-
-    if errors:
-        for err in errors:
-            st.error(err)
-        st.caption("Corregí las filas marcadas para que se guarden los cambios.")
-        purchases = saved_purchases
-    elif not deleted_rows.empty:
-        st.warning(f"⚠️ Vas a eliminar {len(deleted_rows)} compra(s) — esto no se puede deshacer:")
-        st.dataframe(deleted_rows, hide_index=True, use_container_width=True)
-        confirm_col, cancel_col = st.columns(2)
-        if confirm_col.button("🗑️ Confirmar eliminación", type="primary", use_container_width=True):
-            save_purchases(edited)
-            del st.session_state[EDITOR_KEY]
-            st.rerun()
-        if cancel_col.button("Cancelar", use_container_width=True):
-            del st.session_state[EDITOR_KEY]
-            st.rerun()
-        purchases = saved_purchases
-    else:
-        save_purchases(edited)
-        purchases = edited
+@st.fragment(run_every=PORTFOLIO_AUTOREFRESH_INTERVAL)
+def _render_price_dependent_sections(purchases: pd.DataFrame) -> None:
+    """Todo lo que depende de precios en vivo (resumen por acción, contexto de valoración,
+    diversificación, retorno/riesgo, proyección de meta) — separado de render_capital() para
+    poder refrescarse solo, en su propio timer, sin resetear el formulario de compras ni el
+    simulador de precio promedio de abajo."""
+    st.caption(f"🕒 Última actualización: {datetime.now():%H:%M:%S}")
 
     st.divider()
     st.subheader("Resumen por acción")
@@ -524,6 +460,89 @@ def render_capital():
                     f"${projected_value:,.0f}",
                     delta=f"${gain:,.0f} de ganancia",
                 )
+
+
+def render_capital():
+    st.title("💰 Portafolio")
+    st.caption(
+        "Registrá tus compras reales de estas acciones y seguí cuánto llevás invertido en "
+        "pesos, a qué precio promedio, y cómo viene la rentabilidad hoy."
+    )
+
+    st.divider()
+    st.subheader("Tus compras")
+    st.caption(
+        "Editá cualquier celda para corregir una compra, tocá el **+** para agregar una nueva fila, "
+        "o el ícono de papelera para borrarla (te vamos a pedir confirmación antes de borrar nada "
+        "de verdad). Las acciones son unidades enteras — no se aceptan compras fraccionarias "
+        "(1.2, 2.3, etc.). La comisión viene precargada en "
+        f"${DEFAULT_COMMISSION_COP:,.0f} COP para compras nuevas, pero se puede ajustar compra a "
+        "compra (no cambia las que ya guardaste)."
+    )
+
+    EDITOR_KEY = "purchases_editor"
+    saved_purchases = load_purchases()
+
+    edited = st.data_editor(
+        saved_purchases,
+        num_rows="dynamic",
+        use_container_width=True,
+        hide_index=True,
+        key=EDITOR_KEY,
+        column_config={
+            "ticker": st.column_config.SelectboxColumn("Ticker", options=PORTFOLIO_TICKERS, required=True),
+            "shares": st.column_config.NumberColumn(
+                "Acciones", min_value=1, step=1, format="%d", required=True
+            ),
+            "price_cop": st.column_config.NumberColumn(
+                "Precio de compra (COP)", min_value=1, step=1000, format="$%.0f", required=True
+            ),
+            "commission_cop": st.column_config.NumberColumn(
+                "Comisión (COP)",
+                min_value=0,
+                step=100,
+                format="$%.0f",
+                default=DEFAULT_COMMISSION_COP,
+                required=True,
+            ),
+            "date": st.column_config.DateColumn(
+                "Fecha de compra", format="DD/MM/YYYY", max_value=date.today(), required=True
+            ),
+        },
+    )
+
+    errors = validate_purchases(edited, PORTFOLIO_TICKERS)
+    # las filas eliminadas con el ícono de papelera desaparecen del `edited` que devuelve el
+    # editor ANTES de que nosotros veamos nada — no hay forma de interceptarlo ahí. Por eso la
+    # confirmación funciona al revés: detectamos qué índices de `saved_purchases` (el último
+    # estado guardado en disco) ya no están en `edited`, y no llamamos a save_purchases() hasta
+    # que el usuario confirme. Si cancela, reseteamos el editor para que la fila "vuelva".
+    deleted_rows = (
+        saved_purchases.loc[saved_purchases.index.difference(edited.index)] if not errors else pd.DataFrame()
+    )
+
+    if errors:
+        for err in errors:
+            st.error(err)
+        st.caption("Corregí las filas marcadas para que se guarden los cambios.")
+        purchases = saved_purchases
+    elif not deleted_rows.empty:
+        st.warning(f"⚠️ Vas a eliminar {len(deleted_rows)} compra(s) — esto no se puede deshacer:")
+        st.dataframe(deleted_rows, hide_index=True, use_container_width=True)
+        confirm_col, cancel_col = st.columns(2)
+        if confirm_col.button("🗑️ Confirmar eliminación", type="primary", use_container_width=True):
+            save_purchases(edited)
+            del st.session_state[EDITOR_KEY]
+            st.rerun()
+        if cancel_col.button("Cancelar", use_container_width=True):
+            del st.session_state[EDITOR_KEY]
+            st.rerun()
+        purchases = saved_purchases
+    else:
+        save_purchases(edited)
+        purchases = edited
+
+    _render_price_dependent_sections(purchases)
 
     st.divider()
     st.subheader("🧮 Simulador de precio promedio")

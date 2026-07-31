@@ -7,11 +7,9 @@ Extraído de app.py (que llegó a 2821 líneas) para modularizar — ver `us-sto
 para el diseño completo, los bugs reales encontrados construyendo el motor, y el estado de la
 validación fuera de muestra (pendiente de re-correr tras el rediseño)."""
 
-import bisect
 from datetime import datetime, timedelta
 
 import pandas as pd
-import plotly.graph_objects as go
 import streamlit as st
 
 from src.config import CRYPTO_BINANCE_SYMBOLS
@@ -24,7 +22,14 @@ from src.support_resistance import (
     detect_levels,
     score_percentile_threshold,
 )
-from src.ui.shared import render_sticky_price
+from src.ui.shared import (
+    SR_KIND_RGB,
+    SR_METHOD_LABELS,
+    SR_TIMEFRAME_LABELS,
+    SR_TIMEFRAME_ORDER,
+    render_advanced_levels_chart,
+    render_sticky_price,
+)
 from src.ui.speculation import render_speculation_indicators
 
 
@@ -83,41 +88,9 @@ def _cached_sr_levels(
     return detect_levels(intraday_4h, config, daily_prices=daily_prices, intraday_1h_prices=intraday_1h)
 
 
-SR_METHOD_LABELS = {
-    "dbscan": "Clustering (DBSCAN)",
-    "kde": "Densidad (KDE)",
-    "ransac": "Línea robusta (RANSAC)",
-    "theilsen": "Línea robusta (Theil-Sen)",
-    "huber": "Línea robusta (Huber)",
-    "hough": "Transformada de Hough",
-    "optimize": "Optimización por touch points",
-    "volume_profile": "Volume Profile",
-    "vwap_confluence": "Confluencia con VWAP",
-    "candle_confirmation": "Confirmación por velas",
-    "volume_confirmation": "Confirmación por volumen",
-    "multi_timeframe": "Multi-timeframe con jerarquía (mensual/semanal/diario, + 4h/1h si están activados)",
-    "channels": "Detección de canales",
-}
-
-SR_TIMEFRAME_LABELS = {
-    "1h": "1 hora",
-    "4h": "4 horas",
-    "daily": "Diaria",
-    "weekly": "Semanal",
-    "monthly": "Mensual",
-}
-
-# De más fina a más gruesa — mismo orden que TIMEFRAME_IMPORTANCE en support_resistance.py, solo
-# invertido (acá es orden de chip/visualización, allá es peso institucional).
-SR_TIMEFRAME_ORDER = {"1h": 0, "4h": 1, "daily": 2, "weekly": 3, "monthly": 4}
-
-# RGB (no hex) porque el gráfico varía el canal alpha según el score de cada nivel — más
-# opacidad = más confianza. Deliberadamente NO son los LEVEL_CHART_COLORS de Especulación: esa
-# paleta tiene un color fijo por CATEGORÍA conocida (soporte semanal, resistencia anual, …);
-# acá la cantidad de niveles es dinámica y no hay una identidad fija por nivel, así que se
-# colorea por TIPO (soporte/resistencia/canal) en vez de por nivel individual.
-
-SR_KIND_RGB = {"support": "34,139,34", "resistance": "214,69,65", "channel": "138,43,226"}
+# SR_METHOD_LABELS, SR_TIMEFRAME_LABELS, SR_TIMEFRAME_ORDER, SR_KIND_RGB y
+# render_advanced_levels_chart() se movieron a src/ui/shared.py — genuinamente cross-tab desde
+# que Especulación (acciones) también los necesita, ver ese archivo.
 
 # Validación fuera de muestra bajo el Market Reaction Zone Engine — DOS rondas el mismo día,
 # porque la segunda ronda (ajuste de consistencia estadística: Wilson lower bound en
@@ -150,87 +123,6 @@ SR_VALIDATED_SCORE_PERCENTILE = 55.0  # mecanismo listo para cuando algo vuelva 
 SR_VALIDATED_HORIZONS_DAYS = [5, 10, 20, 30]
 
 SR_VALIDATED_TICKERS: dict[str, set[str]] = {}
-
-
-def render_advanced_levels_chart(
-    historical_prices: list[dict], reference_prices: list[dict], levels: list, ticker: str, window_days: int = 365
-) -> None:
-    """`historical_prices` (diaria) maneja el eje X del gráfico — se ve mejor con una barra por
-    día que por 4h. `reference_prices` (4h, la serie que realmente vio `detect_levels()`) es
-    necesaria aparte porque `lv.value_at(bar_index)` espera un índice en ESA serie (ver
-    `SRLevel.value_at` en support_resistance.py) — cada fecha diaria de la ventana visible se
-    convierte a su barra de 4h más cercana antes de evaluar la línea."""
-    dated = sorted(historical_prices, key=lambda p: p["date"])
-    if not dated:
-        return
-    cutoff = datetime.strptime(dated[-1]["date"], "%Y-%m-%d") - timedelta(days=window_days)
-    window = [p for p in dated if datetime.strptime(p["date"], "%Y-%m-%d") >= cutoff]
-    if len(window) < 2:
-        return
-    reference_dates = [p["date"] for p in sorted(reference_prices, key=lambda p: p["date"])]
-
-    def _nearest_reference_index(target_date: str) -> int:
-        pos = bisect.bisect_right(reference_dates, target_date) - 1
-        return max(pos, 0)
-
-    bar_indices = [_nearest_reference_index(p["date"]) for p in window]
-    x = [p["date"] for p in window]
-
-    fig = go.Figure()
-    fig.add_trace(
-        go.Scatter(x=x, y=[p["close"] for p in window], mode="lines", name=f"Precio ({ticker})", line=dict(color="#2a78d6", width=3))
-    )
-
-    for lv in levels:
-        if lv.kind == "channel":
-            continue
-        color = SR_KIND_RGB[lv.kind]
-        alpha = 0.4 + 0.5 * (lv.confidence_score / 100)
-        line_y = [lv.value_at(i) for i in bar_indices]
-        label = f"{'Soporte' if lv.kind == 'support' else 'Resistencia'} (score {lv.confidence_score:.0f})"
-        fig.add_trace(
-            go.Scatter(
-                x=x, y=line_y, mode="lines", name=label,
-                line=dict(color=f"rgba({color},{alpha:.2f})", width=2, dash="dash" if lv.kind == "support" else "dot"),
-                hovertemplate=f"{label}: $%{{y:,.2f}}<extra></extra>",
-            )
-        )
-        if lv.zone_low is not None and lv.zone_high is not None:
-            zone_half = (lv.zone_high - lv.zone_low) / 2
-            upper = [v + zone_half for v in line_y]
-            lower = [v - zone_half for v in line_y]
-            fig.add_trace(
-                go.Scatter(
-                    x=x + x[::-1], y=upper + lower[::-1], fill="toself",
-                    fillcolor=f"rgba({color},0.08)", line=dict(width=0), showlegend=False, hoverinfo="skip",
-                )
-            )
-
-    for ch in [lv for lv in levels if lv.kind == "channel"]:
-        for side_lv, dash in ((ch.channel_support, "dash"), (ch.channel_resistance, "dot")):
-            if side_lv is None:
-                continue
-            line_y = [side_lv.value_at(i) for i in bar_indices]
-            fig.add_trace(
-                go.Scatter(
-                    x=x, y=line_y, mode="lines", name=f"Canal {ch.channel_direction} (score {ch.confidence_score:.0f})",
-                    line=dict(color=f"rgba({SR_KIND_RGB['channel']},0.7)", width=2, dash=dash),
-                    hovertemplate=f"Canal {ch.channel_direction}: $%{{y:,.2f}}<extra></extra>",
-                )
-            )
-
-    fig.update_layout(
-        plot_bgcolor="rgba(0,0,0,0)",
-        paper_bgcolor="rgba(0,0,0,0)",
-        font=dict(color="#898781"),
-        legend=dict(orientation="h", yanchor="bottom", y=1.02, xanchor="left", x=0),
-        margin=dict(l=10, r=10, t=10, b=10),
-        hovermode="x unified",
-        height=450,
-        xaxis=dict(showgrid=False),
-        yaxis=dict(gridcolor="rgba(128,128,128,0.2)", tickprefix="$"),
-    )
-    st.plotly_chart(fig, use_container_width=True)
 
 
 def render_crypto():

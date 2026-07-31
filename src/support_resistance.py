@@ -40,7 +40,7 @@ resuelve con daily/weekly/monthly (reagregados de una serie diaria aparte que el
 `daily_prices`, vía pandas.resample) más 1h nativo de Binance si el caller lo pasa
 (`intraday_1h_prices`) — cada línea/nivel encontrado en cualquiera de esas temporalidades se
 re-expresa en el espacio de índice de 4H (barra 0 = la barra de 4h más antigua) — la pendiente se
-reescala dividiendo por las barras-de-4h aproximadas de esa unidad (`BARS_PER_UNIT`) y el
+reescala dividiendo por las barras de esa unidad por barra de referencia (`_bars_per_unit()`) y el
 intercepto se ancla al valor de la línea en su última barra, ubicada en la barra de 4h más
 cercana (`_nearest_reference_index`). Los parámetros de `SRConfig` expresados en cantidad de
 barras (ATR, confirmación de ruptura, antigüedad, etc.) están reescalados ×6 respecto a sus
@@ -190,9 +190,39 @@ class SRConfig:
     top_n: int = 8
 
     timeframes: tuple[str, ...] = ("4h", "daily", "weekly", "monthly")
+    # Qué temporalidad hace de serie de REFERENCIA (contra la que se caminan touches/rebotes/
+    # rupturas, ver detect_levels()) — "4h" para Cripto (Binance nativo), "daily" para acciones
+    # (yfinance no tiene 4h nativo; ver daily_reference_config() más abajo). Determina cómo
+    # _bars_per_unit() reescala la pendiente de cada temporalidad al espacio de índice de la
+    # referencia — cambiar esto sin ajustar los campos en barras (atr_period, etc., ver
+    # daily_reference_config) da resultados con la escala de tiempo equivocada.
+    reference_timeframe: str = "4h"
     enabled_methods: set[str] = field(default_factory=lambda: set(ALL_METHODS))
     weights: dict[str, float] = field(default_factory=lambda: dict(DEFAULT_WEIGHTS))
     penalties: dict[str, float] = field(default_factory=lambda: dict(DEFAULT_PENALTIES))
+
+
+def daily_reference_config(**overrides) -> SRConfig:
+    """SRConfig para motores cuya serie de referencia es DIARIA, no 4h (acciones vía yfinance,
+    que no tiene velas de 4h nativas — ver `us-stocks-speculation`/CLAUDE.md para por qué Cripto
+    migró a Binance específicamente por esto). Los campos expresados en cantidad de barras están
+    reescalados ÷6 respecto a los defaults de SRConfig (que asumen referencia 4h) — son
+    literalmente los valores PRE-rediseño del motor, de cuando la referencia todavía era diaria.
+    Los campos ATR-relativos (`dbscan_eps_atr_mult`, `wilson_z`, `sane_price_*`,
+    `touch_component_full_credit`, `pivot_lookback_daily/weekly/monthly`, etc.) NO se tocan —
+    ya son correctos para cualquier referencia (no cuentan barras crudas)."""
+    base = dict(
+        reference_timeframe="daily",
+        timeframes=("daily", "weekly", "monthly"),
+        atr_period=14,
+        breakout_confirm_bars=3,
+        episode_gap_bars=3,
+        volume_confirmation_avg_period=20,
+        age_full_credit_bars=180,
+        penalties={**DEFAULT_PENALTIES, "short_lifespan_bars": 10},
+    )
+    base.update(overrides)
+    return SRConfig(**base)
 
 
 @dataclass
@@ -354,7 +384,18 @@ def _nearest_reference_index(reference_dates: list[str], target_date: str) -> in
 # Barras-de-4h por unidad (antes era días-por-unidad, de cuando la serie diaria era la
 # referencia) — 4h=1.0 es la propia referencia; el resto se expresa en cuántas barras de 4h
 # entran en una barra de esa temporalidad (1 día = 6 barras de 4h).
-BARS_PER_UNIT = {"4h": 1.0, "daily": 6.0, "weekly": 42.0, "monthly": 182.64, "1h": 0.25}
+# Barras por día de cada temporalidad — un hecho físico, independiente de cuál se use como
+# referencia. `_bars_per_unit()` deriva de acá la conversión real (antes era un dict fijo,
+# BARS_PER_UNIT, que asumía referencia=4h siempre — ver reference_timeframe en SRConfig).
+BARS_PER_DAY = {"1h": 24.0, "4h": 6.0, "daily": 1.0, "weekly": 1.0 / 7.0, "monthly": 1.0 / 30.44}
+
+
+def _bars_per_unit(tf: str, reference_tf: str) -> float:
+    """Cuántas barras de `tf` equivalen a 1 barra de la serie de referencia — reproduce
+    exactamente los valores del viejo BARS_PER_UNIT fijo cuando reference_tf="4h" (ej.
+    _bars_per_unit("daily", "4h") == 6.0), pero se ajusta sola si la referencia cambia (ej.
+    _bars_per_unit("daily", "daily") == 1.0, _bars_per_unit("weekly", "daily") == 7.0)."""
+    return BARS_PER_DAY[reference_tf] / BARS_PER_DAY[tf]
 
 
 def _cluster_prices_dbscan(prices: list[float], eps: float, min_samples: int) -> list[list[int]]:
@@ -785,7 +826,7 @@ def _build_candidates_for_timeframe(
     tf_atr = _atr_series(tf_highs, tf_lows, tf_closes, min(config.atr_period, max(2, len(tf_closes) - 1)))
     atr_est = float(tf_atr.dropna().iloc[-1]) if tf_atr.notna().any() else float(np.std(tf_closes) or 1.0)
 
-    bars_per_unit = BARS_PER_UNIT[tf]
+    bars_per_unit = _bars_per_unit(tf, config.reference_timeframe)
 
     def to_reference(slope_tf: float, intercept_tf: float, anchor_j: int) -> tuple[float, float] | None:
         anchor_date = tf_dates[anchor_j]

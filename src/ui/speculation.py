@@ -6,6 +6,7 @@ lenguaje de timing es a propósito — ver `us-stocks-speculation` skill para el
 
 from datetime import datetime, timedelta
 
+import pandas as pd
 import plotly.graph_objects as go
 import streamlit as st
 
@@ -23,7 +24,23 @@ from src.speculation import (
     compute_rsi,
     compute_support_levels,
 )
-from src.ui.shared import _cached_historical_prices, classify_trend_state, render_sticky_price
+from src.support_resistance import (
+    SRLevel,
+    compute_level_zone_reactions,
+    daily_reference_config,
+    detect_levels,
+    score_percentile_threshold,
+)
+from src.ui.shared import (
+    SR_KIND_RGB,
+    SR_METHOD_LABELS,
+    SR_TIMEFRAME_LABELS,
+    SR_TIMEFRAME_ORDER,
+    _cached_historical_prices,
+    classify_trend_state,
+    render_advanced_levels_chart,
+    render_sticky_price,
+)
 from src.valuation.trend import evaluate_trend
 
 LEVEL_CHART_COLORS = {
@@ -96,6 +113,40 @@ REGIME_RSI_OVERBOUGHT_VALIDATED_HORIZONS = {
     "ETH": set(),
     "SOL": set(),
 }
+
+# Igual que SR_VALIDATED_SCORE_PERCENTILE/HORIZONS_DAYS de Cripto (src/ui/cripto.py) — no se
+# comparte cross-módulo porque son 2 constantes triviales, no vale acoplar los dos archivos por
+# esto. STOCK_SR_VALIDATED_TICKERS queda vacío a propósito: la única validación fuera de muestra
+# que existió para acciones (TSLA soporte+resistencia, AAPL resistencia con fragilidad de
+# umbral) corrió bajo la fórmula de score ANTERIOR al rediseño de "calidad de reacción" del
+# motor (ver src/support_resistance.py) — no se puede asumir vigente sin repetir el mismo test
+# bajo la fórmula/serie de referencia actuales, mismo principio que ya aplicó este proyecto para
+# Fibonacci/ADX/OBV y para la propia re-validación de Cripto (que también terminó en {}).
+STOCK_SR_VALIDATED_SCORE_PERCENTILE = 55.0
+STOCK_SR_VALIDATED_HORIZONS_DAYS = [5, 10, 20, 30]
+STOCK_SR_VALIDATED_TICKERS: dict[str, set[str]] = {}
+
+
+# TTL largo (6h), no los 900s de _cached_historical_prices — mismo criterio que
+# _cached_sr_levels en cripto.py: el costo acá es de CPU (clustering/regresión/optimización),
+# no de red, así que no hace falta recomputar esto cada vez que el precio se refresca.
+@st.cache_data(ttl=21600, show_spinner=False)
+def _cached_stock_sr_levels(
+    ticker: str,
+    enabled_methods: tuple[str, ...],
+    top_n: int,
+    min_touch_points: int,
+):
+    """A diferencia de Cripto, acá no hay una serie de 4h nativa (yfinance no la tiene) — la
+    serie de referencia del motor ES la diaria (daily_reference_config(), ver
+    support_resistance.py), pasada dos veces: como `historical_prices` (referencia/caminata de
+    touches) y como `daily_prices` (candidatos "daily" nativos + reagregado semanal/mensual) —
+    es el mismo array a propósito, no un bug de copy-paste."""
+    historical_prices, _ = _cached_historical_prices(ticker)
+    config = daily_reference_config(
+        enabled_methods=set(enabled_methods), top_n=top_n, min_touch_points=min_touch_points
+    )
+    return detect_levels(historical_prices, config, daily_prices=historical_prices)
 
 
 def render_levels_chart(historical_prices: list[dict], supports, resistances, ticker: str, view: str) -> None:
@@ -553,3 +604,192 @@ def render_speculation():
 
     render_sticky_price("speculation", f"Precio actual — {ticker}", current_price, ticker)
     render_speculation_indicators("speculation", ticker, historical_prices, closes, current_price, is_crypto=False)
+
+    st.divider()
+    st.subheader("🧭 Market Reaction Zone Engine")
+    st.caption(
+        "Identifica zonas de soporte/resistencia con evidencia estadística suficiente, "
+        "priorizando la CALIDAD de la reacción del mercado por sobre la cantidad de toques — "
+        "tres rebotes fuertes con volumen alto valen más que diez toques sin reacción "
+        "relevante. Mismo motor que la pestaña Cripto (clustering DBSCAN, densidad KDE, líneas "
+        "de tendencia robustas RANSAC/Theil-Sen/Huber, Transformada de Hough, multi-timeframe "
+        "diario/semanal/mensual con jerarquía institucional, optimización de cada línea), pero "
+        "sobre datos diarios de yfinance en vez de velas de 4h de Binance — yfinance no tiene "
+        "un intervalo de 4h nativo para acciones."
+    )
+    st.warning(
+        "⚠️ **Es descriptivo, no una señal de trading**: identifica y puntúa zonas, no dice si "
+        "conviene comprar o vender cerca de ellas. La cercanía a un soporte/resistencia muy "
+        "tocado ya se probó como señal de entrada en una investigación anterior (clustering de "
+        "múltiples toques, fuera de muestra, incluyendo AAPL/TSLA) y no se sostuvo — para SOL/"
+        "TSLA incluso apuntó al revés en algún caso. Este motor es más sofisticado que aquel "
+        "intento, pero esa misma pregunta de fondo no está validada todavía para acciones bajo "
+        "esta versión del score (ver 'Lectura validada' más abajo)."
+    )
+
+    with st.expander("⚙️ Configuración avanzada"):
+        selected_methods = st.multiselect(
+            "Metodologías activas",
+            list(SR_METHOD_LABELS.keys()),
+            default=list(SR_METHOD_LABELS.keys()),
+            format_func=lambda k: SR_METHOD_LABELS[k],
+            key="stock_sr_enabled_methods",
+        )
+        stock_sr_col1, stock_sr_col2 = st.columns(2)
+        stock_top_n = stock_sr_col1.slider("Cantidad de niveles a mostrar", 3, 15, 8, key="stock_sr_top_n")
+        stock_min_touch_points = stock_sr_col2.slider("Mínimo de touch points", 1, 5, 3, key="stock_sr_min_touches")
+
+    stock_result_key = f"stock_sr_levels_result_{ticker}"
+    if st.button("🔍 Calcular niveles multi-metodología", key="stock_sr_compute_button"):
+        with st.spinner("Corriendo clustering, KDE, líneas robustas, Hough y más — puede tardar unos segundos..."):
+            st.session_state[stock_result_key] = _cached_stock_sr_levels(
+                ticker, tuple(sorted(selected_methods)), stock_top_n, stock_min_touch_points
+            )
+
+    stock_sr_levels = st.session_state.get(stock_result_key)
+    if stock_sr_levels is None:
+        st.caption(
+            "Sin calcular todavía — apretá el botón de arriba. No se corre automáticamente "
+            "porque implica varios algoritmos de clustering/regresión y puede tardar unos "
+            "segundos."
+        )
+    elif not stock_sr_levels:
+        st.caption("No se detectaron niveles con suficiente evidencia para este ticker con la configuración actual.")
+    else:
+        # Filtro puramente de VISUALIZACIÓN — no toca stock_sr_levels ni SRConfig (ver
+        # daily_reference_config en support_resistance.py), mismo patrón que Cripto.
+        stock_max_distance_pct = st.slider(
+            "Mostrar niveles a menos de X% del precio actual",
+            min_value=5,
+            max_value=100,
+            value=20,
+            step=5,
+            key="stock_sr_max_distance_pct",
+            help=(
+                "Solo filtra qué se muestra acá abajo — no recalcula ni cambia los niveles "
+                "detectados."
+            ),
+        )
+
+        stock_available_timeframes = sorted(
+            {tf for lv in stock_sr_levels for tf in lv.timeframes}, key=lambda tf: SR_TIMEFRAME_ORDER.get(tf, 99)
+        )
+        stock_selected_timeframes = st.multiselect(
+            "Temporalidades a mostrar",
+            stock_available_timeframes,
+            default=stock_available_timeframes,
+            format_func=lambda tf: SR_TIMEFRAME_LABELS.get(tf, tf),
+            key="stock_sr_timeframe_filter",
+            help="También es solo de visualización — muestra un nivel si apareció en CUALQUIERA de las temporalidades elegidas.",
+        )
+
+        def _stock_level_distance_pct(lv: SRLevel) -> float:
+            if lv.kind == "channel":
+                sides = [abs(s.distance_to_price_pct) for s in (lv.channel_support, lv.channel_resistance) if s is not None]
+                return min(sides) if sides else float("inf")
+            return abs(lv.distance_to_price_pct)
+
+        stock_filtered_levels = [
+            lv
+            for lv in stock_sr_levels
+            if _stock_level_distance_pct(lv) <= stock_max_distance_pct / 100
+            and set(lv.timeframes) & set(stock_selected_timeframes)
+        ]
+
+        if not stock_filtered_levels:
+            st.caption(
+                f"Ningún nivel pasa los filtros actuales (menos de {stock_max_distance_pct}% del "
+                "precio actual y alguna de las temporalidades elegidas) — ampliá el % o sumá más "
+                "temporalidades para ver más."
+            )
+        else:
+            stock_rows = []
+            for lv in stock_filtered_levels:
+                tipo = {"support": "🟢 Soporte", "resistance": "🔴 Resistencia"}.get(
+                    lv.kind, f"🟣 Canal ({lv.channel_direction})"
+                )
+                stock_rows.append(
+                    {
+                        "Tipo": tipo,
+                        "Precio central": f"${lv.price:,.2f}" if lv.price is not None else "—",
+                        "Zona": f"${lv.zone_low:,.2f} – ${lv.zone_high:,.2f}" if lv.zone_low is not None else "—",
+                        "Score": round(lv.confidence_score, 1),
+                        "Touches": lv.touches,
+                        "Rebotes": lv.rebounds,
+                        "Magnitud rebote (ATR)": round(lv.avg_rebound_magnitude_atr, 2),
+                        "Rupturas": lv.breaks,
+                        "Re-test": "Sí" if lv.retested else "—",
+                        # A diferencia de Cripto (age_bars en barras de 4h, ÷6 para mostrar
+                        # días): acá la referencia YA es diaria (daily_reference_config), así
+                        # que age_bars ya está en días — sin conversión.
+                        "Antigüedad (días)": lv.age_bars,
+                        "Temporalidades": ", ".join(lv.timeframes),
+                        "Métodos": ", ".join(lv.methods),
+                        "Dist. al precio actual": f"{lv.distance_to_price_pct:+.1%}" if lv.kind != "channel" else "—",
+                    }
+                )
+            st.dataframe(pd.DataFrame(stock_rows), use_container_width=True, hide_index=True)
+            render_advanced_levels_chart(historical_prices, historical_prices, stock_filtered_levels, ticker)
+
+        st.divider()
+        st.subheader("📋 Lectura validada fuera de muestra")
+        stock_validated_kinds = STOCK_SR_VALIDATED_TICKERS.get(ticker, set())
+        if not stock_validated_kinds:
+            st.caption(
+                "No hay evidencia validada fuera de muestra para ningún ticker todavía bajo "
+                "esta versión del motor (calidad de reacción + ajuste estadístico de "
+                "consistencia). La única validación que existió para acciones (TSLA soporte y "
+                "resistencia, AAPL resistencia con fragilidad de umbral) corrió bajo la fórmula "
+                "de score ANTERIOR al rediseño — no se puede asumir vigente sin repetir el mismo "
+                "test bajo la fórmula actual, mismo criterio ya aplicado a Fibonacci/ADX/OBV y a "
+                "la propia re-validación de Cripto (que también terminó sin ningún ticker "
+                "validado). Esto no es evidencia de que NO haya señal para este ticker — solo "
+                "que todavía no se confirmó, y el resto de esta sección se queda puramente "
+                "descriptivo."
+            )
+        else:
+            stock_any_hit = False
+            for kind in ("support", "resistance"):
+                if kind not in stock_validated_kinds:
+                    continue
+                stock_score_threshold = score_percentile_threshold(stock_sr_levels, kind, STOCK_SR_VALIDATED_SCORE_PERCENTILE)
+                if stock_score_threshold is None:
+                    continue
+                stock_qualifying = [
+                    lv for lv in stock_sr_levels
+                    if lv.kind == kind and lv.confidence_score >= stock_score_threshold and lv.zone_low is not None
+                ]
+                stock_hit = any(lv.zone_low <= current_price <= lv.zone_high for lv in stock_qualifying)
+                if not stock_hit:
+                    continue
+                stock_any_hit = True
+                stock_reactions = compute_level_zone_reactions(
+                    historical_prices, stock_sr_levels, kind, stock_score_threshold, STOCK_SR_VALIDATED_HORIZONS_DAYS
+                )
+                stock_phrases = [
+                    f"{r.mean_return:+.1%} a {r.horizon_days} días (win rate {r.win_rate:.0%}, {r.observations} casos)"
+                    for r in stock_reactions
+                    if r.mean_return is not None
+                ]
+                stock_detail = " · ".join(stock_phrases) if stock_phrases else "sin suficientes observaciones recientes"
+                stock_kind_label = "soporte" if kind == "support" else "resistencia"
+                stock_validated_for = "/".join(sorted(t for t, ks in STOCK_SR_VALIDATED_TICKERS.items() if kind in ks))
+                st.success(
+                    f"**{ticker} está hoy dentro de la zona de un {stock_kind_label} en el "
+                    f"percentil {STOCK_SR_VALIDATED_SCORE_PERCENTILE:.0f} de sus propios "
+                    f"niveles (score ≥ {stock_score_threshold:.0f} hoy).** Para este ticker y "
+                    "este tipo de nivel, la cercanía a una zona así mostró un retorno futuro "
+                    "distinto al promedio general, con el mismo signo en el 60% más viejo del "
+                    "historial y en el 40% más nuevo, en los 4 horizontes probados: "
+                    f"{stock_detail}. Validado únicamente para {stock_validated_for} "
+                    f"({stock_kind_label}) — no generalizar a otros tickers ni a otros tipos de "
+                    "nivel sin repetir la misma prueba fuera de muestra."
+                )
+            if not stock_any_hit:
+                st.info(
+                    f"{ticker} tiene evidencia validada fuera de muestra para este tipo de "
+                    f"análisis, pero el precio actual no está dentro de la zona de ningún nivel "
+                    f"en el percentil {STOCK_SR_VALIDATED_SCORE_PERCENTILE:.0f} de sus propios "
+                    "niveles en este momento — el resto de esta sección se queda puramente "
+                    "descriptiva hasta que eso cambie."
+                )

@@ -7,9 +7,11 @@ Acciones/ETFs/Portafolio (`STOCK_EVAL_CACHE_KEY`/`ETF_EVAL_CACHE_KEY`), `classif
 Cripto), y `_cached_historical_prices` (Especulación y Portafolio, vía el contexto de
 valoración de drawdown)."""
 
+import bisect
 from concurrent.futures import ThreadPoolExecutor
-from datetime import datetime
+from datetime import datetime, timedelta
 
+import plotly.graph_objects as go
 import streamlit as st
 
 from src.config import ETF_TICKERS, PORTFOLIO_CDI_TICKERS, RISK_FREE_RATE
@@ -227,20 +229,32 @@ def _parallel_fetch(jobs: dict) -> dict:
     return results
 
 
-def _get_or_fetch(cache_key: str, jobs: dict) -> dict:
+def _get_or_fetch(cache_key: str, jobs: dict, ttl_seconds: float = 900) -> dict:
     """Como `_parallel_fetch`, pero primero revisa `st.session_state[cache_key]` — la única
-    fuente de verdad de lo ya resuelto en esta corrida — y solo arma jobs nuevos para las keys
-    que todavía no están ahí. Si Acciones ya evaluó GOOGL en este run y Portafolio también lo
-    necesita, Portafolio lo reusa en vez de volver a pedirlo. Solo cachea resultados exitosos:
-    un error no se recuerda, para que la próxima vez que se necesite ese ticker se reintente."""
+    fuente de verdad de lo ya resuelto en esta sesión — y solo arma jobs nuevos para las keys
+    que todavía no están ahí o cuya entrada ya venció. Si Acciones ya evaluó GOOGL hace menos
+    de `ttl_seconds` y Portafolio también lo necesita, Portafolio lo reusa en vez de volver a
+    pedirlo. `ttl_seconds` por defecto coincide con el `ttl=900` de `_cached_evaluation`/
+    `_cached_etf_evaluation` — sin esto, una entrada guardada acá nunca vencía y quedaba
+    congelada por el resto de la sesión del navegador aunque el cache de abajo ya tuviera datos
+    más frescos disponibles. Solo cachea resultados exitosos: un error no se recuerda, para que
+    la próxima vez que se necesite ese ticker se reintente."""
     session_cache = st.session_state.setdefault(cache_key, {})
-    already_have = {key: (session_cache[key], None) for key in jobs if key in session_cache}
-    missing_jobs = {key: spec for key, spec in jobs.items() if key not in session_cache}
+    now = datetime.now()
+
+    def _is_fresh(key: str) -> bool:
+        _, fetched_at = session_cache[key]
+        return (now - fetched_at).total_seconds() < ttl_seconds
+
+    already_have = {
+        key: (session_cache[key][0], None) for key in jobs if key in session_cache and _is_fresh(key)
+    }
+    missing_jobs = {key: spec for key, spec in jobs.items() if key not in already_have}
 
     fetched = _parallel_fetch(missing_jobs)
     for key, (result, error) in fetched.items():
         if error is None:
-            session_cache[key] = result
+            session_cache[key] = (result, now)
 
     return {**already_have, **fetched}
 
@@ -289,3 +303,130 @@ def triangulation_badge(summary: dict, small: bool = False) -> str:
 
 def format_as_of(iso_timestamp: str) -> str:
     return datetime.fromisoformat(iso_timestamp).strftime("%Y-%m-%d %H:%M UTC")
+
+
+# A partir de acá: helpers del Market Reaction Zone Engine (src/support_resistance.py) genuinamente
+# cross-tab — usados por Cripto (src/ui/cripto.py) y Especulación (src/ui/speculation.py, motor
+# sobre referencia diaria vía daily_reference_config()). Vivían solo en cripto.py hasta que
+# Especulación necesitó exactamente lo mismo; mismo criterio que el resto de este archivo
+# ("confirmado por uso real, no por intuición, antes de mover nada").
+
+SR_METHOD_LABELS = {
+    "dbscan": "Clustering (DBSCAN)",
+    "kde": "Densidad (KDE)",
+    "ransac": "Línea robusta (RANSAC)",
+    "theilsen": "Línea robusta (Theil-Sen)",
+    "huber": "Línea robusta (Huber)",
+    "hough": "Transformada de Hough",
+    "optimize": "Optimización por touch points",
+    "volume_profile": "Volume Profile",
+    "vwap_confluence": "Confluencia con VWAP",
+    "candle_confirmation": "Confirmación por velas",
+    "volume_confirmation": "Confirmación por volumen",
+    "multi_timeframe": "Multi-timeframe con jerarquía (mensual/semanal/diario, + 4h/1h si están activados)",
+    "channels": "Detección de canales",
+}
+
+SR_TIMEFRAME_LABELS = {
+    "1h": "1 hora",
+    "4h": "4 horas",
+    "daily": "Diaria",
+    "weekly": "Semanal",
+    "monthly": "Mensual",
+}
+
+# De más fina a más gruesa — mismo orden que TIMEFRAME_IMPORTANCE en support_resistance.py, solo
+# invertido (acá es orden de chip/visualización, allá es peso institucional).
+SR_TIMEFRAME_ORDER = {"1h": 0, "4h": 1, "daily": 2, "weekly": 3, "monthly": 4}
+
+# RGB (no hex) porque el gráfico varía el canal alpha según el score de cada nivel — más
+# opacidad = más confianza. Deliberadamente NO son los LEVEL_CHART_COLORS de Especulación: esa
+# paleta tiene un color fijo por CATEGORÍA conocida (soporte semanal, resistencia anual, …);
+# acá la cantidad de niveles es dinámica y no hay una identidad fija por nivel, así que se
+# colorea por TIPO (soporte/resistencia/canal) en vez de por nivel individual.
+
+SR_KIND_RGB = {"support": "34,139,34", "resistance": "214,69,65", "channel": "138,43,226"}
+
+
+def render_advanced_levels_chart(
+    historical_prices: list[dict], reference_prices: list[dict], levels: list, ticker: str, window_days: int = 365
+) -> None:
+    """`historical_prices` (diaria) maneja el eje X del gráfico — se ve mejor con una barra por
+    día que por 4h/lo que sea la referencia. `reference_prices` (la serie que realmente vio
+    `detect_levels()` — 4h para Cripto, la misma diaria para Especulación) es necesaria aparte
+    porque `lv.value_at(bar_index)` espera un índice en ESA serie (ver `SRLevel.value_at` en
+    support_resistance.py) — cada fecha diaria de la ventana visible se convierte a su barra de
+    referencia más cercana antes de evaluar la línea. Para Especulación, `historical_prices` y
+    `reference_prices` son literalmente el mismo array — la conversión es una identidad trivial
+    en ese caso, sin código especial."""
+    dated = sorted(historical_prices, key=lambda p: p["date"])
+    if not dated:
+        return
+    cutoff = datetime.strptime(dated[-1]["date"], "%Y-%m-%d") - timedelta(days=window_days)
+    window = [p for p in dated if datetime.strptime(p["date"], "%Y-%m-%d") >= cutoff]
+    if len(window) < 2:
+        return
+    reference_dates = [p["date"] for p in sorted(reference_prices, key=lambda p: p["date"])]
+
+    def _nearest_reference_index(target_date: str) -> int:
+        pos = bisect.bisect_right(reference_dates, target_date) - 1
+        return max(pos, 0)
+
+    bar_indices = [_nearest_reference_index(p["date"]) for p in window]
+    x = [p["date"] for p in window]
+
+    fig = go.Figure()
+    fig.add_trace(
+        go.Scatter(x=x, y=[p["close"] for p in window], mode="lines", name=f"Precio ({ticker})", line=dict(color="#2a78d6", width=3))
+    )
+
+    for lv in levels:
+        if lv.kind == "channel":
+            continue
+        color = SR_KIND_RGB[lv.kind]
+        alpha = 0.4 + 0.5 * (lv.confidence_score / 100)
+        line_y = [lv.value_at(i) for i in bar_indices]
+        label = f"{'Soporte' if lv.kind == 'support' else 'Resistencia'} (score {lv.confidence_score:.0f})"
+        fig.add_trace(
+            go.Scatter(
+                x=x, y=line_y, mode="lines", name=label,
+                line=dict(color=f"rgba({color},{alpha:.2f})", width=2, dash="dash" if lv.kind == "support" else "dot"),
+                hovertemplate=f"{label}: $%{{y:,.2f}}<extra></extra>",
+            )
+        )
+        if lv.zone_low is not None and lv.zone_high is not None:
+            zone_half = (lv.zone_high - lv.zone_low) / 2
+            upper = [v + zone_half for v in line_y]
+            lower = [v - zone_half for v in line_y]
+            fig.add_trace(
+                go.Scatter(
+                    x=x + x[::-1], y=upper + lower[::-1], fill="toself",
+                    fillcolor=f"rgba({color},0.08)", line=dict(width=0), showlegend=False, hoverinfo="skip",
+                )
+            )
+
+    for ch in [lv for lv in levels if lv.kind == "channel"]:
+        for side_lv, dash in ((ch.channel_support, "dash"), (ch.channel_resistance, "dot")):
+            if side_lv is None:
+                continue
+            line_y = [side_lv.value_at(i) for i in bar_indices]
+            fig.add_trace(
+                go.Scatter(
+                    x=x, y=line_y, mode="lines", name=f"Canal {ch.channel_direction} (score {ch.confidence_score:.0f})",
+                    line=dict(color=f"rgba({SR_KIND_RGB['channel']},0.7)", width=2, dash=dash),
+                    hovertemplate=f"Canal {ch.channel_direction}: $%{{y:,.2f}}<extra></extra>",
+                )
+            )
+
+    fig.update_layout(
+        plot_bgcolor="rgba(0,0,0,0)",
+        paper_bgcolor="rgba(0,0,0,0)",
+        font=dict(color="#898781"),
+        legend=dict(orientation="h", yanchor="bottom", y=1.02, xanchor="left", x=0),
+        margin=dict(l=10, r=10, t=10, b=10),
+        hovermode="x unified",
+        height=450,
+        xaxis=dict(showgrid=False),
+        yaxis=dict(gridcolor="rgba(128,128,128,0.2)", tickprefix="$"),
+    )
+    st.plotly_chart(fig, use_container_width=True)
