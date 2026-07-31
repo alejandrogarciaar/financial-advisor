@@ -76,16 +76,20 @@ config + tab wiring). This tab's code lives in `src/ui/cripto.py`:
   opt-in, off by default, same shape for both. Binance has native 4h/1h klines (no reaggregation
   needed, unlike yfinance's old 60m-based version — see "Design history"), so the only real cost
   left for either is the extra network round-trip.
-- `SR_VALIDATED_MIN_SCORE` (50.0), `SR_VALIDATED_HORIZONS_DAYS` ([5, 10, 20, 30]),
-  `SR_VALIDATED_TICKERS` — the static, out-of-sample-derived lookup gating the "📋 Lectura
-  validada fuera de muestra" section's `st.success` message, same pattern as
-  `REGIME_VALIDATED_COMBOS` in `src/ui/speculation.py`.
-  **`SR_VALIDATED_TICKERS` is `{"BTC": {"support"}, "ETH": {"support"}, "SOL": {"support"}}`** —
-  re-validated the same day as the Market Reaction Zone Engine redesign, under the NEW score
-  formula (the old result, `{"BTC": {"support"}, "TSLA": {"support", "resistance"}}`, was derived
-  under the old touch_points-dominant formula and couldn't be assumed to hold — see Design
-  history below for the full re-validation result). Support validated for all 3 cryptos now;
-  resistance validated for none (sign flips train→test in all 3).
+- `SR_VALIDATED_SCORE_PERCENTILE` (55.0), `SR_VALIDATED_HORIZONS_DAYS` ([5, 10, 20, 30]),
+  `SR_VALIDATED_TICKERS` — the out-of-sample-derived lookup gating the "📋 Lectura validada fuera
+  de muestra" section's `st.success` message, same pattern as `REGIME_VALIDATED_COMBOS` in
+  `src/ui/speculation.py`. The cutoff is now a **percentile** of each ticker/kind's own score
+  distribution (`score_percentile_threshold()` in `src/support_resistance.py`), not a fixed
+  absolute number — a fixed cutoff stopped meaning the same thing once the score's scale shifted
+  (see the statistical-consistency adjustment below and Design history).
+  **`SR_VALIDATED_TICKERS` is currently `{}` (empty) — nothing is validated today.** See Design
+  history for the full story: two validation rounds ran the same day, and the second one (after
+  adding the statistical-consistency adjustment) invalidated the first one's clean result. This
+  was a deliberate, considered outcome, not an oversight — don't restore the old
+  `{"BTC": {"support"}, "ETH": {"support"}, "SOL": {"support"}}` (or the even older
+  `{"BTC": {"support"}, "TSLA": {"support", "resistance"}}`) values without re-running the
+  validation fresh.
 
 ## `src/support_resistance.py` — "Market Reaction Zone Engine"
 
@@ -124,6 +128,45 @@ which used to be the dominant weight.
     these 4 still compute and appear in `component_scores` (still toggleable via
     `enabled_methods`, still shown for inspection) but contribute zero points. They were dropped
     from scoring, not from the engine, per an explicit user choice — see Design history.
+- **Statistical-consistency adjustment (added same day as the redesign, see Design history)**:
+  `respect_rate` and `volume_during_rebounds` no longer use the raw ratio (rebounds/touches,
+  volume_confirmations/rebound_count) — they use `_wilson_lower_bound(successes, n,
+  config.wilson_z)`, the lower bound of the Wilson score interval, so a level with just
+  `min_touch_points` touches and a 100% ratio scores meaningfully lower than one with the same
+  ratio over many more touches. `reaction_magnitude` similarly uses
+  `_mean_lower_confidence_bound(rebound_magnitudes_atr, config.wilson_z)` instead of a plain
+  mean (subtracts `z * std/sqrt(n)`, with a single-observation case falling back to half the raw
+  value). `SRConfig.wilson_z` (default 1.96, ~95% confidence) is the shared knob for both. This
+  is a fix to the CALCULATION's statistical soundness, not a historical calibration — but it
+  measurably changed which levels rank highest, which is why the OOS validation had to be
+  re-run (see Design history for why that broke the previous result).
+- `_walk_touches()`'s rebound-magnitude tracking uses the MEAN of the lookahead window's
+  ATR-normalized distance, not the max — the max let a single outlier bar (a wick) dominate the
+  whole `reaction_magnitude` reading for that episode; the mean is steadier.
+- **`level_atr` (in `_score_level`, not `atr_current`) normalizes `zone_half`/`dispersion_ratio`.**
+  Added as a follow-up consistency fix: a level's zone width and dispersion penalty used to be
+  measured against `atr_current` (a single snapshot of TODAY's ATR), even for a level whose
+  touches happened years ago in a completely different volatility regime — for BTC, comparing a
+  2022 line's residuals against today's (much larger, in dollar terms) ATR was an apples-to-
+  oranges measuring stick. `level_atr` is the mean of `atr_arr` at this specific level's own touch
+  indices, falling back to `atr_current` only if no valid ATR exists at any touch. Verified this
+  actually changes zone widths (e.g., a 2022-era BTC level: zone width ~$1,100 using its own
+  ~$1,100 ATR-at-the-time vs what would've been ~$1,670-based if measured against today's ATR).
+  `atr_current` stays as the baseline everywhere the calculation is genuinely "relative to
+  today" — the optimizer's search bounds, `_merge_candidates`' merge tolerance, the (informational,
+  unscored) `proximity` component, and the VWAP-confluence check — since those really are about
+  today's regime, not the level's own history. Re-ran the OOS validation after this fix: still
+  `{}` (no regression, no new pass either — see Design history).
+- **Fixed "full credit" thresholds (`touch_component_full_credit=6`, `age_full_credit_bars=180`)
+  were reconsidered and found NOT to be an inconsistency, despite initially looking like one.**
+  Touches/age are always walked against the SAME full daily series (`_optimize_and_score` in
+  `detect_levels()` always passes the daily `dates/opens/highs/lows/closes/volumes` arrays,
+  never a timeframe-specific subset) regardless of which timeframe (daily/weekly/monthly/4h/1h)
+  originally proposed a candidate — so there's no confound where a 1h-sourced candidate is held
+  to the same absolute touch target over effectively less opportunity to touch. A fixed target
+  is fair here because the denominator (the daily series length) is already the same for every
+  candidate on a given ticker. This WOULD become a real concern if BTC/ETH/SOL ever had
+  meaningfully different history lengths from each other, but they don't today (all ~5 years).
 - `detect_levels(historical_prices, config=None, intraday_4h_prices=None,
   intraday_1h_prices=None)` — the entry point. Returns `[]` early if the daily input is too short
   (<30 bars) or missing any of `open`/`high`/`low`/`close`/`volume` (self-heals on next fetch,
@@ -255,21 +298,45 @@ ADX/OBV: never reuse a validated threshold/result after reweighting without re-r
 train/test split. This was applied directly (not asked about) since it's an already-established
 project convention, not a new judgment call.
 
-**Re-validation result (same session, same chronological 60/40 split, same 4 horizons, same 3
+**Re-validation, round 1 (same session, same chronological 60/40 split, same 4 horizons, same 3
 score thresholds 40/50/60 to check threshold-fragility — throwaway script, not committed).**
 Universe scoped to BTC/ETH/SOL (AAPL/TSLA weren't re-tested — they're no longer selectable in
-this tab, so re-validating them wouldn't inform anything reachable from the UI):
-- **Support validated for all 3 cryptos** — BTC, ETH, and SOL all showed the same (positive)
-  sign at all 3 thresholds, all 4 horizons, both train and test. Being near a high-scored support
-  predicted a forward return *higher* than baseline in all three — consistent with this project's
-  repeated "momentum, not mean-reversion" signature (RSI-overbought-in-"fuerte"-regime showed the
-  same shape).
-- **Resistance validated for none** — sign flipped train→test for BTC, ETH, and SOL alike (for
-  BTC/SOL, at all 4 horizons simultaneously).
-- This is a **wider** validated set than the old score ever achieved (which only cleared BTC-
-  support) — consistent with the redesign's core hypothesis: weighting reaction quality (rebound
-  magnitude + volume) instead of raw touch count produces a more robust signal, not just a
-  differently-shaped one.
+this tab, so re-validating them wouldn't inform anything reachable from the UI). Result: SOPORTE
+validated for all 3 cryptos — same (positive) sign at all 3 thresholds, all 4 horizons, both
+train and test. RESISTENCIA validated for none — sign flipped train→test for all 3. Wider
+validated set than the old score ever achieved (which only cleared BTC-support) — looked like
+strong evidence for the redesign's core hypothesis.
+
+**Round 2: the statistical-consistency adjustment (Wilson lower bound + confidence-adjusted
+reaction_magnitude, see the `src/support_resistance.py` section above) broke round 1's result,
+same day.** The user asked, as a separate follow-up, how to improve the score's calculation
+itself for statistical consistency (not fit it to history) — landed on Wilson-bound shrinkage for
+the ratio components and a confidence-adjusted mean for `reaction_magnitude`, explicitly to stop
+small-touch-count levels from scoring as if they were as reliable as high-touch-count ones.
+Re-running the exact same round-1 validation script under this adjustment broke BTC-support even
+at the SAME fixed threshold (≥50) that had validated cleanly in round 1 — sign flipped at 2 of 4
+horizons (20d, 30d). Isolating the cause (running with `wilson_z=0` vs the real `wilson_z=1.96`)
+confirmed it's the adjustment itself, not a fluke: it changes WHICH levels rank at the top, and
+that changed set no longer reproduces round 1's clean signal. This held regardless of whether the
+qualifying cutoff was a fixed absolute score or a percentile of the ticker's own score
+distribution (tried 50/70/90 percentiles, too few qualifying levels at the top of a ~10-15-level
+population per kind; then 40/55/70, same non-validating outcome either way) —
+`SR_VALIDATED_SCORE_PERCENTILE` (55.0) is what shipped as the mechanism for next time, using
+`score_percentile_threshold()` in `support_resistance.py` instead of a hand-picked absolute
+number, precisely so a future score-scale shift doesn't silently miscalibrate the cutoff again.
+
+**Decision, explicitly asked and confirmed with the user rather than resolved unilaterally: trust
+the statistical adjustment and accept the more honest (if less exciting) result.** Two readings
+are possible — (a) round 1's clean validation was itself partly propped up by small-sample noise
+in low-touch levels that round 2's Wilson correction correctly discounts, or (b) the adjustment
+is too aggressive for a domain (daily crypto candles, ~1825 bars over 5 years) that structurally
+never accumulates hundreds of touches on any one level. The user chose NOT to soften the
+adjustment to force something to re-validate — that would be exactly the "loosen the threshold
+until it passes" anti-pattern this project's whole validation discipline exists to prevent, just
+applied to a statistical parameter instead of a score cutoff. **Result: `SR_VALIDATED_TICKERS` is
+`{}` — nothing is validated today.** Re-testing later, once more history accumulates (more
+touches per level naturally reduces how much the Wilson bound shrinks each one), is legitimate;
+loosening `wilson_z` or the percentile specifically to make BTC-support pass again is not.
 
 **This tab has had 3 names/shapes: "Especulación section" → "🧭 Niveles" → "🪙 Cripto."** First
 built as a section inside Especulación (support/resistance only). Split into its own "Niveles"
@@ -402,12 +469,15 @@ different data source (yfinance) than their S/R levels (Binance).
 
 ## Do not re-add without re-validating
 
-- An actionable message for any ticker/kind NOT in `SR_VALIDATED_TICKERS`
-  (`{"BTC": {"support"}, "ETH": {"support"}, "SOL": {"support"}}`) — resistance for any of the 3
-  cryptos stays descriptive-only per the re-validation result above (sign flipped train→test).
-- A lower score threshold than 50 to widen `SR_VALIDATED_TICKERS` — loosening it without
-  re-running the full train/test check (same chronological 60/40 split, same 3 thresholds) would
-  repeat exactly the failure mode this project has hit 3 times before (Fibonacci, ADX, OBV).
+- An actionable message for ANY ticker/kind right now — `SR_VALIDATED_TICKERS` is `{}` (see
+  Design history's "Round 2" for why the previous BTC/ETH/SOL-support result didn't survive the
+  statistical-consistency adjustment). Everything in this tab stays descriptive-only until a
+  fresh validation actually passes.
+- Loosening `wilson_z` (lower = less shrinkage) or `SR_VALIDATED_SCORE_PERCENTILE` specifically to
+  make something re-validate — that's the exact "adjust the parameter until it passes" failure
+  mode this project's validation discipline exists to prevent, just applied to a statistical
+  parameter instead of a score cutoff this time. Re-testing later with more accumulated history is
+  fine; tuning the adjustment's strength to force today's data to pass is not.
 - Any intraday interval finer than 1h — not requested, and each additional interval is another
   real network fetch plus another `BARS_PER_UNIT`/lookback/`TIMEFRAME_IMPORTANCE` entry to
   maintain.

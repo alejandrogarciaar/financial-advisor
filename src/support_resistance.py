@@ -156,6 +156,13 @@ class SRConfig:
     # componente NUEVO que mide la calidad de la reacción, no solo si hubo rebote o no.
     reaction_magnitude_full_credit_atr_mult: float = 2.0
 
+    # z-score de confianza para el ajuste estadístico de consistencia (ver _wilson_lower_bound /
+    # _mean_lower_confidence_bound): 1.96 ≈ 95% de confianza. Un nivel con pocas observaciones
+    # (pocos touches/rebotes) obtiene un score MÁS CONSERVADOR que uno con muchas, aunque el ratio
+    # crudo sea idéntico — esto es una corrección al CÁLCULO en sí (consistencia estadística), no
+    # un ajuste calibrado contra ningún historial particular.
+    wilson_z: float = 1.96
+
     # Rango de precio "sano" para un nivel, como múltiplo del mínimo/máximo REAL observado en la
     # serie — filtra extrapolaciones de líneas diagonales sin sentido (ver _score_level).
     sane_price_min_mult: float = 0.1
@@ -228,6 +235,42 @@ class _Candidate:
 
 def _line_value(slope: float, intercept: float, x: float) -> float:
     return slope * x + intercept
+
+
+def _wilson_lower_bound(successes: int, n: int, z: float) -> float:
+    """Límite inferior del intervalo de Wilson para una proporción `successes/n` — a diferencia
+    del ratio crudo, penaliza automáticamente muestras chicas: 3/3 (ratio 1.0) da un límite
+    inferior mucho más bajo que 20/20 (mismo ratio 1.0), sin necesitar ningún umbral fijo de
+    "mínimo de observaciones" para lograrlo. Usado para `respect_rate` y
+    `volume_during_rebounds` — evita que un nivel recién detectado, con apenas
+    `min_touch_points` toques, saque el mismo puntaje que uno con una historia mucho más larga
+    de la misma proporción."""
+    if n <= 0:
+        return 0.0
+    p_hat = successes / n
+    z2 = z * z
+    denom = 1.0 + z2 / n
+    center = p_hat + z2 / (2 * n)
+    margin = z * ((p_hat * (1 - p_hat) / n + z2 / (4 * n * n)) ** 0.5)
+    return max(0.0, (center - margin) / denom)
+
+
+def _mean_lower_confidence_bound(values: list[float], z: float) -> float:
+    """Análogo de `_wilson_lower_bound` para una cantidad continua (no una proporción): en vez
+    del promedio crudo, resta un margen de error que se achica a medida que hay más
+    observaciones (`z * std/sqrt(n)`), así que un único rebote grande no vale lo mismo que varios
+    rebotes consistentemente grandes. Con una sola observación no hay forma de estimar dispersión
+    — se aplica un descuento fijo del 50% como convención conservadora en vez de asumir
+    confianza total en un solo dato."""
+    n = len(values)
+    if n == 0:
+        return 0.0
+    mean = float(np.mean(values))
+    if n == 1:
+        return max(0.0, mean * 0.5)
+    std = float(np.std(values, ddof=1))
+    margin = z * std / (n ** 0.5)
+    return max(0.0, mean - margin)
 
 
 def _atr_series(highs: list[float], lows: list[float], closes: list[float], period: int) -> pd.Series:
@@ -551,14 +594,18 @@ def _walk_touches(
             # Tamaño del rebote (criterio nuevo, "reaction_magnitude"): qué tan lejos de la
             # línea llegó el precio en la misma ventana que ya se usa para confirmar/descartar
             # ruptura (lookahead_idx), en múltiplos de ATR — un rebote "fuerte" se aleja mucho
-            # de la línea, uno "débil" apenas la toca y vuelve.
+            # de la línea, uno "débil" apenas la toca y vuelve. Se usa el PROMEDIO de la ventana,
+            # no el máximo: el máximo queda a merced de una sola vela extrema (un wick), lo que
+            # hace que el componente sea inconsistente entre corridas/niveles muy parecidos por
+            # un único dato ruidoso; el promedio de esos pocos días refleja mejor el alejamiento
+            # sostenido, no un pico aislado.
             mags = []
             for j in lookahead_idx:
                 atr_j = atr_arr[j]
                 if not np.isnan(atr_j) and atr_j > 0:
                     mags.append(abs(closes[j] - _line_value(slope, intercept, j)) / atr_j)
             if mags:
-                rebound_magnitudes_atr.append(max(mags))
+                rebound_magnitudes_atr.append(float(np.mean(mags)))
             polarity_needed = "bullish" if side_before < 0 else "bearish"
             if "candle_confirmation" in config.enabled_methods:
                 for i in ep:
@@ -860,30 +907,49 @@ def _score_level(
     if line_value_now <= 0 or line_value_now < price_floor or line_value_now > price_ceiling:
         return None
 
-    if cand.residual_std is not None:
-        dispersion = cand.residual_std
-    else:
-        dispersion = float(np.std(cand.contributing_prices)) if len(cand.contributing_prices) > 1 else 0.0
-    zone_half = max(config.atr_tolerance_pct * atr_current, dispersion)
-
     episodes = walk["touch_episodes"]
     first_touch_idx, last_touch_idx = episodes[0][0], episodes[-1][-1]
     age_bars = last_touch_idx - first_touch_idx
     touches, rebounds, breaks = walk["touches"], walk["rebounds"], walk["breaks"]
+
+    # ATR promedio DURANTE la vida real del nivel (sus propios touches), no el ATR de HOY — un
+    # nivel formado hace 3 años en un régimen de volatilidad distinto al actual no debería medirse
+    # con la vara de hoy: la dispersión de una línea se comparaba antes contra `atr_current`
+    # (una sola foto del presente) sin importar cuándo ocurrieron los touches que la sostienen,
+    # lo cual castigaba/premiaba injustamente según si la volatilidad subió o bajó desde entonces.
+    # `atr_current` se sigue usando donde el cálculo es genuinamente "relativo a hoy" (proximity,
+    # el bono de VWAP, la tolerancia de fusión de candidatos) — acá en cambio se trata de qué tan
+    # ajustada estuvo la línea contra la volatilidad que realmente vivió.
+    touch_idx = [i for ep in episodes for i in ep]
+    touch_atr_values = [atr_arr[i] for i in touch_idx if not np.isnan(atr_arr[i]) and atr_arr[i] > 0]
+    level_atr = float(np.mean(touch_atr_values)) if touch_atr_values else atr_current
+
+    if cand.residual_std is not None:
+        dispersion = cand.residual_std
+    else:
+        dispersion = float(np.std(cand.contributing_prices)) if len(cand.contributing_prices) > 1 else 0.0
+    zone_half = max(config.atr_tolerance_pct * level_atr, dispersion)
 
     # --- componentes puntuados (DEFAULT_WEIGHTS) ---
     touch_component = min(1.0, touches / config.touch_component_full_credit)
     # "Respect Rate": fracción de touches que el nivel sostuvo sin romperse — la misma cuenta que
     # "número de rupturas fallidas" del spec, expresada como ratio en vez de conteo crudo (el
     # conteo crudo ya vive en `rebounds`/SRLevel, no hace falta un componente aparte para eso).
-    respect_rate_component = min(1.0, rebounds / max(1, touches))
+    # Límite inferior de Wilson en vez del ratio crudo (rebounds/touches): un nivel con apenas
+    # `min_touch_points` toques y 100% de rebotes no es tan confiable como uno con muchos más —
+    # el ratio crudo no distingue esto, el límite de Wilson sí (consistencia del CÁLCULO, no un
+    # ajuste calibrado a ningún historial particular).
+    respect_rate_component = _wilson_lower_bound(rebounds, touches, config.wilson_z)
     age_component = min(1.0, age_bars / config.age_full_credit_bars)
     # Tamaño promedio del rebote (NUEVO) — la pieza central del rediseño: mide qué tan lejos se
-    # alejó el precio tras cada rebote, no solo si rebotó o no.
+    # alejó el precio tras cada rebote, no solo si rebotó o no. Límite inferior de confianza
+    # (no el promedio crudo) por la misma razón que respect_rate: un solo rebote grande no debería
+    # valer lo mismo que varios rebotes consistentemente grandes.
     reaction_magnitude_avg = float(np.mean(walk["rebound_magnitudes_atr"])) if walk["rebound_magnitudes_atr"] else 0.0
-    reaction_magnitude_component = min(1.0, reaction_magnitude_avg / config.reaction_magnitude_full_credit_atr_mult)
+    reaction_magnitude_confidence = _mean_lower_confidence_bound(walk["rebound_magnitudes_atr"], config.wilson_z)
+    reaction_magnitude_component = min(1.0, reaction_magnitude_confidence / config.reaction_magnitude_full_credit_atr_mult)
     volume_during_rebounds_component = (
-        walk["volume_confirmations"] / walk["rebound_count_for_volume"]
+        _wilson_lower_bound(walk["volume_confirmations"], walk["rebound_count_for_volume"], config.wilson_z)
         if "volume_confirmation" in config.enabled_methods and walk["rebound_count_for_volume"] > 0
         else 0.0
     )
@@ -932,7 +998,7 @@ def _score_level(
         raw_score += config.retest_bonus
 
     penalty = breaks * config.penalties["breakout_penalty_per_break"]
-    dispersion_ratio = dispersion / atr_current if atr_current > 0 else 0.0
+    dispersion_ratio = dispersion / level_atr if level_atr > 0 else 0.0
     if dispersion_ratio > config.penalties["dispersion_threshold_atr_mult"]:
         penalty += config.penalties["dispersion_penalty"]
     if age_bars < config.penalties["short_lifespan_bars"]:
@@ -1138,6 +1204,19 @@ def detect_levels(
 
     channels = _detect_channels(top_levels, config) if "channels" in config.enabled_methods else []
     return top_levels + channels
+
+
+def score_percentile_threshold(levels: list[SRLevel], kind: str, percentile: float) -> float | None:
+    """Umbral de score derivado de la propia distribución de ESTE ticker/tipo de nivel (ej.
+    percentil 70 de los scores de sus soportes), en vez de un número absoluto fijo (era
+    `score_threshold >= 50.0`) — se adapta automáticamente si la escala general del score cambia
+    (como pasó al agregar el ajuste de consistencia estadística — Wilson/confianza — a
+    `_score_level`, que comprimió el rango típico de scores), sin necesitar recalibrar números a
+    mano cada vez. `None` si no hay ningún nivel de ese tipo."""
+    scores = [lv.confidence_score for lv in levels if lv.kind == kind]
+    if not scores:
+        return None
+    return float(np.percentile(scores, percentile))
 
 
 @dataclass

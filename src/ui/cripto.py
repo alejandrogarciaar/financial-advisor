@@ -16,7 +16,13 @@ import streamlit as st
 from src.config import CRYPTO_BINANCE_SYMBOLS
 from src.data import binance_client
 from src.data.errors import DataError
-from src.support_resistance import SRConfig, SRLevel, compute_level_zone_reactions, detect_levels
+from src.support_resistance import (
+    SRConfig,
+    SRLevel,
+    compute_level_zone_reactions,
+    detect_levels,
+    score_percentile_threshold,
+)
 from src.ui.shared import render_sticky_price
 from src.ui.speculation import render_speculation_indicators
 
@@ -107,33 +113,37 @@ SR_TIMEFRAME_ORDER = {"1h": 0, "4h": 1, "daily": 2, "weekly": 3, "monthly": 4}
 
 SR_KIND_RGB = {"support": "34,139,34", "resistance": "214,69,65", "channel": "138,43,226"}
 
-# Validación fuera de muestra bajo el score NUEVO ("Market Reaction Zone Engine", ver
-# src/support_resistance.py) — re-corrida el mismo día del rediseño porque la fórmula vieja
-# (touch_points con peso 30/100, sin reaction_magnitude/timeframe_weight) ya no existe y el
-# resultado anterior (BTC soporte, TSLA soporte+resistencia) no se podía asumir vigente, mismo
-# principio que ya aplicó este proyecto para Fibonacci/ADX/OBV. Mismo split cronológico 60/40,
-# mismos 4 horizontes (5/10/20/30 días), mismos 3 umbrales de score (40/50/60) — script
-# descartable, no en el repo. Universo: BTC/ETH/SOL (único universo de esta pestaña ahora que
-# stocks salieron de acá; AAPL/TSLA no se re-testearon porque ya no son seleccionables en Cripto).
+# Validación fuera de muestra bajo el Market Reaction Zone Engine — DOS rondas el mismo día,
+# porque la segunda ronda (ajuste de consistencia estadística: Wilson lower bound en
+# respect_rate/volume_during_rebounds, límite inferior de confianza en reaction_magnitude, ver
+# src/support_resistance.py) cambió lo suficiente el ranking de niveles como para invalidar el
+# resultado de la primera ronda. Mismo split cronológico 60/40, mismos 4 horizontes (5/10/20/30
+# días), universo BTC/ETH/SOL — script descartable, no en el repo.
 #
-# Resultado: SOPORTE se validó en las 3 monedas — mismo signo en los 3 umbrales, los 4
-# horizontes, train Y test (BTC, ETH y SOL, todas positivas: estar cerca de un soporte con
-# score alto predijo retorno futuro MAYOR al promedio, consistente con el patrón "momentum, no
-# reversión" ya documentado varias veces en este proyecto). RESISTENCIA no se validó en
-# ninguna — el signo se invirtió train→test en las 3 monedas (para BTC/SOL incluso se invirtió
-# en los 4 horizontes a la vez). Mejor cobertura que bajo el score viejo (que solo validaba BTC-
-# soporte) — consistente con que el nuevo score pesa fuerte la calidad de la reacción (tamaño de
-# rebote + volumen), no solo la cantidad de toques.
+# Ronda 1 (score recién rediseñado, sin ajuste de consistencia todavía): SOPORTE validó en las 3
+# monedas a umbral fijo (score ≥ 50/40/60) — mismo signo en los 4 horizontes, train y test.
+#
+# Ronda 2 (con el ajuste de consistencia): el mismo chequeo, incluso a umbral fijo ≥ 50, ya
+# mostraba signo invertido para BTC-soporte en 2 de 4 horizontes (20d/30d) — el ajuste de Wilson
+# cambia CUÁLES niveles quedan arriba del ranking (penaliza los de pocos touches, que dominan en
+# un dataset de solo ~1825 velas diarias), y ese cambio de conjunto fue suficiente para romper la
+# validación. Se probó además con umbrales por percentil (50/70/90 y luego 40/55/70, para que el
+# corte se adapte a la escala del score en vez de un número fijo) — mismo resultado: ninguna
+# combinación (ticker, tipo) sostuvo el mismo signo en los 4 horizontes, train y test.
+#
+# Decisión: confiar en el ajuste de consistencia (es estadísticamente correcto — un nivel con 3
+# touches no debería pesar igual que uno con 20) y aceptar el resultado más honesto, aunque menos
+# alentador, en vez de diluir o apagar el ajuste para forzar que algo vuelva a validar. Es
+# plausible que la validación de Ronda 1 dependiera en parte de ruido de muestra chica que Ronda 2
+# expone correctamente. `SR_VALIDATED_TICKERS` queda vacío — no hay ningún combo (ticker, tipo)
+# validado hoy bajo el score con ajuste de consistencia. Re-probar es válido más adelante si se
+# acumula más historial (más touches por nivel = el ajuste de Wilson pesa menos), pero no antes.
 
-SR_VALIDATED_MIN_SCORE = 50.0
+SR_VALIDATED_SCORE_PERCENTILE = 55.0  # mecanismo listo para cuando algo vuelva a validar
 
 SR_VALIDATED_HORIZONS_DAYS = [5, 10, 20, 30]
 
-SR_VALIDATED_TICKERS: dict[str, set[str]] = {
-    "BTC": {"support"},
-    "ETH": {"support"},
-    "SOL": {"support"},
-}
+SR_VALIDATED_TICKERS: dict[str, set[str]] = {}
 
 
 def render_advanced_levels_chart(historical_prices: list[dict], levels: list, ticker: str, window_days: int = 365) -> None:
@@ -414,16 +424,19 @@ def render_crypto():
             for kind in ("support", "resistance"):
                 if kind not in validated_kinds:
                     continue
+                score_threshold = score_percentile_threshold(sr_levels, kind, SR_VALIDATED_SCORE_PERCENTILE)
+                if score_threshold is None:
+                    continue
                 qualifying = [
                     lv for lv in sr_levels
-                    if lv.kind == kind and lv.confidence_score >= SR_VALIDATED_MIN_SCORE and lv.zone_low is not None
+                    if lv.kind == kind and lv.confidence_score >= score_threshold and lv.zone_low is not None
                 ]
                 hit = any(lv.zone_low <= current_price <= lv.zone_high for lv in qualifying)
                 if not hit:
                     continue
                 any_hit = True
                 reactions = compute_level_zone_reactions(
-                    historical_prices, sr_levels, kind, SR_VALIDATED_MIN_SCORE, SR_VALIDATED_HORIZONS_DAYS
+                    historical_prices, sr_levels, kind, score_threshold, SR_VALIDATED_HORIZONS_DAYS
                 )
                 phrases = [
                     f"{r.mean_return:+.1%} a {r.horizon_days} días (win rate {r.win_rate:.0%}, {r.observations} casos)"
@@ -434,8 +447,9 @@ def render_crypto():
                 kind_label = "soporte" if kind == "support" else "resistencia"
                 validated_for = "/".join(sorted(t for t, ks in SR_VALIDATED_TICKERS.items() if kind in ks))
                 st.success(
-                    f"**{ticker} está hoy dentro de la zona de un {kind_label} con score ≥ "
-                    f"{SR_VALIDATED_MIN_SCORE:.0f}.** Para este ticker y este tipo de nivel, la "
+                    f"**{ticker} está hoy dentro de la zona de un {kind_label} en el percentil "
+                    f"{SR_VALIDATED_SCORE_PERCENTILE:.0f} de sus propios niveles (score ≥ "
+                    f"{score_threshold:.0f} hoy).** Para este ticker y este tipo de nivel, la "
                     "cercanía a una zona así mostró un retorno futuro distinto al promedio "
                     "general, con el mismo signo en el 60% más viejo del historial y en el 40% "
                     f"más nuevo, en los 4 horizontes probados: {detail}. Validado únicamente "
@@ -446,6 +460,7 @@ def render_crypto():
                 st.info(
                     f"{ticker} tiene evidencia validada fuera de muestra para este tipo de "
                     f"análisis, pero el precio actual no está dentro de la zona de ningún nivel "
-                    f"calificado (score ≥ {SR_VALIDATED_MIN_SCORE:.0f}) en este momento — el "
-                    "resto de esta tabla se queda puramente descriptivo hasta que eso cambie."
+                    f"en el percentil {SR_VALIDATED_SCORE_PERCENTILE:.0f} de sus propios niveles "
+                    "en este momento — el resto de esta tabla se queda puramente descriptivo "
+                    "hasta que eso cambie."
                 )
