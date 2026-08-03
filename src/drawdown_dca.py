@@ -6,7 +6,7 @@ para Especulación con soporte/resistencia y no dio una señal confiable, ver CL
 pregunta más simple "¿cuánto bajó desde su propio máximo reciente?", que da muchas más
 observaciones por bucket que cualquier enfoque basado en detectar niveles.
 
-`DRAWDOWN_VALIDATED_BUCKETS` (en app.py, no acá) es el gate estático de qué (ticker, bucket)
+`DRAWDOWN_VALIDATED_BUCKETS` (en `src/ui/portfolio.py`, no acá) es el gate estático de qué (ticker, bucket)
 sobrevivió una validación out-of-sample (split cronológico 60/40, mismo patrón que
 `REGIME_VALIDATED_COMBOS` de Especulación) — este módulo solo provee el cómputo reutilizable,
 tanto para esa investigación (reproducible corriendo `compute_drawdown_bucket_reactions` sobre
@@ -126,3 +126,45 @@ def current_bucket_reaction(
     today_bucket = classify_drawdown_bucket(drawdown)
     reactions = compute_drawdown_bucket_reactions(closes, horizon_days)
     return next(r for r in reactions if r.bucket == today_bucket)
+
+
+def build_laddered_buy_plan(
+    validated_buckets: set[str],
+    closes: list[float],
+    trailing_high: float,
+    budget: float,
+) -> list[dict]:
+    """Reparte `budget` entre las franjas de caída YA VALIDADAS fuera de muestra para este
+    ticker (`DRAWDOWN_VALIDATED_BUCKETS` en `src/ui/portfolio.py`, pasado acá como
+    `validated_buckets`) — no todas las franjas de `DRAWDOWN_BUCKETS`, ni una franja inventada.
+    Más peso a la franja más profunda: ranking simple 1, 2, 3... normalizado a 1 (no una
+    fórmula backteseada aparte — lo único validado fuera de muestra es que cada franja
+    INDIVIDUAL tuvo, en promedio, retorno futuro positivo a 90 días; este reparto entre franjas
+    es un criterio de gestión de riesgo encima de esa validación, no algo testeado en sí mismo).
+    Devuelve una fila por franja (de más superficial a más profunda) con su rango de precio del
+    subyacente (derivado de `trailing_high`), el % de presupuesto asignado, el monto, y la
+    reacción histórica ya validada (mean_return/win_rate/observations, recalculada en vivo sobre
+    `closes` igual que `current_bucket_reaction`)."""
+    ordered = [b for b in DRAWDOWN_BUCKETS if b[0] in validated_buckets]
+    if not ordered:
+        return []
+    reactions_by_bucket = {r.bucket: r for r in compute_drawdown_bucket_reactions(closes)}
+    n = len(ordered)
+    rank_sum = n * (n + 1) / 2
+    rows = []
+    for i, (label, lo, hi) in enumerate(ordered):
+        weight = (i + 1) / rank_sum
+        reaction = reactions_by_bucket.get(label)
+        rows.append(
+            {
+                "bucket": label,
+                "price_low": trailing_high * (1 - hi),
+                "price_high": trailing_high * (1 - lo),
+                "weight_pct": weight,
+                "allocated_cop": weight * budget,
+                "mean_return": reaction.mean_return if reaction else None,
+                "win_rate": reaction.win_rate if reaction else None,
+                "observations": reaction.observations if reaction else None,
+            }
+        )
+    return rows

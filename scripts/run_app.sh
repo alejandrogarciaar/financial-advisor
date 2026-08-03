@@ -33,7 +33,17 @@ while powershell.exe -NoProfile -Command \
 done
 echo "$PORT" > streamlit.port
 
-./venv/Scripts/python.exe -m streamlit run app.py --server.headless true --server.port "$PORT" \
+# --server.fileWatcherType none: Streamlit's default file-watcher spawns a SECOND, separate
+# server process to watch for source changes — found the hard way that this child process ends
+# up being the one actually bound to the port (not the venv-launched parent), resolved via
+# sys._base_executable rather than the venv, landing on the SYSTEM Python install instead (which
+# doesn't even have streamlit installed standalone — it only worked via inherited env/sys.path
+# from the parent's spawn). Since this project always restarts manually via stop_app.sh/
+# run_app.sh anyway (see this skill), there's no reliance on hot-reload-on-save, so disabling the
+# watcher removes the whole dual-process ambiguity: one process, unambiguously the venv one,
+# guaranteed to be running whatever's on disk right now.
+./venv/Scripts/python.exe -m streamlit run app.py \
+  --server.headless true --server.port "$PORT" --server.fileWatcherType none \
   > streamlit.log 2>&1 &
 echo $! > streamlit.pid
 

@@ -24,8 +24,9 @@ Orden visual y de ejecución (`st.tabs()` no es lazy — las 6 corren en cada re
 - **🪙 Cripto**: BTC/ETH/SOL, mismo cuerpo de indicadores que Especulación pero sobre datos de
   Binance (más historia, velas de 4h nativas), más el Market Reaction Zone Engine multi-
   metodología.
-- **💰 Portafolio**: seguimiento de compras propias en pesos colombianos (COP), sobre CDIs que
-  trackean los tickers/ETFs de arriba y cotizan en la BVC. Siempre corre último (reusa
+- **💰 Portafolio**: seguimiento de compras y ventas propias en pesos colombianos (COP), sobre
+  CDIs que trackean los tickers/ETFs de arriba y cotizan en la BVC — rentabilidad no realizada
+  (lo que se tiene) y realizada (lo que se vendió, neto de comisión). Siempre corre último (reusa
   evaluaciones ya calculadas por Acciones/ETFs en el mismo run).
 
 ## Cómo correrlo
@@ -115,13 +116,13 @@ mapa es solo para ubicarse rápido, no para reemplazar esa lectura.
 | `validation.py` | Pestaña Validación — backtest en UI + historial de veredictos. |
 | `speculation.py` | Pestaña Especulación (solo acciones) + `render_speculation_indicators()` (compartida con Cripto) + sección del Market Reaction Zone Engine sobre datos diarios. |
 | `cripto.py` | Pestaña Cripto (BTC/ETH/SOL, Binance) — mismo cuerpo de indicadores + Market Reaction Zone Engine sobre 4h. |
-| `portfolio.py` | Pestaña Portafolio — alta de compras, resumen, "Contexto de valoración", auto-refresh de precios (`st.fragment`). |
+| `portfolio.py` | Pestaña Portafolio — alta de compras y ventas, resumen de holdings, "Ganancias realizadas", "Contexto de valoración", auto-refresh de precios (`st.fragment`). |
 
 ### `src/` — módulos de cómputo top-level (no UI)
 
 | Archivo | Rol |
 |---|---|
-| `portfolio.py` | Cómputo de Portafolio: `load_purchases`/`save_purchases`, `summarize_by_ticker`, comisiones, `build_synthetic_portfolio_series`, `project_future_value`. |
+| `portfolio.py` | Cómputo de Portafolio: `load_purchases`/`save_purchases`, `load_sales`/`save_sales`, `summarize_by_ticker` (holdings netos), `realized_gains_summary`, comisiones, `build_synthetic_portfolio_series`, `project_future_value`. |
 | `speculation.py` | RSI, MACD, Bollinger, ADX, OBV, soportes/resistencias simples, reacciones por régimen — computación técnica, separada de la valoración. |
 | `support_resistance.py` | "Market Reaction Zone Engine" — motor multi-metodología de soporte/resistencia (DBSCAN, KDE, RANSAC/Theil-Sen/Huber, Hough, Volume Profile, VWAP), compartido por Especulación y Cripto vía `daily_reference_config()`/`SRConfig()`. |
 | `drawdown_dca.py` | Zona de acumulación por caída desde máximo de 1 año, usado en Portafolio. |
@@ -136,6 +137,7 @@ mapa es solo para ubicarse rápido, no para reemplazar esa lectura.
 | `oos_validate.py` | Validador fuera de muestra reusable (split cronológico 60/40, consistencia de signo, barrido de umbrales) — reemplaza re-derivar esta metodología a mano en cada investigación. |
 | `verify_app.py` | Smoke test de las 6 pestañas vía `AppTest`, sin navegador. |
 | `run_app.sh` / `stop_app.sh` | Arrancar/parar el servidor Streamlit local (puerto libre, health check, kill confiable por línea de comando). |
+| `add_sale.py` | Agrega una venta a `portfolio_data/sales.json` desde la terminal, validada igual que la tabla "Tus ventas" de la UI — para registrar una venta dictada por chat sin abrir el navegador. |
 
 ## Skills (`.claude/skills/`)
 
@@ -150,7 +152,7 @@ aplica.
 | `us-stocks-speculation` | Pestaña Especulación (solo acciones) — RSI, soporte/resistencia, MACD, Bollinger, ADX, OBV, Market Reaction Zone Engine. |
 | `us-stocks-cripto` | Pestaña Cripto (BTC/ETH/SOL) — mismos indicadores + motor de soporte/resistencia multi-metodología sobre Binance. |
 | `us-stocks-validation` | Pestaña Validación — backtest en UI o historial de veredictos. |
-| `us-stocks-portfolio` | Pestaña Portafolio — compras COP, resumen de holdings, contexto de valoración. |
+| `us-stocks-portfolio` | Pestaña Portafolio — compras/ventas COP, resumen de holdings, ganancias realizadas, contexto de valoración. |
 | `us-stocks-add-ticker-or-formula` | Agregar un ticker nuevo o una fórmula/señal de valoración nueva. |
 | `us-stocks-run-app` | Levantar, chequear o parar el dashboard local. |
 | `token-audit` | Auditar el consumo de tokens del proyecto (`CLAUDE.md`, skills, memoria) y qué procesos delegar a `scripts/`. |

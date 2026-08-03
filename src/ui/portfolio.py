@@ -18,17 +18,26 @@ from src.config import (
     RISK_FREE_RATE,
 )
 from src.data.errors import DataError
-from src.drawdown_dca import classify_drawdown_bucket, current_bucket_reaction, current_drawdown_snapshot
+from src.drawdown_dca import (
+    build_laddered_buy_plan,
+    classify_drawdown_bucket,
+    current_bucket_reaction,
+    current_drawdown_snapshot,
+)
 from src.portfolio import (
     DEFAULT_COMMISSION_COP,
     build_synthetic_portfolio_series,
     commission_summary,
     load_purchases,
+    load_sales,
     project_future_value,
+    realized_gains_summary,
     save_purchases,
+    save_sales,
     simulate_additional_purchase,
     summarize_by_ticker,
     validate_purchases,
+    validate_sales,
 )
 from src.ui.shared import (
     ETF_EVAL_CACHE_KEY,
@@ -113,6 +122,53 @@ def render_portfolio_total_hero(total_invested_cop: float, total_value_cop: floa
         )
 
 
+def render_realized_gains_hero(cost_basis_cop: float, gross_proceeds_cop: float, sale_commission_cop: float) -> None:
+    """Misma forma que `render_portfolio_total_hero` (hero grande + tiles de apoyo), pero para
+    lo YA VENDIDO — plata que ya se realizó, no una posición que sigue fluctuando. La comisión de
+    venta se muestra como tile propio (no solo restada adentro del número final) porque el pedido
+    puntual que originó esta sección fue justamente poder ver ese costo, no solo el neto."""
+    net_proceeds_cop = gross_proceeds_cop - sale_commission_cop
+    gain_cop = net_proceeds_cop - cost_basis_cop
+    gain_pct = gain_cop / cost_basis_cop if cost_basis_cop else 0.0
+    color = ZONE_COLOR["Acumulación"] if gain_cop >= 0 else ZONE_COLOR["Sobrevalorado"]
+    sign = "+" if gain_cop >= 0 else "-"
+    st.markdown(
+        f"""
+        <div style="background:{color}15;border:1px solid {color}55;border-radius:16px;
+                    padding:28px;text-align:center;">
+            <div style="font-size:0.8rem;font-weight:600;letter-spacing:0.04em;
+                        text-transform:uppercase;color:{color};opacity:0.9;">Ganancia realizada</div>
+            <div style="font-size:3rem;font-weight:700;color:{color};line-height:1.1;margin-top:6px;">
+                {gain_pct:+.1%}
+            </div>
+            <div style="font-size:1.05rem;font-weight:600;color:{color};opacity:0.85;margin-top:2px;">
+                {sign}${abs(gain_cop):,.0f} COP
+            </div>
+        </div>
+        """,
+        unsafe_allow_html=True,
+    )
+
+    st.write("")
+    tile1, tile2, tile3 = st.columns(3)
+    for col, label, value in (
+        (tile1, "Costo de compra (vendido)", f"${cost_basis_cop:,.0f} COP"),
+        (tile2, "Ingreso bruto por venta", f"${gross_proceeds_cop:,.0f} COP"),
+        (tile3, "Comisión de venta pagada", f"${sale_commission_cop:,.0f} COP"),
+    ):
+        col.markdown(
+            f"""
+            <div style="background:rgba(128,128,128,0.08);border:1px solid rgba(128,128,128,0.25);
+                        border-radius:12px;padding:14px 18px;">
+                <div style="font-size:0.72rem;font-weight:600;letter-spacing:0.03em;
+                            text-transform:uppercase;opacity:0.65;">{label}</div>
+                <div style="font-size:1.4rem;font-weight:700;margin-top:2px;">{value}</div>
+            </div>
+            """,
+            unsafe_allow_html=True,
+        )
+
+
 # Gate estático de qué (ticker subyacente, franja de caída) se validó fuera de muestra en la
 # investigación de esta sesión (split cronológico 60/40, mismo patrón que
 # REGIME_VALIDATED_COMBOS de Especulación — no recalculado en vivo, para evitar p-hacking).
@@ -142,26 +198,46 @@ DRAWDOWN_VALIDATED_BUCKETS = {
 PORTFOLIO_AUTOREFRESH_INTERVAL = "5m"
 
 
+def _compute_held_summary(purchases: pd.DataFrame, sales: pd.DataFrame) -> tuple[list[str], pd.DataFrame]:
+    """held_tickers (compradas menos vendidas > 0) + `summarize_by_ticker()` — compartido entre
+    los dos fragmentos de abajo (`_render_cartera_and_total`, `_render_portfolio_analysis`), que
+    ahora corren por separado (con "Tus compras"/"Tus ventas" en el medio, pedido explícito del
+    usuario) y por lo tanto necesitan cada uno su propia copia en vez de reusar una variable local
+    compartida como antes. Barato de recalcular dos veces: el precio por ticker ya está cacheado
+    (`@st.cache_data`, 900s) así que esto no vuelve a pegarle a la red, solo rehace un poco de
+    trabajo de DataFrame."""
+    sold_by_ticker = sales.groupby("ticker")["shares"].sum() if not sales.empty else pd.Series(dtype=int)
+    purchased_by_ticker = purchases.groupby("ticker")["shares"].sum() if not purchases.empty else pd.Series(dtype=int)
+    net_shares = purchased_by_ticker.subtract(sold_by_ticker, fill_value=0)
+    held_tickers = sorted(net_shares[net_shares > 0].index.tolist())
+    if not held_tickers:
+        return held_tickers, pd.DataFrame()
+
+    price_results = _parallel_fetch({t: (_cached_portfolio_price, (t,)) for t in held_tickers})
+    current_prices_cop = {t: result for t, (result, error) in price_results.items()}
+    summary = summarize_by_ticker(purchases, sales, current_prices_cop)
+    return held_tickers, summary
+
+
 @st.fragment(run_every=PORTFOLIO_AUTOREFRESH_INTERVAL)
-def _render_price_dependent_sections(purchases: pd.DataFrame) -> None:
-    """Todo lo que depende de precios en vivo (resumen por acción, contexto de valoración,
-    diversificación, retorno/riesgo, proyección de meta) — separado de render_capital() para
-    poder refrescarse solo, en su propio timer, sin resetear el formulario de compras ni el
-    simulador de precio promedio de abajo."""
+def _render_cartera_and_total(purchases: pd.DataFrame, sales: pd.DataFrame) -> None:
+    """"Mi Cartera" (holdings netos) + "Total" (ganancia no realizada) — el encabezado de la
+    pestaña, primero en la página por pedido del usuario. Separado de
+    `_render_portfolio_analysis()` (Comisiones en adelante) específicamente para que "Tus
+    compras"/"Tus ventas" puedan quedar sandwicheadas entre los dos, inmediatamente después de
+    "Total" — también pedido explícito. Sigue siendo su propio fragmento con auto-refresh, igual
+    que antes de la separación, así no resetea nada de lo que quedó en el medio."""
     st.caption(f"🕒 Última actualización: {datetime.now():%H:%M:%S}")
 
     st.divider()
-    st.subheader("Resumen por acción")
+    st.subheader("Mi Cartera")
+    st.caption("Solo lo que todavía tenés en cartera (comprado menos vendido) — lo ya vendido está en \"Ganancias realizadas\" más abajo.")
 
-    if purchases.empty:
-        st.caption("Todavía no registraste ninguna compra.")
+    held_tickers, summary = _compute_held_summary(purchases, sales)
+
+    if not held_tickers:
+        st.caption("No tenés ninguna posición abierta ahora mismo." if purchases.empty else "Vendiste todas tus posiciones — no tenés nada en cartera ahora mismo.")
     else:
-        held_tickers = sorted(purchases["ticker"].unique())
-        price_results = _parallel_fetch({t: (_cached_portfolio_price, (t,)) for t in held_tickers})
-        current_prices_cop = {t: result for t, (result, error) in price_results.items()}
-
-        summary = summarize_by_ticker(purchases, current_prices_cop)
-
         display = pd.DataFrame(
             {
                 "Ticker": summary["ticker"],
@@ -197,30 +273,97 @@ def _render_price_dependent_sections(purchases: pd.DataFrame) -> None:
         ).map(_color_return, subset=["Rentabilidad"])
         st.dataframe(styled, hide_index=True, use_container_width=True)
 
-        st.divider()
-        st.subheader("Total")
+    st.divider()
+    st.subheader("Total")
 
-        total_invested_cop = float(summary["invested_cop"].sum())
-        valued_rows = summary["current_value_cop"].dropna()
-        total_value_cop = float(valued_rows.sum()) if not valued_rows.empty else None
+    total_invested_cop = float(summary["invested_cop"].sum()) if not summary.empty else 0.0
+    valued_rows = summary["current_value_cop"].dropna() if not summary.empty else pd.Series(dtype=float)
+    total_value_cop = float(valued_rows.sum()) if not valued_rows.empty else None
 
-        render_portfolio_total_hero(total_invested_cop, total_value_cop)
+    render_portfolio_total_hero(total_invested_cop, total_value_cop)
 
-        if len(valued_rows) < len(summary):
-            st.caption("⚠️ El precio actual de algún ticker no está disponible ahora — el total no lo incluye.")
+    if not summary.empty and len(valued_rows) < len(summary):
+        st.caption("⚠️ El precio actual de algún ticker no está disponible ahora — el total no lo incluye.")
 
-        st.divider()
-        st.subheader("💸 Costo de comisiones")
-        st.caption("Lo que pagaste en comisiones no proyecta nada — es plata real que ya salió de tu bolsillo y le resta a la rentabilidad.")
 
-        commissions = commission_summary(purchases)
-        cm1, cm2, cm3 = st.columns(3)
-        cm1.metric("Comisiones pagadas (COP)", f"${commissions['total_commission_cop']:,.0f}")
-        cm2.metric("Comisión promedio por compra", f"${commissions['avg_commission_cop']:,.0f}")
-        if commissions["pct_of_invested"] is not None:
-            cm3.metric("% del capital invertido", f"{commissions['pct_of_invested']:.2%}")
-        st.caption(f"Sobre {commissions['num_purchases']} compra(s) registrada(s).")
+@st.fragment(run_every=PORTFOLIO_AUTOREFRESH_INTERVAL)
+def _render_portfolio_analysis(purchases: pd.DataFrame, sales: pd.DataFrame) -> None:
+    """Todo lo que va DESPUÉS de "Tus compras"/"Tus ventas" en el orden de la página: Comisiones,
+    Ganancias realizadas, Contexto de valoración, Diversificación, Retorno y riesgo, Proyección de
+    meta. Recalcula `held_tickers`/`summary` con `_compute_held_summary()` en vez de recibirlos de
+    `_render_cartera_and_total()` — son dos fragmentos separados (cada uno con su propio timer de
+    auto-refresh), no hay forma de pasarse variables entre ellos directamente."""
+    st.divider()
+    st.subheader("💸 Costo de comisiones")
+    st.caption("Lo que pagaste en comisiones no proyecta nada — es plata real que ya salió de tu bolsillo y le resta a la rentabilidad, tanto al comprar como al vender.")
 
+    commissions = commission_summary(purchases, sales)
+    cm1, cm2, cm3 = st.columns(3)
+    cm1.metric("Comisiones pagadas (COP)", f"${commissions['total_commission_cop']:,.0f}")
+    cm2.metric("Comisión promedio por operación", f"${commissions['avg_commission_cop']:,.0f}" if commissions["avg_commission_cop"] is not None else "—")
+    if commissions["pct_of_invested"] is not None:
+        cm3.metric("% del capital invertido", f"{commissions['pct_of_invested']:.2%}")
+    st.caption(
+        f"Sobre {commissions['num_purchases']} compra(s) (${commissions['total_buy_commission_cop']:,.0f} COP) "
+        f"y {commissions['num_sales']} venta(s) (${commissions['total_sale_commission_cop']:,.0f} COP) registrada(s)."
+    )
+
+    st.divider()
+    st.subheader("💵 Ganancias realizadas")
+    st.caption(
+        "Lo que ya vendiste, con la comisión de venta ya descontada — plata que ya se realizó, "
+        "no una posición que sigue fluctuando. Usa el costo promedio de compra (no por lotes) "
+        "como base de costo, el mismo criterio que el resto de esta pestaña."
+    )
+    if sales.empty:
+        st.caption("Todavía no registraste ninguna venta.")
+    else:
+        gains = realized_gains_summary(purchases, sales)
+        total_cost_basis_cop = float(gains["cost_basis_cop"].sum())
+        total_gross_proceeds_cop = float(gains["gross_proceeds_cop"].sum())
+        total_sale_commission_cop = float(gains["sale_commission_cop"].sum())
+
+        render_realized_gains_hero(total_cost_basis_cop, total_gross_proceeds_cop, total_sale_commission_cop)
+
+        st.write("")
+        gains_display = pd.DataFrame(
+            {
+                "Ticker": gains["ticker"],
+                "Acciones vendidas": gains["shares_sold"],
+                "Costo prom. compra (COP)": gains["avg_buy_price_cop"],
+                "Precio venta neto (COP)": gains["net_sale_price_cop"],
+                "Comisión de venta (COP)": gains["sale_commission_cop"],
+                "Ganancia (COP)": gains["realized_gain_cop"],
+                "Ganancia (%)": gains["realized_gain_pct"],
+            }
+        )
+
+        def _color_gain(value):
+            if pd.isna(value):
+                return ""
+            color = ZONE_COLOR["Acumulación"] if value >= 0 else ZONE_COLOR["Sobrevalorado"]
+            return f"color:{color};font-weight:700;"
+
+        def _format_gain_pct(value):
+            if pd.isna(value):
+                return "—"
+            arrow = "▲" if value >= 0 else "▼"
+            return f"{arrow} {value:+.1%}"
+
+        gains_styled = gains_display.style.format(
+            {
+                "Costo prom. compra (COP)": "${:,.0f}",
+                "Precio venta neto (COP)": lambda v: f"${v:,.0f}" if pd.notna(v) else "—",
+                "Comisión de venta (COP)": "${:,.0f}",
+                "Ganancia (COP)": "${:+,.0f}",
+                "Ganancia (%)": _format_gain_pct,
+            }
+        ).map(_color_gain, subset=["Ganancia (COP)", "Ganancia (%)"])
+        st.dataframe(gains_styled, hide_index=True, use_container_width=True)
+
+    held_tickers, summary = _compute_held_summary(purchases, sales)
+
+    if held_tickers:
         st.divider()
         st.subheader("📎 Contexto de valoración")
         st.caption(
@@ -296,13 +439,12 @@ def _render_price_dependent_sections(purchases: pd.DataFrame) -> None:
                         except DataError:
                             dca_prices = []
                     underlying_prices[ticker] = dca_prices
+                    closes = [p["close"] for p in dca_prices]
                     snapshot = current_drawdown_snapshot(dca_prices)
                     if snapshot is not None:
                         bucket = classify_drawdown_bucket(snapshot.drawdown)
-                        reaction = None
-                        if bucket in DRAWDOWN_VALIDATED_BUCKETS.get(underlying, set()):
-                            closes = [p["close"] for p in dca_prices]
-                            reaction = current_bucket_reaction(closes)
+                        validated_for_ticker = DRAWDOWN_VALIDATED_BUCKETS.get(underlying, set())
+                        reaction = current_bucket_reaction(closes) if bucket in validated_for_ticker else None
                         # st.metric SIEMPRE (no un caption) — el % en sí es útil incluso sin
                         # confirmación histórica, y la mayoría de los holdings, en un momento
                         # dado, van a estar en una franja no validada (ver rama de abajo); si
@@ -331,6 +473,42 @@ def _render_price_dependent_sections(purchases: pd.DataFrame) -> None:
                             )
                         else:
                             st.caption("Sin confirmación histórica suficiente para esta franja todavía.")
+
+                        if validated_for_ticker:
+                            with st.expander("🪜 Plan de compra escalonada"):
+                                st.caption(
+                                    "Reparte un presupuesto entre las franjas de caída YA VALIDADAS "
+                                    "fuera de muestra para este ticker, con más peso a la franja más "
+                                    "profunda (cuanto más bajó, mejor rindió en promedio en la "
+                                    "validación) — el reparto en sí es un criterio de gestión de "
+                                    "riesgo, no algo testeado por separado; lo validado es que cada "
+                                    "franja individual tuvo retorno promedio positivo a 90 días."
+                                )
+                                budget_cop = st.number_input(
+                                    "Presupuesto a repartir (COP)",
+                                    min_value=0,
+                                    step=100_000,
+                                    value=1_000_000,
+                                    key=f"ladder_budget_{ticker}",
+                                )
+                                plan = build_laddered_buy_plan(
+                                    validated_for_ticker, closes, snapshot.trailing_high, float(budget_cop)
+                                )
+                                for rung in plan:
+                                    reaction_text = (
+                                        f"{rung['mean_return']:+.0%} a 90d, acierto {rung['win_rate']:.0%}, "
+                                        f"n={rung['observations']}"
+                                        if rung["mean_return"] is not None
+                                        else "sin confirmación suficiente ahora"
+                                    )
+                                    st.markdown(
+                                        f"**{rung['bucket']}** ({underlying} entre "
+                                        f"${rung['price_low']:,.2f} y ${rung['price_high']:,.2f}): "
+                                        f"**{rung['weight_pct']:.0%}** del presupuesto → "
+                                        f"**${rung['allocated_cop']:,.0f} COP** · {reaction_text}"
+                                    )
+                        else:
+                            st.caption("Sin franja de caída validada para este ticker todavía — no hay plan escalonado.")
 
         st.divider()
         st.subheader("🥧 Diversificación")
@@ -421,6 +599,10 @@ def _render_price_dependent_sections(purchases: pd.DataFrame) -> None:
 
         st.divider()
         st.subheader("🎯 Proyección de meta")
+        # total_value_cop se recalcula acá (no viene de _render_cartera_and_total — fragmentos
+        # separados, sin estado compartido) a partir del mismo `summary` de arriba.
+        valued_rows = summary["current_value_cop"].dropna()
+        total_value_cop = float(valued_rows.sum()) if not valued_rows.empty else None
         if portfolio_rr is None or total_value_cop is None:
             st.caption("No disponible todavía — depende del retorno agregado calculado arriba.")
         else:
@@ -465,84 +647,129 @@ def _render_price_dependent_sections(purchases: pd.DataFrame) -> None:
 def render_capital():
     st.title("💰 Portafolio")
     st.caption(
-        "Registrá tus compras reales de estas acciones y seguí cuánto llevás invertido en "
-        "pesos, a qué precio promedio, y cómo viene la rentabilidad hoy."
+        "Registrá tus compras y ventas reales de estas acciones y seguí cuánto llevás invertido "
+        "en pesos, a qué precio promedio, y cómo viene la rentabilidad hoy — tanto la de lo que "
+        "todavía tenés como la que ya realizaste al vender."
     )
+
+    purchases = load_purchases()
+    sales = load_sales()
+
+    _render_cartera_and_total(purchases, sales)
 
     st.divider()
     st.subheader("Tus compras")
     st.caption(
-        "Editá cualquier celda para corregir una compra, tocá el **+** para agregar una nueva fila, "
-        "o el ícono de papelera para borrarla (te vamos a pedir confirmación antes de borrar nada "
-        "de verdad). Las acciones son unidades enteras — no se aceptan compras fraccionarias "
-        "(1.2, 2.3, etc.). La comisión viene precargada en "
-        f"${DEFAULT_COMMISSION_COP:,.0f} COP para compras nuevas, pero se puede ajustar compra a "
-        "compra (no cambia las que ya guardaste)."
+        "Solo de agregar, no editable ni eliminable desde acá — el detalle fila por fila queda "
+        "guardado igual (no se pierde nada), pero lo que importa día a día es \"Mi Cartera\" más "
+        "arriba, que ya muestra tu posición neta y precio promedio. Las acciones son unidades "
+        "enteras — no se aceptan compras fraccionarias (1.2, 2.3, etc.)."
     )
 
-    EDITOR_KEY = "purchases_editor"
-    saved_purchases = load_purchases()
+    with st.form("add_purchase_form", clear_on_submit=True):
+        st.markdown("**➕ Registrar una compra nueva**")
+        p1, p2, p3, p4 = st.columns(4)
+        new_purchase_ticker = p1.selectbox("Ticker", PORTFOLIO_TICKERS, key="new_purchase_ticker")
+        new_purchase_shares = p2.number_input("Acciones", min_value=1, step=1, value=1, key="new_purchase_shares")
+        new_purchase_price = p3.number_input(
+            "Precio de compra (COP)", min_value=1.0, step=1000.0, value=1_000_000.0, format="%.0f",
+            key="new_purchase_price",
+        )
+        new_purchase_commission = p4.number_input(
+            "Comisión (COP)", min_value=0.0, step=100.0, value=DEFAULT_COMMISSION_COP, format="%.0f",
+            key="new_purchase_commission",
+        )
+        new_purchase_date = st.date_input(
+            "Fecha de compra", value=date.today(), max_value=date.today(), key="new_purchase_date"
+        )
+        submitted_purchase = st.form_submit_button("➕ Registrar compra")
 
-    edited = st.data_editor(
-        saved_purchases,
-        num_rows="dynamic",
-        use_container_width=True,
-        hide_index=True,
-        key=EDITOR_KEY,
-        column_config={
-            "ticker": st.column_config.SelectboxColumn("Ticker", options=PORTFOLIO_TICKERS, required=True),
-            "shares": st.column_config.NumberColumn(
-                "Acciones", min_value=1, step=1, format="%d", required=True
-            ),
-            "price_cop": st.column_config.NumberColumn(
-                "Precio de compra (COP)", min_value=1, step=1000, format="$%.0f", required=True
-            ),
-            "commission_cop": st.column_config.NumberColumn(
-                "Comisión (COP)",
-                min_value=0,
-                step=100,
-                format="$%.0f",
-                default=DEFAULT_COMMISSION_COP,
-                required=True,
-            ),
-            "date": st.column_config.DateColumn(
-                "Fecha de compra", format="DD/MM/YYYY", max_value=date.today(), required=True
-            ),
-        },
-    )
-
-    errors = validate_purchases(edited, PORTFOLIO_TICKERS)
-    # las filas eliminadas con el ícono de papelera desaparecen del `edited` que devuelve el
-    # editor ANTES de que nosotros veamos nada — no hay forma de interceptarlo ahí. Por eso la
-    # confirmación funciona al revés: detectamos qué índices de `saved_purchases` (el último
-    # estado guardado en disco) ya no están en `edited`, y no llamamos a save_purchases() hasta
-    # que el usuario confirme. Si cancela, reseteamos el editor para que la fila "vuelva".
-    deleted_rows = (
-        saved_purchases.loc[saved_purchases.index.difference(edited.index)] if not errors else pd.DataFrame()
-    )
-
-    if errors:
-        for err in errors:
-            st.error(err)
-        st.caption("Corregí las filas marcadas para que se guarden los cambios.")
-        purchases = saved_purchases
-    elif not deleted_rows.empty:
-        st.warning(f"⚠️ Vas a eliminar {len(deleted_rows)} compra(s) — esto no se puede deshacer:")
-        st.dataframe(deleted_rows, hide_index=True, use_container_width=True)
-        confirm_col, cancel_col = st.columns(2)
-        if confirm_col.button("🗑️ Confirmar eliminación", type="primary", use_container_width=True):
-            save_purchases(edited)
-            del st.session_state[EDITOR_KEY]
+    if submitted_purchase:
+        new_row = pd.DataFrame(
+            [
+                {
+                    "ticker": new_purchase_ticker,
+                    "shares": int(new_purchase_shares),
+                    "price_cop": float(new_purchase_price),
+                    "commission_cop": float(new_purchase_commission),
+                    "date": new_purchase_date,
+                }
+            ]
+        )
+        candidate = pd.concat([purchases, new_row], ignore_index=True)
+        purchase_errors = validate_purchases(candidate, PORTFOLIO_TICKERS)
+        if purchase_errors:
+            for err in purchase_errors:
+                st.error(err)
+        else:
+            save_purchases(candidate)
+            st.success(f"Compra registrada: {int(new_purchase_shares)} acción(es) de {new_purchase_ticker}.")
             st.rerun()
-        if cancel_col.button("Cancelar", use_container_width=True):
-            del st.session_state[EDITOR_KEY]
-            st.rerun()
-        purchases = saved_purchases
+
+    st.divider()
+    st.subheader("Tus ventas")
+    st.caption(
+        "Registro histórico de tus ventas — **regla no negociable: esta tabla es solo de "
+        "agregar.** Una vez guardada, una venta no se puede editar ni borrar desde acá (ni vos "
+        "ni yo). Si cargaste algo mal, decímelo y sumamos una fila nueva que lo corrija — nunca "
+        "borramos ni tocamos la anterior."
+    )
+
+    if sales.empty:
+        st.caption("Todavía no registraste ninguna venta.")
     else:
-        save_purchases(edited)
-        purchases = edited
+        st.dataframe(
+            sales,
+            hide_index=True,
+            use_container_width=True,
+            column_config={
+                "ticker": st.column_config.TextColumn("Ticker"),
+                "shares": st.column_config.NumberColumn("Acciones", format="%d"),
+                "price_cop": st.column_config.NumberColumn("Precio de venta (COP)", format="$%.0f"),
+                "commission_cop": st.column_config.NumberColumn("Comisión de venta (COP)", format="$%.0f"),
+                "date": st.column_config.DateColumn("Fecha de venta", format="DD/MM/YYYY"),
+            },
+        )
 
-    _render_price_dependent_sections(purchases)
+    with st.form("add_sale_form", clear_on_submit=True):
+        st.markdown("**➕ Registrar una venta nueva**")
+        f1, f2, f3, f4 = st.columns(4)
+        new_sale_ticker = f1.selectbox("Ticker", PORTFOLIO_TICKERS, key="new_sale_ticker")
+        new_sale_shares = f2.number_input("Acciones", min_value=1, step=1, value=1, key="new_sale_shares")
+        new_sale_price = f3.number_input(
+            "Precio de venta (COP)", min_value=1.0, step=1000.0, value=1_000_000.0, format="%.0f",
+            key="new_sale_price",
+        )
+        new_sale_commission = f4.number_input(
+            "Comisión de venta (COP)", min_value=0.0, step=100.0, value=DEFAULT_COMMISSION_COP, format="%.0f",
+            key="new_sale_commission",
+        )
+        new_sale_date = st.date_input("Fecha de venta", value=date.today(), max_value=date.today(), key="new_sale_date")
+        submitted_sale = st.form_submit_button("➕ Registrar venta")
+
+    if submitted_sale:
+        new_row = pd.DataFrame(
+            [
+                {
+                    "ticker": new_sale_ticker,
+                    "shares": int(new_sale_shares),
+                    "price_cop": float(new_sale_price),
+                    "commission_cop": float(new_sale_commission),
+                    "date": new_sale_date,
+                }
+            ]
+        )
+        candidate = pd.concat([sales, new_row], ignore_index=True)
+        sale_errors = validate_sales(candidate, PORTFOLIO_TICKERS, purchases)
+        if sale_errors:
+            for err in sale_errors:
+                st.error(err)
+        else:
+            save_sales(candidate)
+            st.success(f"Venta registrada: {int(new_sale_shares)} acción(es) de {new_sale_ticker}.")
+            st.rerun()
+
+    _render_portfolio_analysis(purchases, sales)
 
     st.divider()
     st.subheader("🧮 Simulador de precio promedio")
@@ -572,7 +799,9 @@ def render_capital():
         "Comisión (COP)", min_value=0.0, step=100.0, value=DEFAULT_COMMISSION_COP, format="%.0f", key="sim_commission"
     )
 
-    sim = simulate_additional_purchase(purchases, sim_ticker, int(sim_shares), float(sim_price), float(sim_commission))
+    sim = simulate_additional_purchase(
+        purchases, sales, sim_ticker, int(sim_shares), float(sim_price), float(sim_commission)
+    )
 
     r1, r2, r3 = st.columns(3)
     if sim["current_shares"]:

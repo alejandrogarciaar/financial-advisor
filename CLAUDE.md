@@ -23,7 +23,7 @@ of these areas:
 | "🎲 Especulación" tab (stocks: RSI, S/R, MACD, Bollinger, ADX, OBV) | `us-stocks-speculation`         |
 | "🪙 Cripto" tab (BTC/ETH/SOL: same indicators + multi-method S/R engine) | `us-stocks-cripto`         |
 | "📊 Validación" tab (backtest, verdict history)                 | `us-stocks-validation`              |
-| "💰 Portafolio" tab (COP purchases, holdings, contexto)         | `us-stocks-portfolio`               |
+| "💰 Portafolio" tab (COP purchases/sales, holdings, realized gains, contexto) | `us-stocks-portfolio` |
 | Adding a new ticker or a new/modified valuation formula         | `us-stocks-add-ticker-or-formula`   |
 | Launching/checking/stopping the Streamlit app to see a change   | `us-stocks-run-app`                 |
 

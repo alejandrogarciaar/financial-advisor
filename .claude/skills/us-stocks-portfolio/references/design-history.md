@@ -98,6 +98,40 @@ Especulación pulled it this run). This same per-ticker `dca_prices` is captured
 `underlying_prices: dict[str, list[dict]]` during this loop specifically so the 3 sections below
 (diversification, aggregate risk/return, goal projection) can reuse it without fetching again.
 
+**Laddered buy plan ("🪜 Plan de compra escalonada", `build_laddered_buy_plan()` in
+`src/drawdown_dca.py`)**: added right after the sales/realized-gains feature, when the user
+asked for help defining a scaled buy-sell pattern "taking advantage of the trend." Explicitly
+steered away from inventing a new trend signal — every trend/momentum idea tried in this project
+for stocks (Fibonacci, simple support/resistance, ADX, OBV) failed out-of-sample validation; RSI
+only passed for BTC, not stocks (see `us-stocks-speculation`). Instead of designing something new
+and unvalidated, this formalizes what the drawdown-bucket accumulation zone (above) already
+proved: split a user-entered COP budget across a ticker's VALIDATED buckets only, using the
+existing `DRAWDOWN_VALIDATED_BUCKETS` gate — never all of `DRAWDOWN_BUCKETS`, never a bucket that
+hasn't survived the chronological 60/40 split. Shown as an `st.expander` inside each stock/ETF
+context card, gated on `DRAWDOWN_VALIDATED_BUCKETS.get(underlying)` being non-empty (so it never
+appears for CSPXCO, which has none).
+
+The weighting across buckets — more budget to the deeper bucket — was an explicit user choice
+among 3 options (equal split, user-defined per rung, weighted deeper) offered via
+`AskUserQuestion`. Implemented as the simplest thing that satisfies "more weight to deeper": a
+rank ratio over the ordered validated buckets (1 bucket → 100%; 2 buckets → 1:2 i.e. 33%/67%; 3
+buckets, MSFT's case → 1:2:3 i.e. 17%/33%/50%), normalized to sum to 1. This ratio is **not**
+itself something backtested — only using each bucket individually (buy the dip at a
+statistically-confirmed level) was validated; the specific ranking-based split across buckets is
+disclosed in the UI caption as a risk-management convention layered on top, not a separately-
+proven claim. Deliberately not weighted by the live `mean_return` magnitude of each bucket
+instead — that number is recomputed live and drifts as more history accumulates (same "avoid
+p-hacking, don't refit on live data" principle as freezing `DRAWDOWN_VALIDATED_BUCKETS` itself),
+so basing position sizing on its exact value would be a much stronger and shakier claim than what
+the OOS test actually established (direction of the effect, not a precise magnitude to size by).
+
+Price levels per rung are shown in the underlying's own currency (USD) — `trailing_high × (1 −
+hi)` to `trailing_high × (1 − lo)` from each bucket's `(lo, hi)` bounds in `DRAWDOWN_BUCKETS` —
+same "show the subyacente's USD price, not the CDI's COP price" convention already used
+everywhere else in this card (see the AMZN/1y-high caption above). The budget itself IS in COP
+(what the user actually has to deploy), so the card mixes a COP amount with a USD price range by
+design, same mismatch the rest of "Contexto de valoración" already lives with.
+
 **Diversification / aggregate risk-return / goal projection (3 sections after "Contexto de
 valoración", `render_capital()` in `src/ui/portfolio.py`)**: added after the user reframed the project as
 "somos un asesor financiero, damos herramientas de inversión" and asked what else would serve
@@ -143,6 +177,153 @@ reads as a prediction even when the underlying math is just arithmetic on a hist
   a single ticker's risk/return in Acciones/ETFs (`src/ui/stocks.py`/`src/ui/etfs.py`) — same
   labels, same "100% pasado" caption, plus one added line clarifying the USD/no-FX simplification
   above.
+
+**Sales / realized gains (`sales.json`, "Tus ventas", "💵 Ganancias realizadas")**: added after
+the user sold their entire position in every held ticker except CSPX and asked for a section to
+track how the resulting gains — net of the commission paid on the sale — were doing. Until this
+point the tab was buy-only by design (see the removed rebalancing dead-end note above, which used
+to cite this as the reason not to build it); this is the first place a sale is represented at
+all.
+
+- **Purchases stay untouched, forever** — a sale never edits, deletes, or reduces a row in
+  `purchases.json`. The user was explicit about this while the feature was being built: they want
+  their original purchase-price history to stay visible even after fully exiting a position, so
+  that if they buy back in later they have an easy reference to compare the new price against.
+  This is why sales live in their own file (`sales.json`, same row shape as purchases:
+  ticker/shares/price_cop/commission_cop/date) instead of, say, adding a `sold` flag to purchase
+  rows or deleting/shrinking them — net position is always computed as
+  `purchased - sold` at read time, never persisted as a mutation.
+- **Sales history is APPEND-ONLY — no edit, no delete, ever, by anyone.** A follow-up,
+  non-negotiable rule the user stated explicitly right after the feature shipped: "Tus ventas"
+  was rebuilt as a **read-only** `st.dataframe` history plus a separate
+  `st.form("add_sale_form")` that only ever concatenates a new row and calls `save_sales()` —
+  there is no code path in this form, or anywhere else in the UI, that can shrink or mutate
+  `sales.json`. This is deliberately stricter than "ask before deleting" (the general
+  portfolio-data rule) — for sales specifically, there's no confirmation dialog to click through
+  at all, the capability doesn't exist. If a past sale was entered wrong, the fix is a new row
+  that corrects it, never touching the old one — same principle as an accounting ledger, not a
+  spreadsheet. This also applies to Claude directly: `scripts/add_sale.py` only ever appends
+  (validated, same `validate_sales()` rules) and has no delete/edit subcommand — don't add one
+  without the user asking for it explicitly.
+- **Purchases moved to the identical UX right after, but for consistency, not policy.** The user
+  followed up asking to apply "the same strategy" to "Tus compras" — explicitly scoped to "la
+  dinámica, al UX," not a restatement of the sales golden rule. `_render_movements_editor()` (the
+  `data_editor` + delete-confirmation state machine, originally shared by both tables, then
+  purchases-only once sales moved off it) was deleted entirely once purchases moved to the same
+  read-only-history + `st.form("add_purchase_form")` pattern as sales — it had no remaining
+  caller. Net effect: neither table has an edit/delete path in the UI today, but that's a UX
+  decision for purchases, not a business rule with the same "no one, ever" weight as the sales
+  one — don't assume future purchase-editing work would be "breaking a rule" the way touching
+  `sales.json` would be.
+- **The row-by-row purchase history table was then removed from display entirely** (sales' still
+  shows). Follow-up request, same session: the user's mental model is "current portfolio net
+  holdings" + "sold shares," not a transaction ledger to review row by row — "Resumen por acción"
+  (further down at the time, net of sales; renamed to "Mi Cartera" and moved up, see below)
+  already answers what they actually check day to day, so seeing every individual purchase in
+  "Tus compras" was redundant clutter, not useful detail. `st.form` stayed (still the only way to
+  add a purchase); `load_purchases()` stayed (still needed to validate a new row and seed
+  `purchases` for the rest of the tab) — only the `st.dataframe(saved_purchases, ...)` display
+  block was cut. Explicit constraint from the user while asking for this: don't touch the storage
+  layer (`purchases.json`, `load_purchases`/`save_purchases`) at all — display-only change. Sales
+  keeps its visible history table for now (not asked to remove it) — don't assume the same
+  simplification applies there without being told.
+- **"Resumen por acción" renamed and moved to be the first thing on the page.** Same session,
+  next follow-up: the user wanted their current holdings visible immediately on opening the tab,
+  before the add-purchase/add-sale forms, not buried below them. Implemented by moving the
+  `_render_price_dependent_sections(purchases, sales)` call from the bottom of `render_capital()`
+  to right after the title/caption, and loading `purchases`/`sales` once at the top
+  (`load_purchases()`/`load_sales()`) instead of loading them inline right before each form —
+  since neither form needs an "edited vs. saved" reconciliation anymore (both are add-only forms,
+  not `data_editor`s), there was no longer a reason to load them anywhere but once, up front. The
+  whole fragment moved together (holdings table, unrealized-gain hero, comisiones, ganancias
+  realizadas, contexto de valoración, diversificación, retorno/riesgo, proyección de meta) — the
+  user only named "resumen por acción," but splitting that one table from the rest of the block it
+  logically belongs with (e.g. "Total" right after it) would have produced a worse layout than
+  moving the whole thing up together. The rename itself went through two names in quick
+  succession: first "Portafolio" (matching the tab title), then the user immediately asked for
+  "Cartera" instead since the tab is already called "💰 Portafolio" — a subsection repeating that
+  exact word read as redundant — then refined that one more step to "Mi Cartera." Final name:
+  **"Mi Cartera."** If asked to rename this again, check the current subheader text in
+  `_render_cartera_and_total()` (see next bullet — the single fragment this used to be got split
+  in two right after this) rather than trusting any name mentioned earlier in this file.
+- **Third round: "Tus compras"/"Tus ventas" pulled apart from the rest of the analysis block,
+  and `_render_price_dependent_sections()` split into two fragments.** Same session, one more
+  follow-up: the user actually wanted "Tus compras"/"Tus ventas" immediately after "Total," not
+  after the WHOLE block (comisiones through proyección de meta) as the previous round had shipped
+  — asked and confirmed via `AskUserQuestion` with two concrete orderings shown side by side. This
+  is NOT possible with a single `@st.fragment`-decorated function, since a fragment renders its
+  entire body as one atomic unit — you can't pause it mid-way to let `render_capital()` inject
+  "Tus compras"/"Tus ventas" and then resume. Fixed by splitting the one fragment into two:
+  `_render_cartera_and_total()` ("Mi Cartera" + "Total" only) and `_render_portfolio_analysis()`
+  (comisiones onward), called from `render_capital()` with the two add-forms sandwiched in
+  between. Each fragment independently calls a new small helper, `_compute_held_summary()`
+  (`held_tickers` + `summarize_by_ticker()`), instead of sharing one copy of `held_tickers`/
+  `summary` the way the single fragment used to — fragments are separate rerun units with no
+  shared local state, so there's no way to compute it once and hand it to the other.
+  `_render_portfolio_analysis()`'s "Proyección de meta" similarly recomputes `total_value_cop`
+  from its own `summary` instead of reusing the one `_render_cartera_and_total()`'s "Total"
+  section computed — same reason. None of this duplication costs a real network call: the
+  underlying price lookups are `@st.cache_data`-cached (900s TTL, see `PORTFOLIO_AUTOREFRESH_
+  INTERVAL`'s comment above `_compute_held_summary()`), so a second `_compute_held_summary()`
+  call within that window is a cache hit, not a re-fetch. Both fragments keep their own
+  `run_every=PORTFOLIO_AUTOREFRESH_INTERVAL` auto-refresh, same as the original single fragment
+  had, so this split doesn't change the auto-refresh behavior — it still won't reset the
+  add-purchase/add-sale forms sandwiched between them.
+  - **A real debugging detour along the way, worth remembering if "the app looks stale after a
+    restart" ever comes up again:** while diagnosing why the user reported not seeing this
+    reordering despite the server clearly serving current code (confirmed independently via
+    `streamlit.testing.v1.AppTest`, which runs `app.py` fresh with no dependency on any running
+    server process), `Get-CimInstance Win32_Process` revealed Streamlit spawns an internal CHILD
+    process on Windows that ends up being the one actually bound to the port — and that child's
+    `CommandLine` shows the SYSTEM Python install, not the venv, even though the venv Python was
+    what `run_app.sh` invoked directly. Tried and ruled out two fixes that seemed plausible but
+    didn't change anything: prepending `venv/Scripts` to `PATH` before launch (child still showed
+    system Python — so it's not a PATH-lookup issue), and `--server.fileWatcherType none` (child
+    still spawned — so it's not the file-watcher). Left as an open, apparently benign quirk (the
+    child process still serves current on-disk code correctly on every fresh restart — confirmed
+    via `AppTest` matching what a fresh `stop_app.sh`+`run_app.sh` cycle actually served) rather
+    than sunk further time into it; `--server.fileWatcherType none` was kept in `run_app.sh`
+    anyway since disabling a watcher this project never relies on (always restarts manually) is a
+    reasonable simplification on its own, independent of whether it fixed anything. The ACTUAL
+    resolution to "user doesn't see the change" turned out to be exactly what it looked like at
+    first glance: the user genuinely wanted a different order than what had shipped, not a caching
+    or stale-process bug at all — worth remembering before spending another long detour down the
+    process-forensics path next time this complaint comes up.
+- **Average-cost method, not FIFO lots.** A ticker's cost basis for a sale is
+  `avg_price_cop × shares_sold`, where `avg_price_cop` is the same weighted-average-of-all-
+  purchases number `summarize_by_ticker()` already computed for the held-position table before
+  this feature existed. Deliberately not lot-tracking (which lot got sold first) — the existing
+  avg-cost number was already the app's answer to "what did this ticker cost me," so reusing it
+  for realized gains keeps one definition of cost basis instead of introducing a second,
+  competing one. A consequence: selling shares does **not** change the average cost of whatever
+  remains — `simulate_additional_purchase()`'s `current_avg_price_cop` is intentionally still
+  computed from the full purchase history, not reduced to just the held remainder.
+- **Commission treated symmetrically on both legs.** Buys already baked commission into cost
+  (`invested_cop = shares×price + commission`, pre-existing). Sales mirror that:
+  `net_proceeds_cop = shares×price − commission`, so the sale's commission reduces the gain on
+  the way out just as the purchase's commission increased the cost on the way in. This was the
+  specific thing the user called out when asking for the feature ("estas ganancias pagaron
+  comisión") — `render_realized_gains_hero()` breaks out "Comisión de venta pagada" as its own
+  tile precisely so that cost stays visible, not just folded into a net number.
+- **`summarize_by_ticker()`/"Resumen por acción"/"Total" (unrealized) now only include tickers
+  with net shares > 0.** A ticker fully sold has nothing to show a live price or unrealized
+  return for, so it drops out of the held-position table and the unrealized-gain hero, and shows
+  up in "Ganancias realizadas" instead. `held_tickers` (computed as `purchased_by_ticker -
+  sold_by_ticker`, filtered to > 0 — later extracted into `_compute_held_summary()` when the
+  single fragment this lived in got split in two, see further down) is what "📎 Contexto de
+  valoración" and the 3 sections after it are now gated on, replacing
+  the old `purchases.empty` gate — a ticker can have purchase rows and still not appear in any of
+  those sections if it's been fully sold.
+- **`_render_movements_editor()`** — the purchase and sale `st.data_editor` tables share this
+  helper (extracted when the sale editor was added, since the delete-confirmation state machine
+  was about to be duplicated verbatim). One real bug caught while building it: the first draft
+  read `st.session_state[editor_key]` for the edited DataFrame, but `st.data_editor` with a `key=`
+  set stores the widget's edit-delta dict there (added/edited/deleted row indices), not the
+  merged DataFrame — only the function's **return value** has that. Fixed by having both call
+  sites capture `st.data_editor(...)`'s return value and pass it in explicitly.
+- **No FIFO, no partial-lot UI, no "which shares did I sell" tracking** — out of scope for what
+  was asked. If the user ever needs tax-lot-accurate accounting (e.g. for a jurisdiction that
+  requires FIFO/specific-lot reporting) this would need a real rework, not an extension.
 
 - **🎯 Proyección de meta**: `project_future_value()` (new, `src/portfolio.py`) is the standard
   future-value formula for a lump sum plus a monthly ordinary annuity, compounded monthly from
