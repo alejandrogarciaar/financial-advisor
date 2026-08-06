@@ -115,6 +115,23 @@ def validate_sales(df: pd.DataFrame, valid_tickers: list[str], purchases: pd.Dat
     return errors
 
 
+def average_buy_price_by_ticker(purchases: pd.DataFrame) -> dict:
+    """Costo promedio de compra (COP) por ticker sobre TODAS las compras (costo promedio, no
+    FIFO) — mismo criterio que `avg_price_cop` en `summarize_by_ticker()` y `avg_buy_price_cop`
+    en `realized_gains_summary()`; extraído acá para que "Tus ventas" pueda mostrar ese mismo
+    número por fila sin duplicar la fórmula una tercera vez."""
+    if purchases.empty:
+        return {}
+    result = {}
+    for ticker, group in purchases.groupby("ticker"):
+        shares_purchased = int(group["shares"].sum())
+        if not shares_purchased:
+            continue
+        total_invested_cop = float((group["shares"] * group["price_cop"] + group["commission_cop"]).sum())
+        result[ticker] = total_invested_cop / shares_purchased
+    return result
+
+
 def summarize_by_ticker(
     purchases: pd.DataFrame, sales: pd.DataFrame, current_prices_cop: dict
 ) -> pd.DataFrame:

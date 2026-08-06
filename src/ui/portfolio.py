@@ -26,6 +26,7 @@ from src.drawdown_dca import (
 )
 from src.portfolio import (
     DEFAULT_COMMISSION_COP,
+    average_buy_price_by_ticker,
     build_synthetic_portfolio_series,
     commission_summary,
     load_purchases,
@@ -718,13 +719,20 @@ def render_capital():
     if sales.empty:
         st.caption("Todavía no registraste ninguna venta.")
     else:
+        avg_buy_price_cop = average_buy_price_by_ticker(purchases)
+        sales_display = sales.copy()
+        sales_display["avg_buy_price_cop"] = sales_display["ticker"].map(avg_buy_price_cop)
+        sales_display = sales_display[
+            ["ticker", "shares", "avg_buy_price_cop", "price_cop", "commission_cop", "date"]
+        ]
         st.dataframe(
-            sales,
+            sales_display,
             hide_index=True,
             use_container_width=True,
             column_config={
                 "ticker": st.column_config.TextColumn("Ticker"),
                 "shares": st.column_config.NumberColumn("Acciones", format="%d"),
+                "avg_buy_price_cop": st.column_config.NumberColumn("Precio prom. compra (COP)", format="$%.0f"),
                 "price_cop": st.column_config.NumberColumn("Precio de venta (COP)", format="$%.0f"),
                 "commission_cop": st.column_config.NumberColumn("Comisión de venta (COP)", format="$%.0f"),
                 "date": st.column_config.DateColumn("Fecha de venta", format="DD/MM/YYYY"),

@@ -21,6 +21,17 @@ correction — never touch the old one. This is stronger than the general
 specifically, deletion isn't just gated on asking, it's off the table entirely, by design, with
 no UI path to do it at all (see `render_capital()` below).
 
+**Non-negotiable rule (explicit user instruction, 2026-08-06): "Ganancias realizadas" is
+READ-ONLY, derived data.** No skill or process — not the user through some future UI control,
+not Claude editing files or code directly — may modify what `realized_gains_summary()` (in
+`src/portfolio.py`, rendered in `render_capital()`) shows, except by adding a new sale via the
+"➕ Registrar una venta nueva" form or `scripts/add_sale.py`. Concretely: never hand-edit
+`purchases.json`/`sales.json` to change a realized-gain figure, never add a UI path that edits or
+deletes a purchase/sale row, and never alter the `realized_gains_summary()` calculation itself as
+a way to "fix" a number. If a figure looks wrong, the fix is a new sale record that corrects it
+going forward — same pattern as the sales-append-only rule above, extended explicitly to this
+derived section.
+
 **Purchases now use the same UX, by explicit request (not the same policy).** Right after the
 sales rule shipped, the user asked to apply "la misma estrategia... exclusivamente la dinámica,
 al UX" to "Tus compras" — same read-only-history + add-only-form pattern, no `data_editor`. The
