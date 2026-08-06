@@ -28,9 +28,18 @@ is in COP, so running DCF/Graham/multiples there would compare a USD fair value 
 price — meaningless, and redundant with the card that already exists for the underlying
 ticker.
 
-The "📎 Contexto de valoración" section cross-references each held CDI against its underlying
-`TICKERS`/ETF evaluation (`PORTFOLIO_CDI_UNDERLYING` in `config.py`) — reuses the existing
-cached evaluations, no new computation.
+The "📎 Contexto de valoración" section used to cross-reference each held CDI against its
+underlying `TICKERS`/ETF evaluation (`PORTFOLIO_CDI_UNDERLYING` in `config.py`) — reusing the
+existing cached evaluations, no new computation. **Removed entirely by explicit user request
+(2026-08-06)**: the user found it added little value and asked to delete it outright, keeping
+only the laddered-buy-plan piece it used to host (see "Laddered buy plan" below) as its own
+independent section. Everything in this and the next few paragraphs describing "Contexto de
+valoración" cards is now historical — it explains why `PORTFOLIO_CDI_UNDERLYING` and
+`DRAWDOWN_VALIDATED_BUCKETS` are shaped the way they are, not a description of what currently
+renders. The drawdown snapshot line (📉 % vs. 1-year high, the "Zona de acumulación" success
+message) survived the removal since it's the direct justification for the laddered plan, not
+itself a valuation cross-reference — it's now shown inline in "🪜 Plan de compra escalonada"
+instead of inside a valuation card.
 
 **Drawdown-bucket accumulation zone (`src/drawdown_dca.py`, `DRAWDOWN_VALIDATED_BUCKETS` in
 `src/ui/portfolio.py`)**: a line inside each "Contexto de valoración" card showing how far the underlying is
@@ -107,9 +116,14 @@ only passed for BTC, not stocks (see `us-stocks-speculation`). Instead of design
 and unvalidated, this formalizes what the drawdown-bucket accumulation zone (above) already
 proved: split a user-entered COP budget across a ticker's VALIDATED buckets only, using the
 existing `DRAWDOWN_VALIDATED_BUCKETS` gate — never all of `DRAWDOWN_BUCKETS`, never a bucket that
-hasn't survived the chronological 60/40 split. Shown as an `st.expander` inside each stock/ETF
-context card, gated on `DRAWDOWN_VALIDATED_BUCKETS.get(underlying)` being non-empty (so it never
-appears for CSPXCO, which has none).
+hasn't survived the chronological 60/40 split. Originally shown as an `st.expander` inside each
+stock/ETF "Contexto de valoración" card; since that section's removal (2026-08-06, see above) it
+renders inline in its own independent "🪜 Plan de compra escalonada" section instead — same
+per-ticker card layout (2-column grid), just without the expander wrapper (redundant once the
+section itself already carries that name) and without the valuation badge/quality-note content
+that used to sit above it. Still gated on `DRAWDOWN_VALIDATED_BUCKETS.get(underlying)` being
+non-empty (so it never appears for CSPXCO, which has none) and still only loops over
+`held_tickers` (only what's actually bought).
 
 The weighting across buckets — more budget to the deeper bucket — was an explicit user choice
 among 3 options (equal split, user-defined per rung, weighted deeper) offered via
@@ -125,15 +139,103 @@ p-hacking, don't refit on live data" principle as freezing `DRAWDOWN_VALIDATED_B
 so basing position sizing on its exact value would be a much stronger and shakier claim than what
 the OOS test actually established (direction of the effect, not a precise magnitude to size by).
 
-Price levels per rung are shown in the underlying's own currency (USD) — `trailing_high × (1 −
-hi)` to `trailing_high × (1 − lo)` from each bucket's `(lo, hi)` bounds in `DRAWDOWN_BUCKETS` —
-same "show the subyacente's USD price, not the CDI's COP price" convention already used
-everywhere else in this card (see the AMZN/1y-high caption above). The budget itself IS in COP
-(what the user actually has to deploy), so the card mixes a COP amount with a USD price range by
-design, same mismatch the rest of "Contexto de valoración" already lives with.
+Price levels per rung were originally shown in the underlying's own currency (USD) —
+`trailing_high × (1 − hi)` to `trailing_high × (1 − lo)` from each bucket's `(lo, hi)` bounds in
+`DRAWDOWN_BUCKETS` — same "show the subyacente's USD price, not the CDI's COP price" convention
+used everywhere else in the (now-removed) "Contexto de valoración" card, so the budget (COP)
+sat next to a USD price range by design.
 
-**Diversification / aggregate risk-return / goal projection (3 sections after "Contexto de
-valoración", `render_capital()` in `src/ui/portfolio.py`)**: added after the user reframed the project as
+**Update (2026-08-06, same day as the "Contexto de valoración" removal, second request that
+day): zone read + COP prices.** The user asked for two more things on top of making the section
+independent: (1) an explicit, at-a-glance read of whether each holding is in an accumulation
+zone, a "distribución/venta" zone, or neither ("en rango"); (2) show price levels in COP
+instead of USD wherever possible, since the whole point of this tab is the COP-denominated CDI.
+
+For (1): rather than invent a new signal, the 3-way split reuses pieces that already exist.
+"Acumulación" = today's bucket is in the ticker's `DRAWDOWN_VALIDATED_BUCKETS` entry (unchanged
+gate). "Distribución/venta" = today's bucket is `DRAWDOWN_BUCKETS[0]` ("0-5%", the shallowest
+bucket, meaning price is near its own 1-year high) — deliberately **not** framed as a validated
+sell signal in the UI copy, because this project has only ever backtested the accumulation side
+(buy-the-dip); there is no equivalent OOS-validated "sell near highs" result to point to, and
+claiming one would break the no-timing-language discipline this tab already commits to
+elsewhere. "En rango" is the honest catch-all: a real, sometimes deep, pullback that isn't (for
+this specific ticker) one of the statistically-confirmed buckets — better to say "no evidence
+either way yet" than to either call it accumulation (overclaiming) or lump it in with
+"near the highs" (factually wrong, since it's clearly not near the highs).
+
+For (2): the underlying's USD price history stays the actual computation basis for the
+bucket/validation math — switching to the CDI's own COP price history would silently invalidate
+`DRAWDOWN_VALIDATED_BUCKETS` (validated against the USD series specifically) without re-running
+the chronological 60/40 split, which is out of scope for a display change. Instead, a live
+same-day conversion ratio (`_cached_portfolio_price(ticker)` in COP ÷ `snapshot.current_price`
+in USD) is applied to both the current price and the trailing high (and to each rung's price
+bounds) for display only. Because the same ratio scales both numbers, the computed drawdown %
+— and therefore the bucket, and therefore the zone and the validated-reaction lookup — comes
+out bit-for-bit identical to the USD-only computation; only what's printed on screen changes.
+This is an approximation (assumes the CDI/underlying ratio held roughly steady across the
+lookback window, the same premise `PORTFOLIO_CDI_UNDERLYING`'s "tracks 1:1" comment already
+relies on) and the UI caption discloses that explicitly rather than presenting it as an exact
+historical COP series. Falls back to the old USD display if the CDI's live quote isn't
+available that run.
+
+The per-rung table also moved from a stack of dense `st.markdown` lines to an `st.dataframe`
+(user's other ask: "que esos valores se vean más fácil") — pre-formatted string columns rather
+than `column_config` numeric formatting, matching how "Ganancias realizadas" already renders
+its money/percent columns elsewhere on this tab, plus a new caption directly above the budget
+input spelling out in plain language what entering a number there actually does (split it
+across validated levels instead of buying it all today).
+
+**Update (2026-08-06, third request that day): re-validating in COP, and cleaning up the zone
+badge.** After the zone-read/COP-display redesign above, the user asked a direct feasibility
+question: could the same drawdown-bucket OOS validation be re-run on the CDI's own COP price
+history (its native BVC quote) instead of approximating from the underlying's USD history? The
+methodology is fully reusable (`scripts/oos_validate.py`, same 60/40 split, same horizons
+20/60/90/180, same `min_observations=15`) — the only change is which historical series feeds
+it: `PORTFOLIO_CDI_TICKERS[ticker]` (e.g. `GOOGLCO.CL`) instead of `TICKERS`/`ETF_TICKERS`.
+
+Run as a throwaway scratch script (not committed — same "not every investigation earns a
+permanent file" convention as everything else in this document) against all 6 CDIs. Findings:
+`AMZNCO`/`AAPLCO`/`MSFTCO` only have 74-136 rows of COP history on yfinance (the CDI itself
+started trading recently) — not even enough for one 252-day trailing-high window, so the
+question is currently unanswerable for them, not failed. `GOOGLCO`/`METACO` have ~472-493 rows
+(~2 years) — enough to attempt it, but nothing validated (the 60% "train" slice barely clears
+the 252-day warm-up before the split point, leaving too few train observations per bucket).
+`CSPXCO` has by far the longest COP history (1,176 rows, since 2021-09) and its "5-10%" bucket
+validated cleanly across all 4 horizons (train n=110, test n=164-197 depending on horizon) —
+a real, evidence-backed result, not a thin one. This is the interesting case: CSPXCO has **zero**
+validated buckets in the original USD-based analysis (the ETF's test-window drawdowns never
+went deep enough in USD terms to check anything past 0-5%) — but its COP-native series, which
+also carries the peso/dollar exchange-rate path on top of the S&P 500's own moves, apparently
+did dip enough (and recover predictably enough) to produce a confirmed signal. Added as
+`DRAWDOWN_VALIDATED_BUCKETS_COP = {"CSPXCO": {"5-10%"}}` right after
+`DRAWDOWN_VALIDATED_BUCKETS`, keyed by the CDI ticker (the series actually under test) rather
+than `underlying`.
+
+The user's follow-up ("revisa integridad de la implementación con el backtesting") was a
+correctness check, not a new feature: does the live UI, for a COP-validated ticker, actually
+compute everything from that same COP series, or does it silently keep using the USD series and
+just relabel the currency (which would make the displayed "confirmado fuera de muestra" claim a
+lie)? The fix: each ticker now picks ONE basis for its whole card —
+`DRAWDOWN_VALIDATED_BUCKETS_COP` (native COP, no conversion, real historical data) if that
+ticker has an entry there and the fetch succeeds, else the original USD basis with the
+fx-ratio-converted display from the redesign above. `snapshot`, `bucket`, `reaction`, and the
+laddered plan all derive from whichever single series was chosen — never a mix. Separately, the
+USD-denominated `underlying_prices[ticker]` used by "Retorno y riesgo del portafolio" (which
+combines every holding into one synthetic series) is still fetched unconditionally for every
+ticker regardless of which basis its own plan card uses, since that section's math assumes
+every holding is in the same currency (USD) — CSPXCO having its own COP-native plan doesn't
+change what feeds the portfolio-wide risk/return number.
+
+Same request also asked to drop the "📉 Vs. máximo 1 año -X%" `st.metric` that sat next to the
+zone badge ("no le veo utilidad") — removed; the percentage is still visible, just inside the
+"hoy vs. máximo" caption underneath rather than its own metric tile. And a nomenclature note:
+the card's title stays the CDI ticker itself (e.g. "AAPLCO", not "AAPL") regardless of which
+basis that ticker's card uses internally — the title always names the instrument actually being
+tested/tracked from the user's point of view, not an implementation detail of which price
+series happened to back the math that day.
+
+**Diversification / aggregate risk-return / goal projection (3 sections after "🪜 Plan de compra
+escalonada", `render_capital()` in `src/ui/portfolio.py`)**: added after the user reframed the project as
 "somos un asesor financiero, damos herramientas de inversión" and asked what else would serve
 that framing — all 3 chosen together from a shortlist. Unlike the drawdown-zone feature above,
 none of these needed out-of-sample validation: they don't predict whether a price move is coming,

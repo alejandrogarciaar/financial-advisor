@@ -22,10 +22,12 @@ config + tab wiring). This tab's code lives in `src/ui/etfs.py`:
 
 ## `src/ui/shared.py`
 
-- `ETF_EVAL_CACHE_KEY`, `_cached_etf_evaluation()`, `_cached_portfolio_price()` — cache keys/
-  functions that Portafolio's "Contexto de valoración" section (and this tab's own BVC-price
-  reference) also read from. Genuinely shared across ETFs/Portafolio (confirmed by usage) —
-  that's why they aren't in `etfs.py` alongside the rest of this tab's code.
+- `ETF_EVAL_CACHE_KEY`, `_cached_etf_evaluation()` — populated here for this tab's own list
+  render; used to also be read cross-tab by Portafolio's now-removed "Contexto de valoración"
+  section (see the Portfolio skill, 2026-08-06), so they no longer have an outside consumer, but
+  stayed in `shared.py` rather than moving back into `etfs.py` since nothing forces that move.
+  `_cached_portfolio_price()` is still genuinely shared — this tab's own BVC-price reference and
+  Portafolio's price lookups both call it — that's why it stays here.
 
 ## `app.py`
 

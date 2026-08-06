@@ -116,7 +116,7 @@ mapa es solo para ubicarse rápido, no para reemplazar esa lectura.
 | `validation.py` | Pestaña Validación — backtest en UI + historial de veredictos. |
 | `speculation.py` | Pestaña Especulación (solo acciones) + `render_speculation_indicators()` (compartida con Cripto) + sección del Market Reaction Zone Engine sobre datos diarios. |
 | `cripto.py` | Pestaña Cripto (BTC/ETH/SOL, Binance) — mismo cuerpo de indicadores + Market Reaction Zone Engine sobre 4h. |
-| `portfolio.py` | Pestaña Portafolio — alta de compras y ventas, resumen de holdings, "Ganancias realizadas", "Contexto de valoración", auto-refresh de precios (`st.fragment`). |
+| `portfolio.py` | Pestaña Portafolio — alta de compras y ventas, resumen de holdings, "Ganancias realizadas", "Plan de compra escalonada", auto-refresh de precios (`st.fragment`). |
 
 ### `src/` — módulos de cómputo top-level (no UI)
 

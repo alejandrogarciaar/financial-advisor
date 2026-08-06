@@ -138,13 +138,11 @@ which tab is visually active; this is a Streamlit characteristic, not a bug here
 independent in Streamlit (code order drives execution order regardless of label order), but
 keeping them in sync avoids the dependency between them silently drifting apart. A slow tab
 earlier in that order delays every tab after it, including its spinner (nothing renders for a
-later tab until its `with tab_X:` block is actually reached) — this is exactly why Portafolio
-must stay last: it reuses `STOCK_EVAL_CACHE_KEY`/`ETF_EVAL_CACHE_KEY` populated by Acciones and
-ETFs earlier in the same run (see `_get_or_fetch()` below), so it has to execute after both,
-and Validación/Especulación/Cripto are safe to sit in between them because none of them does
-any eager network fetch of its own (Validación's backtest is button-gated; Especulación and
-Cripto only load the one ticker selected, and Cripto's S/R engine is additionally button-gated
-on top of that). `_parallel_fetch()` in `src/ui/shared.py` (a thin `ThreadPoolExecutor` wrapper) is
+later tab until its `with tab_X:` block is actually reached) — Portafolio stays last by user
+request (see above); Validación/Especulación/Cripto are safe to sit in between Acciones/ETFs and
+Portafolio because none of them does any eager network fetch of its own (Validación's backtest
+is button-gated; Especulación and Cripto only load the one ticker selected, and Cripto's S/R
+engine is additionally button-gated on top of that). `_parallel_fetch()` in `src/ui/shared.py` (a thin `ThreadPoolExecutor` wrapper) is
 the mitigation for the tabs that DO eager-fetch: `render_list()` and `render_capital()`
 prefetch all their tickers' evaluations concurrently instead of looping sequentially, cutting
 wall-clock time roughly 8x for 8 tickers. Safe to call `@st.cache_data`-wrapped functions from
@@ -159,16 +157,19 @@ in Portafolio (`purchases["ticker"].unique()`, not `len(PORTFOLIO_TICKERS)`). `T
 tickers; nothing else hardcodes a count. `MAX_PARALLEL_WORKERS` in `src/ui/shared.py` is just a thread
 safety cap, unrelated to any ticker count — don't read meaning into its value.
 
-`_get_or_fetch()` builds on `_parallel_fetch()` with cross-tab dedup via
-`st.session_state[STOCK_EVAL_CACHE_KEY]` / `[ETF_EVAL_CACHE_KEY]`: since Acciones and ETFs
-always execute before Portafolio in the same run (see above), if a CDI's underlying ticker was
-already evaluated there this run, Portafolio's "📎 Contexto de valoración" section reuses that
-result instead of building a new fetch job for it. Only successful results are cached this way
-(errors aren't remembered, so a failed fetch gets retried next time it's needed). Note this is
-*belt-and-suspenders* on top of `st.cache_data`'s own memoization (which would already return
-the cached value on a second call within the TTL) — the session_state layer mainly makes the
-"don't re-request what another tab already has" intent explicit in the code, and skips
-resubmitting a redundant future to the thread pool.
+`_get_or_fetch()` builds on `_parallel_fetch()` with in-session dedup via
+`st.session_state[STOCK_EVAL_CACHE_KEY]` / `[ETF_EVAL_CACHE_KEY]`, populated by Acciones/ETFs
+(`render_list()`/ETFs' own list render) so a rerun within the same session doesn't re-request a
+ticker it already fetched. Only successful results are cached this way (errors aren't
+remembered, so a failed fetch gets retried next time it's needed). This is *belt-and-suspenders*
+on top of `st.cache_data`'s own memoization (which would already return the cached value on a
+second call within the TTL) — the session_state layer mainly makes the "don't re-request what
+this tab already has" intent explicit in the code, and skips resubmitting a redundant future to
+the thread pool. Portafolio used to be a cross-tab consumer of these same keys (its old "📎
+Contexto de valoración" section, reusing whatever Acciones/ETFs had already evaluated that run)
+— removed by user request (2026-08-06) in favor of an independent "🪜 Plan de compra escalonada"
+section that only needs each holding's raw price history, not a full valuation evaluation (see
+the Portfolio skill's design history).
 
 **Ticker filter persistence (`src/preferences.py`)**: the Acciones multiselect's filter
 (`selected`) survives an app restart, stored in `app_data/preferences.json` — same "real user

@@ -1,8 +1,8 @@
 """Pestaña "💰 Portafolio" — la única que persiste datos ingresados por el usuario (no
 respuestas de API), ver `portfolio_data/` en el skill de Portafolio. Extraído de app.py (que
-llegó a 2821 líneas) para modularizar. Siempre corre DESPUÉS de Acciones/ETFs en el orden de
-pestañas de app.py (st.tabs() no es lazy) para poder reusar `STOCK_EVAL_CACHE_KEY`/
-`ETF_EVAL_CACHE_KEY` de `shared.py` en vez de re-consultar lo que esas dos ya trajeron."""
+llegó a 2821 líneas) para modularizar. Corre DESPUÉS de Acciones/ETFs en el orden de pestañas de
+app.py (st.tabs() no es lazy) por pedido explícito del usuario sobre el orden de la página, no
+por ninguna dependencia técnica de datos de esas dos pestañas."""
 
 from datetime import date, datetime
 
@@ -19,6 +19,7 @@ from src.config import (
 )
 from src.data.errors import DataError
 from src.drawdown_dca import (
+    DRAWDOWN_BUCKETS,
     build_laddered_buy_plan,
     classify_drawdown_bucket,
     current_bucket_reaction,
@@ -41,19 +42,11 @@ from src.portfolio import (
     validate_sales,
 )
 from src.ui.shared import (
-    ETF_EVAL_CACHE_KEY,
-    STOCK_EVAL_CACHE_KEY,
     ZONE_COLOR,
-    _cached_etf_evaluation,
-    _cached_evaluation,
     _cached_historical_prices,
     _cached_portfolio_price,
-    _get_or_fetch,
     _parallel_fetch,
-    triangulation_badge,
-    zone_badge,
 )
-from src.valuation.fair_value import multiple_quality_context_note, quality_context_note, summarize_signals
 from src.valuation.risk_return import evaluate_risk_return
 
 PORTFOLIO_TICKERS = list(PORTFOLIO_CDI_TICKERS.keys())
@@ -190,8 +183,29 @@ DRAWDOWN_VALIDATED_BUCKETS = {
     "CSPXCO": set(),
 }
 
-# La caché de precios/evaluaciones subyacente (_cached_portfolio_price, _cached_evaluation,
-# _cached_etf_evaluation, _cached_historical_prices en shared.py) vence cada 900s (15 min) —
+# Mismo gate, pero validado sobre el historial NATIVO en COP del propio CDI (no el USD del
+# subyacente) — keyed por el ticker del CDI (`PORTFOLIO_CDI_TICKERS`), no por `underlying`,
+# porque acá la serie de base ES el CDI mismo (incluye el efecto del tipo de cambio, a
+# diferencia de DRAWDOWN_VALIDATED_BUCKETS de arriba). Resultado de correr
+# `scripts/oos_validate.py` (mismo split 60/40, mismos horizontes 20/60/90/180,
+# min_observations=15) contra GOOGLCO.CL/AMZNCO.CL/CSPXCO.CL/AAPLCO.CL/MSFTCO.CL/METACO.CL vía
+# yfinance (2026-08-06): AMZNCO/AAPLCO/MSFTCO no tienen suficiente historial en COP todavía (74-
+# 136 filas — ni alcanza para una sola ventana de 252 días, el CDI recién empezó a cotizar);
+# GOOGLCO/METACO tienen ~2 años pero ninguna franja validó (muy pocas observaciones del lado de
+# entrenamiento). CSPXCO tiene el historial COP más largo (~4.5 años, desde 2021) y ahí SÍ
+# validó la franja 5-10% en los 4 horizontes (train n=110, test n=164-197 según horizonte) —
+# notable porque en USD (arriba) CSPXCO no tiene NINGUNA franja validada; el tipo de cambio
+# propio del CDI parece agregar una dinámica distinta a la del S&P 500 puro. Mismo caveat que el
+# resto de este archivo: muestra chica, ventana mayormente alcista — no asumir que se sostiene
+# en un régimen bajista genuino. Cuando un ticker aparece acá, su tarjeta en "Plan de compra
+# escalonada" calcula TODO (bucket, reacción, franjas del plan) sobre esta serie en COP en vez
+# de la del subyacente en USD — nunca mezcla las dos series para un mismo ticker.
+DRAWDOWN_VALIDATED_BUCKETS_COP = {
+    "CSPXCO": {"5-10%"},
+}
+
+# La caché de precios subyacente (_cached_portfolio_price, _cached_historical_prices en
+# shared.py) vence cada 900s (15 min) —
 # ese es el piso real de frescura de los datos. 5 min es más seguido de lo estrictamente
 # necesario mirando solo ese ttl, elegido para acortar la ventana de precio desactualizado tras
 # el vencimiento (pedido explícito del usuario) a costa de más re-renders del fragmento (la
@@ -290,7 +304,7 @@ def _render_cartera_and_total(purchases: pd.DataFrame, sales: pd.DataFrame) -> N
 @st.fragment(run_every=PORTFOLIO_AUTOREFRESH_INTERVAL)
 def _render_portfolio_analysis(purchases: pd.DataFrame, sales: pd.DataFrame) -> None:
     """Todo lo que va DESPUÉS de "Tus compras"/"Tus ventas" en el orden de la página: Comisiones,
-    Ganancias realizadas, Contexto de valoración, Diversificación, Retorno y riesgo, Proyección de
+    Ganancias realizadas, Plan de compra escalonada, Diversificación, Retorno y riesgo, Proyección de
     meta. Recalcula `held_tickers`/`summary` con `_compute_held_summary()` en vez de recibirlos de
     `_render_cartera_and_total()` — son dos fragmentos separados (cada uno con su propio timer de
     auto-refresh), no hay forma de pasarse variables entre ellos directamente."""
@@ -366,150 +380,212 @@ def _render_portfolio_analysis(purchases: pd.DataFrame, sales: pd.DataFrame) -> 
 
     if held_tickers:
         st.divider()
-        st.subheader("📎 Contexto de valoración")
+        st.subheader("🪜 Plan de compra escalonada")
         st.caption(
-            "Cada CDI sigue 1:1 a su acción/ETF matriz — esto es la misma señal que ya calculamos "
-            "en las pestañas Acciones/ETFs, no un análisis nuevo."
+            "Solo para lo que ya tenés comprado. Cada tarjeta te dice primero en qué zona está "
+            "hoy — 🟢 acumulación (franja de caída ya validada fuera de muestra para ese "
+            "ticker), 🔴 distribución/venta (cerca de su máximo de 1 año, sin señal de venta "
+            "confirmada) o 🟡 en rango (caída real pero sin evidencia confirmada todavía) — y "
+            "después reparte un presupuesto entre las franjas YA VALIDADAS, con más peso a la "
+            "más profunda (cuanto más bajó, mejor rindió en promedio en la validación); el "
+            "reparto en sí es un criterio de gestión de riesgo, no algo testeado por separado."
         )
-        provider = st.session_state.get("last_provider", "yfinance")
-
-        # Si Acciones/ETFs ya evaluaron esta acción/fondo matriz en esta misma corrida (porque
-        # está entre los tickers filtrados ahí), _get_or_fetch la reusa directo de
-        # STOCK_EVAL_CACHE_KEY/ETF_EVAL_CACHE_KEY — recién arma un job nuevo para las que no
-        # estén. El número de jobs sale de `held_tickers` (lo que hay en el Portafolio), nunca
-        # de una cantidad fija.
-        stock_underlying = {t: u for t, (k, u) in ((t, PORTFOLIO_CDI_UNDERLYING[t]) for t in held_tickers) if k == "stock"}
-        etf_underlying = {t: u for t, (k, u) in ((t, PORTFOLIO_CDI_UNDERLYING[t]) for t in held_tickers) if k == "etf"}
-
-        stock_results = _get_or_fetch(
-            STOCK_EVAL_CACHE_KEY,
-            {(u, provider): (_cached_evaluation, (u, provider)) for u in set(stock_underlying.values())},
-        )
-        etf_results = _get_or_fetch(
-            ETF_EVAL_CACHE_KEY,
-            {u: (_cached_etf_evaluation, (u,)) for u in set(etf_underlying.values())},
-        )
-        context_results = {t: stock_results[(u, provider)] for t, u in stock_underlying.items()}
-        context_results.update({t: etf_results[u] for t, u in etf_underlying.items()})
 
         # Capturado durante el loop de abajo (no un fetch aparte) para que las secciones de
         # Diversificación/Retorno y riesgo/Proyección, más abajo, puedan reusar el mismo
         # historial de precios del subyacente sin volver a pedirlo.
         underlying_prices: dict[str, list[dict]] = {}
 
-        context_cols = st.columns(2)
+        plan_cols = st.columns(2)
         for i, ticker in enumerate(held_tickers):
             kind, underlying = PORTFOLIO_CDI_UNDERLYING[ticker]
-            ev, error = context_results[ticker]
-            with context_cols[i % 2]:
-                with st.container(border=True):
-                    st.markdown(f"**{ticker}** → {underlying}")
-                    if error is not None:
-                        st.caption(
-                            "No pudimos consultar esta acción ahora mismo."
-                            if kind == "stock"
-                            else "No pudimos consultar este ETF ahora mismo."
-                        )
-                        continue
-                    if kind == "stock":
-                        ev_summary = summarize_signals(ev)
-                        st.markdown(triangulation_badge(ev_summary, small=True), unsafe_allow_html=True)
-                        note = quality_context_note(ev, ev_summary) or multiple_quality_context_note(ev)
-                        if note:
-                            st.caption(f"💡 {note}")
-                    else:
-                        if ev.zone is not None:
-                            st.markdown(zone_badge(ev.zone, small=True), unsafe_allow_html=True)
-                        else:
-                            st.caption("Sin señal de valoración disponible para este ETF.")
+            # Siempre yfinance acá (no el provider elegido en Acciones) — mismo criterio que ya
+            # usaba la rama de ETFs: el historial es solo para la franja de caída, no depende de
+            # ninguna evaluación de valoración. Esta serie en USD del subyacente se guarda en
+            # `underlying_prices` para las 3 secciones de abajo SIEMPRE, sin importar qué base
+            # se use para el plan de este ticker puntual (ver abajo) — Retorno y riesgo del
+            # portafolio depende de que todos los holdings estén en la misma moneda (USD).
+            symbol = underlying if kind == "stock" else ETF_TICKERS[underlying]
+            try:
+                dca_prices, _ = _cached_historical_prices(symbol)
+            except DataError:
+                dca_prices = []
+            underlying_prices[ticker] = dca_prices
+            closes = [p["close"] for p in dca_prices]
 
-                    # Zona de acumulación: % de caída desde el máximo de 1 año del SUBYACENTE.
-                    # DRAWDOWN_VALIDATED_BUCKETS es el gate estático de qué franja está
-                    # confirmada fuera de muestra para este ticker puntual; el número mostrado
-                    # se recalcula en vivo sobre todo el historial disponible. Para acciones,
-                    # `ev.historical_prices` ya está en memoria (TickerEvaluation lo trae) — sin
-                    # fetch nuevo. ETFEvaluation NO trae ese campo, así que para ETFs hace falta
-                    # un fetch aparte (cacheado, y casi siempre ya tibio si Especulación lo pidió
-                    # este mismo run) contra el símbolo real de yfinance (ETF_TICKERS[underlying],
-                    # no el "CSPXCO" pelado).
-                    if kind == "stock":
-                        dca_prices = ev.historical_prices
+            # Base de cálculo para ESTE ticker: nativa en COP (el propio CDI) si tiene franja
+            # validada ahí (`DRAWDOWN_VALIDATED_BUCKETS_COP`, ver arriba); si no, la de siempre
+            # en USD del subyacente (`DRAWDOWN_VALIDATED_BUCKETS`). Nunca se mezclan series para
+            # un mismo ticker — el bucket de hoy, la reacción histórica y las franjas del plan
+            # siempre salen de la MISMA serie que efectivamente se backtesteó, para que el
+            # número mostrado coincida con lo que la validación realmente probó (integridad
+            # pedida explícitamente por el usuario, 2026-08-06).
+            cop_validated_for_ticker = DRAWDOWN_VALIDATED_BUCKETS_COP.get(ticker, set())
+            cop_prices: list[dict] = []
+            if cop_validated_for_ticker:
+                try:
+                    cop_prices, _ = _cached_historical_prices(PORTFOLIO_CDI_TICKERS[ticker])
+                except DataError:
+                    cop_prices = []
+
+            if cop_validated_for_ticker and cop_prices:
+                basis_prices, basis_closes = cop_prices, [p["close"] for p in cop_prices]
+                basis_currency = "COP"
+                validated_for_ticker = cop_validated_for_ticker
+            else:
+                basis_prices, basis_closes = dca_prices, closes
+                basis_currency = "USD"
+                validated_for_ticker = DRAWDOWN_VALIDATED_BUCKETS.get(underlying, set())
+
+            with plan_cols[i % 2]:
+                with st.container(border=True):
+                    # Título: nomenclatura del ticker que efectivamente se está sometiendo a
+                    # prueba (pedido explícito del usuario, 2026-08-06) — siempre el CDI (p. ej.
+                    # "AAPLCO"), nunca el subyacente, sea cual sea la base de cálculo usada abajo.
+                    st.markdown(f"**{ticker}** → {underlying}")
+                    snapshot = current_drawdown_snapshot(basis_prices)
+                    if snapshot is None:
+                        st.caption("No pudimos consultar el historial de precios ahora mismo.")
+                        continue
+
+                    bucket = classify_drawdown_bucket(snapshot.drawdown)
+                    reaction = current_bucket_reaction(basis_closes) if bucket in validated_for_ticker else None
+
+                    # 3 estados posibles, pedidos explícitamente por el usuario (2026-08-06):
+                    # "acumulación" = la franja de hoy está en el gate estático validado fuera de
+                    # muestra para ESTE ticker puntual (igual que antes). "distribución/venta" =
+                    # franja 0-5%, la más cercana al máximo de 1 año — puramente posicional (no
+                    # es una señal de venta confirmada, nunca se validó una tesis de venta en
+                    # este proyecto), solo indica que hay poco margen de caída reciente. "rango"
+                    # = todo lo demás: una caída real pero que, para ESTE ticker puntual, todavía
+                    # no tiene evidencia suficiente para llamarla acumulación — mejor eso que
+                    # sobreclamar. Los 3 umbrales (el propio DRAWDOWN_BUCKETS y el gate ya
+                    # validado) ya existían; no se inventa ningún número nuevo acá.
+                    if bucket in validated_for_ticker:
+                        drawdown_zone, zone_color, zone_label = "acumulacion", ZONE_COLOR["Acumulación"], "🟢 Zona de acumulación"
+                    elif bucket == DRAWDOWN_BUCKETS[0][0]:
+                        drawdown_zone, zone_color, zone_label = "distribucion", ZONE_COLOR["Sobrevalorado"], "🔴 Zona de distribución / venta"
                     else:
-                        try:
-                            dca_prices, _ = _cached_historical_prices(ETF_TICKERS[underlying])
-                        except DataError:
-                            dca_prices = []
-                    underlying_prices[ticker] = dca_prices
-                    closes = [p["close"] for p in dca_prices]
-                    snapshot = current_drawdown_snapshot(dca_prices)
-                    if snapshot is not None:
-                        bucket = classify_drawdown_bucket(snapshot.drawdown)
-                        validated_for_ticker = DRAWDOWN_VALIDATED_BUCKETS.get(underlying, set())
-                        reaction = current_bucket_reaction(closes) if bucket in validated_for_ticker else None
-                        # st.metric SIEMPRE (no un caption) — el % en sí es útil incluso sin
-                        # confirmación histórica, y la mayoría de los holdings, en un momento
-                        # dado, van a estar en una franja no validada (ver rama de abajo); si
-                        # el número solo se destacara cuando SÍ está validado, en la práctica se
-                        # vería chico/perdido la mayor parte del tiempo, que fue el problema
-                        # reportado.
-                        st.metric("📉 Vs. máximo de 1 año", f"-{snapshot.drawdown:.0%}")
-                        # Precio de referencia en USD (moneda del subyacente, no del CDI en
-                        # COP) — mismo criterio que el resto de "Contexto de valoración", que ya
-                        # muestra datos del subyacente sin convertir. Se nombra el ticker
-                        # (`underlying`) explícitamente para que no se confunda con el precio en
-                        # COP del CDI que se ve en el resto de la tarjeta/tabla.
+                        drawdown_zone, zone_color, zone_label = "rango", ZONE_COLOR["Precio justo"], "🟡 En rango"
+
+                    # Sin el % de caída al lado (removido a pedido del usuario, 2026-08-06: "no
+                    # le veo utilidad") — el badge solo ya dice lo que importa, y el % sigue
+                    # disponible igual en el caption de abajo ("hoy vs. máximo").
+                    st.markdown(
+                        f'<span style="background:{zone_color}22;color:{zone_color};'
+                        f'border:1px solid {zone_color};padding:3px 12px;border-radius:12px;'
+                        f'font-size:0.85rem;font-weight:600;white-space:nowrap;">{zone_label}'
+                        f"</span>",
+                        unsafe_allow_html=True,
+                    )
+
+                    # Conversión a COP para mostrar. Si la base YA es COP (serie nativa del CDI,
+                    # ver arriba) no hace falta convertir nada — es un histórico real, no una
+                    # aproximación. Si la base es USD (caso general, sin validación COP propia
+                    # todavía) se usa la razón CDI/subyacente DE HOY (precio del CDI en vivo ÷
+                    # precio del subyacente en vivo) aplicada por igual al precio actual y al
+                    # máximo — el % de caída resultante da exactamente el mismo número que en
+                    # USD (la razón se cancela en la resta), así que esto no cambia ninguna
+                    # clasificación ni validación, solo la moneda mostrada; es una aproximación
+                    # (asume que esa razón se mantuvo ~constante en la ventana de 1 año, la misma
+                    # premisa de "sigue 1:1 a su matriz" de `PORTFOLIO_CDI_UNDERLYING`) y se
+                    # aclara en el caption. Sin precio de CDI disponible, cae a USD puro.
+                    if basis_currency == "COP":
+                        to_cop = lambda x: x  # noqa: E731 — histórico real, sin conversión
+                        currency_label = "COP"
                         st.caption(
-                            f"{underlying} (USD): ${snapshot.current_price:,.2f} hoy vs. máximo "
-                            f"de ${snapshot.trailing_high:,.2f} el {snapshot.trailing_high_date}."
+                            f"{ticker} (COP): ${snapshot.current_price:,.0f} hoy vs. máximo de "
+                            f"${snapshot.trailing_high:,.0f} el {snapshot.trailing_high_date} "
+                            f"— histórico real del CDI, no una conversión."
                         )
+                    else:
+                        cdi_price_cop = _cached_portfolio_price(ticker)
+                        fx_ratio = cdi_price_cop / snapshot.current_price if cdi_price_cop else None
+                        if fx_ratio:
+                            to_cop = lambda x, r=fx_ratio: x * r
+                            currency_label = "COP"
+                            st.caption(
+                                f"{ticker} (COP): ${cdi_price_cop:,.0f} hoy vs. máximo aprox. "
+                                f"de ${snapshot.trailing_high * fx_ratio:,.0f} el "
+                                f"{snapshot.trailing_high_date} — conversión usando la relación "
+                                f"CDI/{underlying} de hoy, no un histórico en COP real."
+                            )
+                        else:
+                            to_cop = lambda x: x
+                            currency_label = "USD"
+                            st.caption(
+                                f"{underlying} (USD): ${snapshot.current_price:,.2f} hoy vs. "
+                                f"máximo de ${snapshot.trailing_high:,.2f} el "
+                                f"{snapshot.trailing_high_date} — no pudimos traer el precio "
+                                f"del CDI en COP ahora."
+                            )
+
+                    if drawdown_zone == "acumulacion":
                         if reaction is not None and reaction.mean_return is not None:
                             # st.success acá SÍ, porque este es el caso interesante y accionable
-                            # (confirmado fuera de muestra) — mismo peso visual que el DCA box
-                            # de Especulación.
+                            # (confirmado fuera de muestra) — mismo peso visual que el DCA box de
+                            # Especulación.
                             st.success(
-                                f"**Zona de acumulación** — esta franja ({bucket}) rindió, en "
-                                f"promedio y confirmado fuera de muestra, "
-                                f"**{reaction.mean_return:+.0%} a {reaction.horizon_days} días** "
-                                f"(tasa de acierto {reaction.win_rate:.0%}, n={reaction.observations})."
+                                f"Esta franja ({bucket}) rindió, en promedio y confirmado fuera "
+                                f"de muestra, **{reaction.mean_return:+.0%} a "
+                                f"{reaction.horizon_days} días** (tasa de acierto "
+                                f"{reaction.win_rate:.0%}, n={reaction.observations})."
                             )
                         else:
                             st.caption("Sin confirmación histórica suficiente para esta franja todavía.")
+                    elif drawdown_zone == "distribucion":
+                        st.caption(
+                            "No es una señal de venta confirmada — este proyecto nunca validó "
+                            "una tesis de venta, solo de acumulación en caídas. Indica nomás que "
+                            "hoy hay poco margen de caída reciente respecto al máximo de 1 año."
+                        )
+                    else:
+                        st.caption(
+                            "Hay una caída real, pero esta franja específica todavía no tiene "
+                            "evidencia histórica suficiente confirmada para este ticker puntual."
+                        )
 
-                        if validated_for_ticker:
-                            with st.expander("🪜 Plan de compra escalonada"):
-                                st.caption(
-                                    "Reparte un presupuesto entre las franjas de caída YA VALIDADAS "
-                                    "fuera de muestra para este ticker, con más peso a la franja más "
-                                    "profunda (cuanto más bajó, mejor rindió en promedio en la "
-                                    "validación) — el reparto en sí es un criterio de gestión de "
-                                    "riesgo, no algo testeado por separado; lo validado es que cada "
-                                    "franja individual tuvo retorno promedio positivo a 90 días."
-                                )
-                                budget_cop = st.number_input(
-                                    "Presupuesto a repartir (COP)",
-                                    min_value=0,
-                                    step=100_000,
-                                    value=1_000_000,
-                                    key=f"ladder_budget_{ticker}",
-                                )
-                                plan = build_laddered_buy_plan(
-                                    validated_for_ticker, closes, snapshot.trailing_high, float(budget_cop)
-                                )
-                                for rung in plan:
-                                    reaction_text = (
-                                        f"{rung['mean_return']:+.0%} a 90d, acierto {rung['win_rate']:.0%}, "
-                                        f"n={rung['observations']}"
-                                        if rung["mean_return"] is not None
-                                        else "sin confirmación suficiente ahora"
-                                    )
-                                    st.markdown(
-                                        f"**{rung['bucket']}** ({underlying} entre "
-                                        f"${rung['price_low']:,.2f} y ${rung['price_high']:,.2f}): "
-                                        f"**{rung['weight_pct']:.0%}** del presupuesto → "
-                                        f"**${rung['allocated_cop']:,.0f} COP** · {reaction_text}"
-                                    )
-                        else:
-                            st.caption("Sin franja de caída validada para este ticker todavía — no hay plan escalonado.")
+                    if not validated_for_ticker:
+                        st.caption("Sin franja de caída validada para este ticker todavía — no hay plan escalonado.")
+                        continue
+
+                    st.divider()
+                    st.caption(
+                        f"💬 Cuánto pensás invertir en {ticker} en total ahora — en vez de "
+                        "ponerlo todo al precio de hoy, lo repartimos entre las franjas de "
+                        "caída YA VALIDADAS para este ticker, con más peso a la más profunda, "
+                        "para que compres en varios niveles a medida que (si) sigue bajando."
+                    )
+                    budget_cop = st.number_input(
+                        "Presupuesto a repartir (COP)",
+                        min_value=0,
+                        step=100_000,
+                        value=1_000_000,
+                        key=f"ladder_budget_{ticker}",
+                    )
+                    plan = build_laddered_buy_plan(
+                        validated_for_ticker, basis_closes, snapshot.trailing_high, float(budget_cop)
+                    )
+                    plan_rows = []
+                    for rung in plan:
+                        price_low = to_cop(rung["price_low"])
+                        price_high = to_cop(rung["price_high"])
+                        reaction_text = (
+                            f"{rung['mean_return']:+.0%} a 90d (acierto {rung['win_rate']:.0%}, "
+                            f"n={rung['observations']})"
+                            if rung["mean_return"] is not None
+                            else "sin confirmación suficiente ahora"
+                        )
+                        plan_rows.append(
+                            {
+                                "Franja": rung["bucket"],
+                                f"Nivel de precio ({currency_label})": f"${price_low:,.0f} – ${price_high:,.0f}",
+                                "% del presupuesto": f"{rung['weight_pct']:.0%}",
+                                "Monto a invertir (COP)": f"${rung['allocated_cop']:,.0f}",
+                                "Retorno histórico validado": reaction_text,
+                            }
+                        )
+                    st.dataframe(pd.DataFrame(plan_rows), hide_index=True, use_container_width=True)
 
         st.divider()
         st.subheader("🥧 Diversificación")
