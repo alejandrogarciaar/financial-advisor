@@ -234,6 +234,42 @@ basis that ticker's card uses internally — the title always names the instrume
 tested/tracked from the user's point of view, not an implementation detail of which price
 series happened to back the math that day.
 
+**Update (2026-08-06, fourth request that day): the "distribución" zone gets an actual
+backtest.** After the COP re-validation above, the user asked directly: is the 🔴 "distribución/
+venta" badge itself backed by any backtesting, or is it just the positional label its caption
+already admits it is? Honest answer at the time: purely positional, never tested. The user then
+asked to actually run that test, then — after seeing the result — to extend it to every
+available ticker rather than special-casing the one that happened to validate.
+
+Ran the same OOS methodology (chronological 60/40 split, horizons 20/60/90/180,
+`min_observations=15`) with the condition "today's bucket is `DRAWDOWN_BUCKETS[0]`" (0-5%
+drawdown from the 1-year high) against every ticker a Portfolio card could show it for, each
+tested on the SAME series that ticker's card actually uses: GOOGL/AMZN/AAPL/MSFT/META in USD
+(matching `DRAWDOWN_VALIDATED_BUCKETS`'s basis) and CSPXCO.CL in COP (matching
+`DRAWDOWN_VALIDATED_BUCKETS_COP`'s basis, since that's what CSPXCO's card actually computes
+from). Result: **AAPL is the only one that validated** — a negative forward-return gap, same
+sign in train and test, across all 4 horizons (train n=172: -0.3%/-4.9%/-6.0%/-4.2%; test
+n=121-192: -1.8%/-4.6%/-9.1%/-11.4%). GOOGL, AMZN, MSFT, META (USD), and CSPXCO (COP) all failed
+at least one horizon (sign flips between train and test), so none of them get the confirmed
+treatment. Added as `DRAWDOWN_VALIDATED_SELL_BUCKETS = {"AAPL": {"0-5%"}}`, keyed by
+`underlying` like the accumulation dict (no COP-basis version needed yet, since nothing there
+validated).
+
+This is a real milestone for the project's discipline around timing language: every other
+"validated" claim anywhere in this app (drawdown accumulation, RSI for BTC, the Market Reaction
+Zone Engine) is a buy-side/accumulation thesis — this is the first time a sell/distribution-side
+effect has actually cleared the same bar. It gets treated with exactly the same rigor and the
+same visual/language pattern as the accumulation side, not a lesser one: when AAPL's card is
+showing bucket "0-5%", the caption switches from the generic "no es una señal confirmada" to an
+`st.error` (same visual weight as `st.success` on the accumulation side) quoting the actual
+mean return/win rate/n — but still descriptive language ("esta franja rindió, en promedio..."),
+never imperative ("vendé ahora"), matching every other DCA-adjacent caption in this tab. Every
+other ticker keeps the original unconfirmed caption unchanged. `reaction` (the live-recomputed
+`current_bucket_reaction()` call) now triggers whenever today's bucket is in EITHER the
+accumulation gate or the sell gate for that ticker, not just the accumulation one, so the same
+"recomputed live over full history, frozen validated-bucket set" pattern applies to both sides
+identically.
+
 **Diversification / aggregate risk-return / goal projection (3 sections after "🪜 Plan de compra
 escalonada", `render_capital()` in `src/ui/portfolio.py`)**: added after the user reframed the project as
 "somos un asesor financiero, damos herramientas de inversión" and asked what else would serve

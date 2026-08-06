@@ -204,6 +204,24 @@ DRAWDOWN_VALIDATED_BUCKETS_COP = {
     "CSPXCO": {"5-10%"},
 }
 
+# Gate análogo, pero para la franja "0-5%" (la más cercana al máximo de 1 año, la que la UI
+# etiqueta "distribución/venta") — este proyecto nunca había validado una tesis de este lado
+# hasta que el usuario pidió correrla explícitamente (2026-08-06). Mismo split 60/40, mismos
+# horizontes 20/60/90/180, min_observations=15, corrido contra GOOGL/AMZN/AAPL/MSFT/META (USD,
+# misma base que DRAWDOWN_VALIDATED_BUCKETS) y contra CSPXCO.CL (COP, misma base que
+# DRAWDOWN_VALIDATED_BUCKETS_COP) para no mezclar series con lo que la tarjeta de cada ticker ya
+# usa. Resultado: **AAPL es el único que validó** — signo negativo consistente en los 4
+# horizontes, train n=172, test n=121-192 (muestra sólida, no al límite):
+# train -0.3%/-4.9%/-6.0%/-4.2%, test -1.8%/-4.6%/-9.1%/-11.4%. GOOGL, AMZN, MSFT, META (USD) y
+# CSPXCO (COP) no validaron — el signo se invierte en al menos un horizonte para cada uno. Keyed
+# por `underlying` (todos los que sí se testearon acá usan base USD); si algún día un ticker en
+# base COP valida esto también, agregar un `..._COP` análogo en vez de forzarlo acá. Mismo
+# caveat de siempre: muestra de ~4 años, no asumir que se sostiene en un régimen distinto al
+# probado.
+DRAWDOWN_VALIDATED_SELL_BUCKETS = {
+    "AAPL": {"0-5%"},
+}
+
 # La caché de precios subyacente (_cached_portfolio_price, _cached_historical_prices en
 # shared.py) vence cada 900s (15 min) —
 # ese es el piso real de frescura de los datos. 5 min es más seguido de lo estrictamente
@@ -432,10 +450,14 @@ def _render_portfolio_analysis(purchases: pd.DataFrame, sales: pd.DataFrame) -> 
                 basis_prices, basis_closes = cop_prices, [p["close"] for p in cop_prices]
                 basis_currency = "COP"
                 validated_for_ticker = cop_validated_for_ticker
+                # DRAWDOWN_VALIDATED_SELL_BUCKETS solo tiene entradas en base USD por ahora (ver
+                # su comentario) — ningún ticker en base COP validó todavía del lado venta.
+                validated_sell_for_ticker: set[str] = set()
             else:
                 basis_prices, basis_closes = dca_prices, closes
                 basis_currency = "USD"
                 validated_for_ticker = DRAWDOWN_VALIDATED_BUCKETS.get(underlying, set())
+                validated_sell_for_ticker = DRAWDOWN_VALIDATED_SELL_BUCKETS.get(underlying, set())
 
             with plan_cols[i % 2]:
                 with st.container(border=True):
@@ -449,18 +471,24 @@ def _render_portfolio_analysis(purchases: pd.DataFrame, sales: pd.DataFrame) -> 
                         continue
 
                     bucket = classify_drawdown_bucket(snapshot.drawdown)
-                    reaction = current_bucket_reaction(basis_closes) if bucket in validated_for_ticker else None
+                    reaction = (
+                        current_bucket_reaction(basis_closes)
+                        if bucket in validated_for_ticker or bucket in validated_sell_for_ticker
+                        else None
+                    )
 
                     # 3 estados posibles, pedidos explícitamente por el usuario (2026-08-06):
                     # "acumulación" = la franja de hoy está en el gate estático validado fuera de
                     # muestra para ESTE ticker puntual (igual que antes). "distribución/venta" =
-                    # franja 0-5%, la más cercana al máximo de 1 año — puramente posicional (no
-                    # es una señal de venta confirmada, nunca se validó una tesis de venta en
-                    # este proyecto), solo indica que hay poco margen de caída reciente. "rango"
-                    # = todo lo demás: una caída real pero que, para ESTE ticker puntual, todavía
-                    # no tiene evidencia suficiente para llamarla acumulación — mejor eso que
-                    # sobreclamar. Los 3 umbrales (el propio DRAWDOWN_BUCKETS y el gate ya
-                    # validado) ya existían; no se inventa ningún número nuevo acá.
+                    # franja 0-5%, la más cercana al máximo de 1 año — el badge se muestra igual
+                    # para todos, pero el caption de abajo distingue si ADEMÁS está en
+                    # `DRAWDOWN_VALIDATED_SELL_BUCKETS` (efecto negativo confirmado fuera de
+                    # muestra, hoy solo AAPL) o si sigue siendo puramente posicional para el
+                    # resto (nunca se validó una tesis de venta ahí). "rango" = todo lo demás:
+                    # una caída real pero que, para ESTE ticker puntual, todavía no tiene
+                    # evidencia suficiente para llamarla acumulación — mejor eso que sobreclamar.
+                    # Los umbrales (DRAWDOWN_BUCKETS y los 2 gates validados) ya existían; no se
+                    # inventa ningún número nuevo acá.
                     if bucket in validated_for_ticker:
                         drawdown_zone, zone_color, zone_label = "acumulacion", ZONE_COLOR["Acumulación"], "🟢 Zona de acumulación"
                     elif bucket == DRAWDOWN_BUCKETS[0][0]:
@@ -534,11 +562,24 @@ def _render_portfolio_analysis(purchases: pd.DataFrame, sales: pd.DataFrame) -> 
                         else:
                             st.caption("Sin confirmación histórica suficiente para esta franja todavía.")
                     elif drawdown_zone == "distribucion":
-                        st.caption(
-                            "No es una señal de venta confirmada — este proyecto nunca validó "
-                            "una tesis de venta, solo de acumulación en caídas. Indica nomás que "
-                            "hoy hay poco margen de caída reciente respecto al máximo de 1 año."
-                        )
+                        if bucket in validated_sell_for_ticker and reaction is not None and reaction.mean_return is not None:
+                            # st.error acá SÍ, mismo peso visual que st.success en acumulación —
+                            # primera vez que este proyecto muestra un efecto de este lado
+                            # confirmado fuera de muestra, no solo posicional. Lenguaje
+                            # descriptivo, no imperativo: dice qué rindió esta franja
+                            # históricamente, no "vendé ahora".
+                            st.error(
+                                f"Esta franja ({bucket}) rindió, en promedio y confirmado fuera "
+                                f"de muestra, **{reaction.mean_return:+.0%} a "
+                                f"{reaction.horizon_days} días** — por debajo de lo esperable "
+                                f"(tasa de acierto {reaction.win_rate:.0%}, n={reaction.observations})."
+                            )
+                        else:
+                            st.caption(
+                                "No es una señal de venta confirmada para este ticker — no todos "
+                                "los tickers validaron una tesis de este lado. Indica nomás que "
+                                "hoy hay poco margen de caída reciente respecto al máximo de 1 año."
+                            )
                     else:
                         st.caption(
                             "Hay una caída real, pero esta franja específica todavía no tiene "

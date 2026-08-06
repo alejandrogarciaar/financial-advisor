@@ -233,6 +233,24 @@ config + tab wiring). This tab's code lives in `src/ui/portfolio.py`:
   lookback — the same "tracks 1:1" premise `PORTFOLIO_CDI_UNDERLYING` already relies on), and
   the UI caption says so explicitly. Falls back to USD display if `_cached_portfolio_price`
   returns `None` (CDI quote unavailable right now).
+- **Validated sell/distribution bucket (`DRAWDOWN_VALIDATED_SELL_BUCKETS`, right after
+  `DRAWDOWN_VALIDATED_BUCKETS_COP`)**: added 2026-08-06, same day, after the user asked to
+  actually backtest the "0-5%" bucket (the one the 🔴 badge shows) instead of leaving it purely
+  positional. Same `scripts/oos_validate.py` methodology, tested against
+  GOOGL/AMZN/AAPL/MSFT/META (USD, matching `DRAWDOWN_VALIDATED_BUCKETS`' basis) and CSPXCO.CL
+  (COP, matching `DRAWDOWN_VALIDATED_BUCKETS_COP`'s basis) — never a basis mismatch with what
+  that ticker's card already uses. Only **AAPL** validated: a consistently **negative** forward-
+  return gap across all 4 horizons, both train and test (train n=172, test n=121-192 — a solid
+  sample, not a thin one). Everyone else's sign flips between train/test on at least one
+  horizon. `DRAWDOWN_VALIDATED_SELL_BUCKETS = {"AAPL": {"0-5%"}}`, keyed by `underlying` like
+  its accumulation counterpart (no COP-basis entry yet — nothing validated there). This is the
+  first confirmed sell-side result anywhere in this project (see `CLAUDE.md`'s no-timing-
+  language discussion) — the 🔴 badge itself doesn't change (still shown for any ticker whose
+  bucket is "0-5%"), but when the ticker ALSO has a `DRAWDOWN_VALIDATED_SELL_BUCKETS` entry for
+  that bucket, the caption underneath switches from the generic "no es una señal confirmada" to
+  an `st.error` quoting the actual confirmed mean return/win rate/n — same visual weight as
+  `st.success` on the accumulation side, same descriptive-not-imperative language rule (states
+  what the franja historically returned, never "vendé").
 - `build_laddered_buy_plan()` — feeds the "🪜 Plan de compra escalonada" section in
   `render_capital()`, now its own independent section (not nested inside a valuation card
   anymore — see above): splits a user-entered COP budget across that ticker's VALIDATED drawdown
