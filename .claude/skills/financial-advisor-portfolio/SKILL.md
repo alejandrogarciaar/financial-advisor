@@ -1,6 +1,6 @@
 ---
-name: us-stocks-portfolio
-description: Use when the user's request is scoped to the "💰 Portafolio" tab of the USStocks (Precio Justo) dashboard — recording COP purchases or sales (both append-only), the held-position summary, realized gains, or the "Plan de compra escalonada" laddered-buy section. Points to the files that make up this tab so work stays scoped to them.
+name: financial-advisor-portfolio
+description: Use when the user's request is scoped to the "💰 Portafolio" tab of the financial-advisor (Precio Justo) dashboard — recording COP purchases or sales (both append-only), the held-position summary, realized gains, or the "Plan de compra escalonada" laddered-buy section. Points to the files that make up this tab so work stays scoped to them.
 ---
 
 # Portafolio tab — context map

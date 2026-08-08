@@ -170,7 +170,7 @@ under it.
 
 **Phase A vs. Phase B (S/R engine).** The user's original spec asked for all 20 methodologies AND
 an actionable signal, in the same request. Given this project's established rule (see
-`us-stocks-speculation`'s "Do not re-add without re-validating" — and this exact question, in a
+`financial-advisor-speculation`'s "Do not re-add without re-validating" — and this exact question, in a
 simpler form, already failed out-of-sample once), the work was split: Phase A built the full
 detection engine as descriptive infrastructure; Phase B ran the same chronological 60/40
 out-of-sample validation this project always requires before anything becomes an actionable

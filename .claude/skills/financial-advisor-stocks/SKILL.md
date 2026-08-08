@@ -1,6 +1,6 @@
 ---
-name: us-stocks-stocks
-description: Use when the user's request is scoped to the "📈 Acciones" tab of the USStocks (Precio Justo) dashboard — the 6-formula valuation cards, ticker list/filter, or a single ticker's detail page. Points to the files that make up this tab so work stays scoped to them.
+name: financial-advisor-stocks
+description: Use when the user's request is scoped to the "📈 Acciones" tab of the financial-advisor (Precio Justo) dashboard — the 6-formula valuation cards, ticker list/filter, or a single ticker's detail page. Points to the files that make up this tab so work stays scoped to them.
 ---
 
 # Acciones tab — context map

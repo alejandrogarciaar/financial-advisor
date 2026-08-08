@@ -74,17 +74,17 @@ resistance proximity, in either form. The existing single-window visual levels a
 chart annotations, not a signal — no code changed as a result of this investigation.
 
 **This exact question was later revisited with a much more sophisticated engine (multi-method
-clustering + regression + optimization, now living in the "🪙 Cripto" tab, `us-stocks-cripto`
+clustering + regression + optimization, now living in the "🪙 Cripto" tab, `financial-advisor-cripto`
 skill) and this time DID validate — but narrowly, only for BTC (support) and TSLA (support and
 resistance, back when that tab still covered stocks).** The simple single-level/multi-touch
-approach above still failed; see `us-stocks-cripto` for the newer result and why it's scoped so
+approach above still failed; see `financial-advisor-cripto` for the newer result and why it's scoped so
 much narrower than a first read might suggest.
 
 **The multi-method engine came back to stocks later, as descriptive-only infrastructure, not a
 restored validation.** User asked directly for support/resistance on stocks. The engine itself
 (`src/support_resistance.py`) was never crypto-specific in its logic, but it had picked up one
 real crypto-specific dependency since the TSLA-era validation above: its most recent redesign
-made its REFERENCE series 4h candles (see `us-stocks-cripto`'s Design history), and yfinance has
+made its REFERENCE series 4h candles (see `financial-advisor-cripto`'s Design history), and yfinance has
 no native 4h interval for stocks (the same limitation that made Cripto migrate to Binance in the
 first place — reaggregating 60m bars was already tried and rejected as inferior). Fix:
 generalized `BARS_PER_UNIT` (a fixed dict that hardcoded "reference = 4h") into `BARS_PER_DAY` +
@@ -104,7 +104,7 @@ compressed 6x, which would have been the signature of the bug NOT being fixed.
 
 Explicitly scoped to **descriptive only** — matches Cripto's own current honesty: the TSLA/AAPL
 validation above ran under the score formula from BEFORE the "reaction quality over touch count"
-redesign (see `us-stocks-cripto`), so it cannot be assumed to still hold, exactly the same rule
+redesign (see `financial-advisor-cripto`), so it cannot be assumed to still hold, exactly the same rule
 already applied to Fibonacci/ADX/OBV (never reuse a validated result after reweighting without
 re-running the same train/test split). `STOCK_SR_VALIDATED_TICKERS` in this file ships `{}` —
 no fresh out-of-sample validation was run for stocks under the current formula as part of this
@@ -180,7 +180,7 @@ the one test that matters.
 **"📋 Plan de DCA sugerido" replaced Fibonacci**, shown only for BTC/ETH/SOL same as Fibonacci
 was (today: only when `render_speculation_indicators()` is called with `is_crypto=True`, i.e.
 from the "🪙 Cripto" tab — this box no longer renders in Especulación itself, see
-`us-stocks-cripto`). Same out-of-sample methodology, different (much coarser,
+`financial-advisor-cripto`). Same out-of-sample methodology, different (much coarser,
 much more statistically powered) hypothesis: instead of "is the price at this specific % of its
 range," just "is the price sustained above/below its 3 moving averages" — literally the
 decades-old academic "time-series momentum" effect, not something invented for this ticker.
@@ -398,7 +398,7 @@ the way there was for those two.
 (2026-08-08) — TSLA-support cleared the bar; nothing else did.** After the Wyckoff investigation
 above came back negative, the user asked what other strategies could be backtested; this was the
 strongest concrete candidate on hand: `STOCK_SR_VALIDATED_TICKERS` had shipped as `{}` since the
-"reaction quality" score redesign (see `us-stocks-cripto`'s Design history for the redesign
+"reaction quality" score redesign (see `financial-advisor-cripto`'s Design history for the redesign
 itself), an explicit, disclosed gap rather than an oversight — the old TSLA/AAPL result was
 derived under the PRE-redesign formula and, per this project's standing rule (never reuse a
 validated result after reweighting without re-running the split), couldn't be assumed to still

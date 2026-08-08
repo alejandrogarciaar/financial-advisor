@@ -48,7 +48,7 @@ combinations that survived out-of-sample validation — a real, live-computed hi
 reaction. This is one of several deliberate exceptions to the project's no-timing-language rule
 (alongside Especulación and Cripto) — this time inside Portfolio, because the user explicitly
 asked for it there: they wanted a DCA-planning aid, but were explicit that they did NOT want
-support/resistance-style level-guessing (see `us-stocks-speculation`'s rejected investigation) —
+support/resistance-style level-guessing (see `financial-advisor-speculation`'s rejected investigation) —
 just "if this drops to around here, has that historically been a decent time to add." The
 language stays descriptive ("esa franja rindió, en promedio, +7% a 90 días"), never imperative
 ("comprá ahora") — same register as Especulación's DCA box.
@@ -112,7 +112,7 @@ Especulación pulled it this run). This same per-ticker `dca_prices` is captured
 asked for help defining a scaled buy-sell pattern "taking advantage of the trend." Explicitly
 steered away from inventing a new trend signal — every trend/momentum idea tried in this project
 for stocks (Fibonacci, simple support/resistance, ADX, OBV) failed out-of-sample validation; RSI
-only passed for BTC, not stocks (see `us-stocks-speculation`). Instead of designing something new
+only passed for BTC, not stocks (see `financial-advisor-speculation`). Instead of designing something new
 and unvalidated, this formalizes what the drawdown-bucket accumulation zone (above) already
 proved: split a user-entered COP budget across a ticker's VALIDATED buckets only, using the
 existing `DRAWDOWN_VALIDATED_BUCKETS` gate — never all of `DRAWDOWN_BUCKETS`, never a bucket that

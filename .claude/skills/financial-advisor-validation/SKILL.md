@@ -1,6 +1,6 @@
 ---
-name: us-stocks-validation
-description: Use when the user's request is scoped to the "📊 Validación" tab of the USStocks (Precio Justo) dashboard — the in-UI backtest or the per-ticker verdict-history log/chart. Points to the files that make up this tab so work stays scoped to them.
+name: financial-advisor-validation
+description: Use when the user's request is scoped to the "📊 Validación" tab of the financial-advisor (Precio Justo) dashboard — the in-UI backtest or the per-ticker verdict-history log/chart. Points to the files that make up this tab so work stays scoped to them.
 ---
 
 # Validación tab — context map
@@ -27,7 +27,7 @@ config + tab wiring). This tab's code lives in `src/ui/validation.py`:
   why `years_ago=2` doesn't work for any ticker).
 - `_maybe_record_verdict()` / the `record_verdict()` call sites — these actually live in
   `render_list()` / `render_detail()` (`src/ui/stocks.py`), not here; this tab only *reads*
-  `load_verdict_history()`. See `us-stocks-stocks` skill if the recording logic itself needs to
+  `load_verdict_history()`. See `financial-advisor-stocks` skill if the recording logic itself needs to
   change.
 - `VERDICT_COLOR` / `VERDICT_LABEL` (`src/ui/shared.py`) — reused for the chart, not redefined
   here; keep in sync with `triangulation_badge()`'s colors if either changes.

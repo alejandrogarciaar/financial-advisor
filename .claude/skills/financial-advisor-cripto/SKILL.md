@@ -1,6 +1,6 @@
 ---
-name: us-stocks-cripto
-description: Use when the user's request is scoped to the "🪙 Cripto" tab of the USStocks (Precio Justo) dashboard — BTC/ETH/SOL only. Covers both the shared speculation indicators (RSI, MACD, Bollinger, ADX, OBV, DCA box) and the multi-methodology support/resistance engine (clustering, KDE, robust trendlines, Hough transform, Volume Profile, VWAP, channels, confidence scoring), all sourced from Binance. Points to the files that make up this tab so work stays scoped to them.
+name: financial-advisor-cripto
+description: Use when the user's request is scoped to the "🪙 Cripto" tab of the financial-advisor (Precio Justo) dashboard — BTC/ETH/SOL only. Covers both the shared speculation indicators (RSI, MACD, Bollinger, ADX, OBV, DCA box) and the multi-methodology support/resistance engine (clustering, KDE, robust trendlines, Hough transform, Volume Profile, VWAP, channels, confidence scoring), all sourced from Binance. Points to the files that make up this tab so work stays scoped to them.
 ---
 
 # Cripto tab — context map
@@ -12,7 +12,7 @@ rationale, the real bugs found while building it, and the exact out-of-sample va
 — read it before adding a new methodology, touching the scoring weights, or changing which
 tickers/tab this content lives in.
 
-**This tab is BTC/ETH/SOL only.** Especulación (`us-stocks-speculation`) is stocks-only
+**This tab is BTC/ETH/SOL only.** Especulación (`financial-advisor-speculation`) is stocks-only
 (`TICKERS`) — the two used to overlap (crypto lived in both places, under different tab names)
 until this tab absorbed all of crypto's speculation content and Especulación dropped crypto
 entirely. See "Design history" for why.
@@ -30,7 +30,7 @@ config + tab wiring). This tab's code lives in `src/ui/cripto.py`:
   "Soportes y Resistencias — multi-metodología", see Design history), then a single call to
   `render_speculation_indicators("crypto", ticker, historical_prices, closes, current_price,
   is_crypto=True, render_zone_engine=_render_zone_engine)` (imported from
-  `src/ui/speculation.py` — the shared indicator stack, see `us-stocks-speculation`). The
+  `src/ui/speculation.py` — the shared indicator stack, see `financial-advisor-speculation`). The
   closure contains: the "⚙️ Configuración avanzada" expander (method toggles, top_n,
   min_touch_points — default 3, was 2 — and `sr_include_1h`; `sr_include_4h` was REMOVED, 4h is
   now mandatory/always fetched, see Design history), the compute button, the display filters
@@ -44,14 +44,14 @@ config + tab wiring). This tab's code lives in `src/ui/cripto.py`:
   file's own closure — see `render_crypto()` above; Especulación calls the same function with
   `key_prefix="speculation"`, `is_crypto=False`, and its own closure). `render_zone_engine` is
   called at the exact point inside the shared function where a simple "Soportes y Resistencias"
-  trailing-min/max chart used to render (removed entirely — see `us-stocks-speculation`'s Design
+  trailing-min/max chart used to render (removed entirely — see `financial-advisor-speculation`'s Design
   history for why and for the callback-vs-circular-import rationale). `key_prefix` exists ONLY
   to keep widget keys unique between the two callers — `st.tabs()` isn't lazy (see CLAUDE.md), so
   both tabs' bodies execute every rerun, and a hardcoded key here collides
   (`StreamlitDuplicateElementKey`, hit for real while building this — see "Design history").
   `is_crypto` gates just one thing: whether the "📋 Plan de DCA sugerido" section renders
   (doesn't apply to stocks — no DCA plan concept for them in this project). See
-  `us-stocks-speculation` for what's actually inside this function (RSI, EMA/SMA, the Zone
+  `financial-advisor-speculation` for what's actually inside this function (RSI, EMA/SMA, the Zone
   Engine callback, DCA box, MACD, Bollinger, ADX, OBV) — it's the same code either way, just fed
   Binance data here instead of yfinance.
 - `_cached_binance_historical_prices()` / `_cached_binance_historical_prices_4h()` /
@@ -63,7 +63,7 @@ config + tab wiring). This tab's code lives in `src/ui/cripto.py`:
   network) resolves `CRYPTO_BINANCE_SYMBOLS[ticker]`, fetches daily (for `daily_prices=`) and 4h
   (the new primary arg to `detect_levels()`) unconditionally, plus 1h if `include_1h` is checked.
 - `render_advanced_levels_chart()` (moved to `src/ui/shared.py` once Especulación needed it too
-  for stocks — see below and `us-stocks-speculation`'s Design history — imported from there now,
+  for stocks — see below and `financial-advisor-speculation`'s Design history — imported from there now,
   not defined in this file) — draws the top levels as lines (colored by kind: green=support,
   red=resistance, purple=channel; opacity scaled by `confidence_score`) with shaded zone bands,
   over the last `window_days` (default 365) of the DAILY series (nicer x-axis than 4h bars) —
@@ -135,7 +135,7 @@ atr_mult`, etc.) are untouched — they're already self-scaling to whatever reso
 `BARS_PER_UNIT` was a fixed dict (barras-de-4h-per-unit: `{"4h": 1.0, "daily": 6.0, "weekly":
 42.0, "monthly": 182.64, "1h": 0.25}`) hardcoding the assumption that the reference is always
 4h — since generalized (when Especulación needed a DAILY reference for stocks, see
-`us-stocks-speculation`'s Design history) into `BARS_PER_DAY` (a fixed physical bars-per-day
+`financial-advisor-speculation`'s Design history) into `BARS_PER_DAY` (a fixed physical bars-per-day
 table, independent of which timeframe is "reference") + `_bars_per_unit(tf, reference_tf)`
 computing the ratio dynamically. Verified to reproduce the old fixed dict's values exactly when
 `reference_tf="4h"` — zero behavior change for this tab. `SRConfig.reference_timeframe` (new

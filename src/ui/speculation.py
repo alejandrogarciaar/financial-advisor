@@ -1,7 +1,7 @@
 """Pestaña "🎲 Especulación" (solo-acciones) + `render_speculation_indicators()`, el cuerpo de
 indicadores COMPARTIDO con la pestaña "🪙 Cripto" (`src/ui/cripto.py`). Extraído de app.py (que
 llegó a 2821 líneas) para modularizar. A diferencia de todo el resto del dashboard, acá el
-lenguaje de timing es a propósito — ver `us-stocks-speculation` skill para el detalle completo
+lenguaje de timing es a propósito — ver `financial-advisor-speculation` skill para el detalle completo
 (por qué existe esta excepción, qué se probó y se descartó, etc.)."""
 
 from collections.abc import Callable

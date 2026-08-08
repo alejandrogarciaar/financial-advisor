@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# Stop the Precio Justo Streamlit app — extracted from us-stocks-run-app/SKILL.md's embedded
+# Stop the Precio Justo Streamlit app — extracted from financial-advisor-run-app/SKILL.md's embedded
 # bash. Uses the PowerShell command-line match directly (not the plain `kill "$(cat
 # streamlit.pid)"` first) because a real incident in this project found the Bash tool's PID can
 # differ from the actual Windows process — `kill` silently failed to stop the old process across

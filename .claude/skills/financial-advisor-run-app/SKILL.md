@@ -1,6 +1,6 @@
 ---
-name: us-stocks-run-app
-description: Use to launch, check, or stop the Streamlit dashboard for the USStocks (Precio Justo) project — the standard way to see a change working in the browser for this repo. Covers the venv, headless flags, health check, and teardown already validated in this environment.
+name: financial-advisor-run-app
+description: Use to launch, check, or stop the Streamlit dashboard for the financial-advisor (Precio Justo) project — the standard way to see a change working in the browser for this repo. Covers the venv, headless flags, health check, and teardown already validated in this environment.
 ---
 
 # Run the Precio Justo Streamlit app

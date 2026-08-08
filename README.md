@@ -38,7 +38,7 @@ streamlit run app.py
 
 O, equivalente y con manejo de puerto/health-check/reuso de instancia ya resuelto:
 `./scripts/run_app.sh` para arrancar, `./scripts/stop_app.sh` para parar (ver
-`.claude/skills/us-stocks-run-app/`).
+`.claude/skills/financial-advisor-run-app/`).
 
 Por defecto usa el proveedor de datos `yfinance`, que no requiere API key. Si querés usar
 `fmp` en su lugar, copiá `.env.example` a `.env` y completá `FMP_API_KEY`.
@@ -147,14 +147,14 @@ aplica.
 
 | Skill | Qué cubre |
 |---|---|
-| `us-stocks-stocks` | Pestaña Acciones — tarjetas de valoración, lista/filtro de tickers, detalle. |
-| `us-stocks-etfs` | Pestaña ETFs — lista o detalle de un ETF. |
-| `us-stocks-speculation` | Pestaña Especulación (solo acciones) — RSI, soporte/resistencia, MACD, Bollinger, ADX, OBV, Market Reaction Zone Engine. |
-| `us-stocks-cripto` | Pestaña Cripto (BTC/ETH/SOL) — mismos indicadores + motor de soporte/resistencia multi-metodología sobre Binance. |
-| `us-stocks-validation` | Pestaña Validación — backtest en UI o historial de veredictos. |
-| `us-stocks-portfolio` | Pestaña Portafolio — compras/ventas COP, resumen de holdings, ganancias realizadas, contexto de valoración. |
-| `us-stocks-add-ticker-or-formula` | Agregar un ticker nuevo o una fórmula/señal de valoración nueva. |
-| `us-stocks-run-app` | Levantar, chequear o parar el dashboard local. |
+| `financial-advisor-stocks` | Pestaña Acciones — tarjetas de valoración, lista/filtro de tickers, detalle. |
+| `financial-advisor-etfs` | Pestaña ETFs — lista o detalle de un ETF. |
+| `financial-advisor-speculation` | Pestaña Especulación (solo acciones) — RSI, soporte/resistencia, MACD, Bollinger, ADX, OBV, Market Reaction Zone Engine. |
+| `financial-advisor-cripto` | Pestaña Cripto (BTC/ETH/SOL) — mismos indicadores + motor de soporte/resistencia multi-metodología sobre Binance. |
+| `financial-advisor-validation` | Pestaña Validación — backtest en UI o historial de veredictos. |
+| `financial-advisor-portfolio` | Pestaña Portafolio — compras/ventas COP, resumen de holdings, ganancias realizadas, contexto de valoración. |
+| `financial-advisor-add-ticker-or-formula` | Agregar un ticker nuevo o una fórmula/señal de valoración nueva. |
+| `financial-advisor-run-app` | Levantar, chequear o parar el dashboard local. |
 | `token-audit` | Auditar el consumo de tokens del proyecto (`CLAUDE.md`, skills, memoria) y qué procesos delegar a `scripts/`. |
 
 ## Manteniendo este README actualizado

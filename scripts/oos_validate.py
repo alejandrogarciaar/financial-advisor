@@ -9,7 +9,7 @@ which would leak future information into "training"), compute forward returns at
 for days matching some condition vs. a baseline, and check whether the SIGN of the gap holds in
 both halves. A result that only holds at one specific threshold/parameter and not at its
 neighbors is exactly the multiple-comparisons fragility that has sunk every rejected signal in
-this project (see CLAUDE.md / the `us-stocks-*` skills' "Design history" for the full list) — so
+this project (see CLAUDE.md / the `financial-advisor-*` skills' "Design history" for the full list) — so
 this module also provides a threshold/parameter sweep helper to catch that automatically.
 
 This is deliberately NOT a CLI that re-fetches data or re-implements each investigation's

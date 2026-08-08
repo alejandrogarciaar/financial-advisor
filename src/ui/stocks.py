@@ -1,7 +1,7 @@
 """Pestaña "📈 Acciones" — lista + detalle de las valuaciones de TICKERS. Extraído de app.py
 (que llegó a 2821 líneas) para modularizar. `render_list()`/`render_detail()` son los dos únicos
 puntos donde se computa un resumen de TICKERS y por eso los dos únicos que llaman
-`_maybe_record_verdict()` (historial de veredictos, ver `us-stocks-validation`)."""
+`_maybe_record_verdict()` (historial de veredictos, ver `financial-advisor-validation`)."""
 
 import streamlit as st
 

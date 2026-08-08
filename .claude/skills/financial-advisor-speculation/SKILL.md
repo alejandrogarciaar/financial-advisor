@@ -1,6 +1,6 @@
 ---
-name: us-stocks-speculation
-description: Use when the user's request is scoped to the "🎲 Especulación" tab of the USStocks (Precio Justo) dashboard — stocks only (RSI, support/resistance, MACD, Bollinger Bands, ADX, OBV/volume). BTC/ETH/SOL live in the separate "🪙 Cripto" tab (`us-stocks-cripto`), not here. Points to the files that make up this tab so work stays scoped to them.
+name: financial-advisor-speculation
+description: Use when the user's request is scoped to the "🎲 Especulación" tab of the financial-advisor (Precio Justo) dashboard — stocks only (RSI, support/resistance, MACD, Bollinger Bands, ADX, OBV/volume). BTC/ETH/SOL live in the separate "🪙 Cripto" tab (`financial-advisor-cripto`), not here. Points to the files that make up this tab so work stays scoped to them.
 ---
 
 # Especulación tab — context map
@@ -20,7 +20,7 @@ what a given task actually needs" principle each move applied, one level further
 live here and don't anymore: the multi-methodology support/resistance engine (moved to its own
 "🧭 Niveles" tab first, clustering/KDE/robust trendlines/Volume Profile/VWAP), and then the
 crypto tickers themselves, indicators and all (moved to the renamed "🪙 Cripto" tab once it
-absorbed Niveles). See `us-stocks-cripto` for both.
+absorbed Niveles). See `financial-advisor-cripto` for both.
 
 ## `src/ui/speculation.py`
 
@@ -38,7 +38,7 @@ config + tab wiring). This tab's code — AND the indicator stack shared with Cr
   is_crypto, render_zone_engine)` — the actual indicator stack: RSI, EMA/SMA section,
   `render_zone_engine()` (the caller-supplied Market Reaction Zone Engine block — see below),
   the "📋 Plan de DCA sugerido" box (`is_crypto` only), MACD, Bollinger Bands, ADX, OBV — shared
-  with the Cripto tab: `us-stocks-cripto`'s `render_crypto()` (`src/ui/cripto.py`) imports this
+  with the Cripto tab: `financial-advisor-cripto`'s `render_crypto()` (`src/ui/cripto.py`) imports this
   exact function and calls it with `key_prefix="crypto"`, `is_crypto=True`, its own
   `_render_zone_engine()` closure. Things to know before touching it:
   - `render_zone_engine` is a required `Callable[[], None]` parameter — each caller renders its
@@ -62,7 +62,7 @@ config + tab wiring). This tab's code — AND the indicator stack shared with Cr
   computation module, not this UI one). Only update by re-running the same chronological
   train/test methodology, never by loosening the threshold to make a ticker pass. Note: they
   were derived from yfinance-sourced crypto history; Cripto now feeds them Binance-sourced
-  history instead — see `us-stocks-cripto`'s Design history for why that wasn't re-validated (a
+  history instead — see `financial-advisor-cripto`'s Design history for why that wasn't re-validated (a
   deliberate judgment call, not an oversight).
 - **"🧭 Market Reaction Zone Engine" section — rendered via the `render_zone_engine` callback
   described above**, at the position right after "Medias móviles" (originally added at the end

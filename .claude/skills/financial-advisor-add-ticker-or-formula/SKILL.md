@@ -1,9 +1,9 @@
 ---
-name: us-stocks-add-ticker-or-formula
-description: Use when the user wants to add a new stock ticker to the dashboard, or add/modify a valuation formula/signal in the USStocks (Precio Justo) project. Guides both workflows following the existing patterns in src/config.py and src/valuation/.
+name: financial-advisor-add-ticker-or-formula
+description: Use when the user wants to add a new stock ticker to the dashboard, or add/modify a valuation formula/signal in the financial-advisor (Precio Justo) project. Guides both workflows following the existing patterns in src/config.py and src/valuation/.
 ---
 
-# Add a ticker or a valuation formula (USStocks / Precio Justo)
+# Add a ticker or a valuation formula (financial-advisor / Precio Justo)
 
 Two distinct workflows. Ask the user which one applies if it's not obvious, then follow the
 matching checklist below. Read `CLAUDE.md` first if you haven't already this session — it
@@ -39,7 +39,7 @@ explains the family/signal split this skill depends on.
    if genuinely ambiguous). Do NOT add it to `DRAWDOWN_VALIDATED_BUCKETS`
    (`src/ui/portfolio.py`) — that requires its own out-of-sample validation per ticker, adding an
    unvalidated entry there would violate this project's core validate-before-shipping rule (see
-   `us-stocks-portfolio`'s Design history). If no BVC homolog exists for a given ticker, just
+   `financial-advisor-portfolio`'s Design history). If no BVC homolog exists for a given ticker, just
    say so — not every US stock has one.
 
 ## Workflow B: Add a new valuation formula/signal

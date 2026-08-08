@@ -27,7 +27,7 @@ dentro de la zona de un nivel con score ≥ 50 mostró el mismo signo de efecto 
 vieja y NO se puede asumir vigente tras este rediseño** — mismo principio que ya aplicó este
 proyecto para Fibonacci/ADX/OBV (nunca reusar una validación después de cambiar los pesos sin
 volver a correr el mismo test tren/prueba). `SR_VALIDATED_TICKERS` (en `src/ui/cripto.py`) se
-vació a `{}` por este motivo — ver el "Design history" de la skill `us-stocks-cripto` para el
+vació a `{}` por este motivo — ver el "Design history" de la skill `financial-advisor-cripto` para el
 detalle y el paso pendiente (re-correr la validación bajo el score nuevo).
 
 **La serie de REFERENCIA del motor es de 4H, no diaria** (cambio pedido explícitamente: con solo
@@ -204,7 +204,7 @@ class SRConfig:
 
 def daily_reference_config(**overrides) -> SRConfig:
     """SRConfig para motores cuya serie de referencia es DIARIA, no 4h (acciones vía yfinance,
-    que no tiene velas de 4h nativas — ver `us-stocks-speculation`/CLAUDE.md para por qué Cripto
+    que no tiene velas de 4h nativas — ver `financial-advisor-speculation`/CLAUDE.md para por qué Cripto
     migró a Binance específicamente por esto). Los campos expresados en cantidad de barras están
     reescalados ÷6 respecto a los defaults de SRConfig (que asumen referencia 4h) — son
     literalmente los valores PRE-rediseño del motor, de cuando la referencia todavía era diaria.

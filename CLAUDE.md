@@ -11,21 +11,21 @@ grouped into 3 families. All user-facing text is in Spanish (Rioplatense).
 
 ## Skills — invoke proactively, don't wait to be asked
 
-This repo ships `.claude/skills/us-stocks-*` skills. They're always listed as available, but
+This repo ships `.claude/skills/financial-advisor-*` skills. They're always listed as available, but
 loading one only happens when it's explicitly invoked — so check this table and call the
 matching skill via the Skill tool *before* starting work, whenever the request is scoped to one
 of these areas:
 
 | Task is scoped to...                                         | Skill                              |
 |----------------------------------------------------------------|-------------------------------------|
-| "📈 Acciones" tab (valuation cards, ticker list/filter, detail) | `us-stocks-stocks`                  |
-| "🧺 ETFs" tab                                                   | `us-stocks-etfs`                    |
-| "🎲 Especulación" tab (stocks: RSI, S/R, MACD, Bollinger, ADX, OBV) | `us-stocks-speculation`         |
-| "🪙 Cripto" tab (BTC/ETH/SOL: same indicators + multi-method S/R engine) | `us-stocks-cripto`         |
-| "📊 Validación" tab (backtest, verdict history)                 | `us-stocks-validation`              |
-| "💰 Portafolio" tab (COP purchases/sales, holdings, realized gains, contexto) | `us-stocks-portfolio` |
-| Adding a new ticker or a new/modified valuation formula         | `us-stocks-add-ticker-or-formula`   |
-| Launching/checking/stopping the Streamlit app to see a change   | `us-stocks-run-app`                 |
+| "📈 Acciones" tab (valuation cards, ticker list/filter, detail) | `financial-advisor-stocks`                  |
+| "🧺 ETFs" tab                                                   | `financial-advisor-etfs`                    |
+| "🎲 Especulación" tab (stocks: RSI, S/R, MACD, Bollinger, ADX, OBV) | `financial-advisor-speculation`         |
+| "🪙 Cripto" tab (BTC/ETH/SOL: same indicators + multi-method S/R engine) | `financial-advisor-cripto`         |
+| "📊 Validación" tab (backtest, verdict history)                 | `financial-advisor-validation`              |
+| "💰 Portafolio" tab (COP purchases/sales, holdings, realized gains, contexto) | `financial-advisor-portfolio` |
+| Adding a new ticker or a new/modified valuation formula         | `financial-advisor-add-ticker-or-formula`   |
+| Launching/checking/stopping the Streamlit app to see a change   | `financial-advisor-run-app`                 |
 
 For requests spanning multiple tabs, invoke each relevant skill. This is in addition to the
 general-purpose `dataviz` skill (any chart/plot work) — that one already triggers on its own
@@ -183,7 +183,7 @@ the UI forms or `scripts/add_sale.py`) for the public deploy to reflect it — t
 auto-sync. Full design history — the COP
 commission model, the drawdown-bucket accumulation zone (`DRAWDOWN_VALIDATED_BUCKETS`), and the
 diversification/aggregate-risk-return/goal-projection sections — moved to
-`.claude/skills/us-stocks-portfolio/SKILL.md`'s "Design history" section. Invoke that skill
+`.claude/skills/financial-advisor-portfolio/SKILL.md`'s "Design history" section. Invoke that skill
 before touching Portfolio code; it's not repeated here because it's only relevant when work is
 actually scoped to this tab, unlike this file which loads on every conversation.
 
@@ -265,7 +265,7 @@ integer for `st.iframe` — `0` raises `StreamlitInvalidHeightError` (unlike the
 -open detail page. Both "← Volver a la lista" buttons reset that tracking var to `None`, so
 re-opening the *same* ticker after going back still triggers a fresh scroll.
 
-**"🎲 Especulación" tab (`src/speculation.py`, `render_speculation()` in `src/ui/speculation.py`)**: stocks-only (`TICKERS`) — BTC/ETH/SOL moved to their own "🪙 Cripto" tab (see below). The one deliberate exception to this whole project's "no timing language" rule — the user explicitly asked for a zone where short-term technical speculation is allowed, separate from everything else. `src/speculation.py` lives outside `src/valuation/` on purpose, to keep it visually and structurally apart from the carefully non-speculative signal code. Full detail on RSI/support-resistance/MACD/Bollinger/ADX/OBV and the shared `render_speculation_indicators()` function (also used by Cripto) lives in `.claude/skills/us-stocks-speculation/SKILL.md` and `.claude/skills/us-stocks-cripto/SKILL.md` — not repeated here.
+**"🎲 Especulación" tab (`src/speculation.py`, `render_speculation()` in `src/ui/speculation.py`)**: stocks-only (`TICKERS`) — BTC/ETH/SOL moved to their own "🪙 Cripto" tab (see below). The one deliberate exception to this whole project's "no timing language" rule — the user explicitly asked for a zone where short-term technical speculation is allowed, separate from everything else. `src/speculation.py` lives outside `src/valuation/` on purpose, to keep it visually and structurally apart from the carefully non-speculative signal code. Full detail on RSI/support-resistance/MACD/Bollinger/ADX/OBV and the shared `render_speculation_indicators()` function (also used by Cripto) lives in `.claude/skills/financial-advisor-speculation/SKILL.md` and `.claude/skills/financial-advisor-cripto/SKILL.md` — not repeated here.
 
 **Current-price display (`render_sticky_price()` in `src/ui/shared.py`)**: shared by Acciones's detail
 page (`render_detail()`), Especulación, and Cripto (`key_prefix` "acciones"/"speculation"/"niveles"
@@ -302,7 +302,7 @@ compiles and runs with zero exceptions under `streamlit.testing.v1.AppTest`.
 simple support/resistance chart, the rejected "more history/multi-touch levels" investigation,
 the Fibonacci saga, the "📋 Plan de DCA sugerido" box, and the RSI/ADX/OBV regime-refinement
 investigations (only RSI validated, for BTC only) — moved to
-`.claude/skills/us-stocks-speculation/SKILL.md`'s "Design history" section. Invoke that skill
+`.claude/skills/financial-advisor-speculation/SKILL.md`'s "Design history" section. Invoke that skill
 before touching any of this; it's not repeated here because it's only relevant when work is
 actually scoped to this tab, unlike this file which loads on every conversation.
 
@@ -318,7 +318,7 @@ signal for BTC (support) via the same chronological 60/40 split methodology used
 project — see the skill for the exact scope and caveats. This tab absorbed both the former
 "🧭 Niveles" tab (which used to also cover stocks) and Especulación's crypto handling in the same
 session — full design history, the real bugs found and fixed while building it, and the exact
-validation results live in `.claude/skills/us-stocks-cripto/SKILL.md`; invoke that skill before
+validation results live in `.claude/skills/financial-advisor-cripto/SKILL.md`; invoke that skill before
 touching this tab.
 
 **"📊 Validación" tab (`render_validation()` in `src/ui/validation.py`)**: not a price signal like the other 4

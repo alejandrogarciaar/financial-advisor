@@ -61,7 +61,7 @@ skill no vuelva a proponer lo mismo.
   (`./venv/Scripts/python.exe scripts/verify_app.py`) en vez de retipear el snippet de AppTest
   cada sesión.
 - `scripts/run_app.sh` / `scripts/stop_app.sh` — arrancar/parar el servidor Streamlit local (ver
-  skill `us-stocks-run-app`).
+  skill `financial-advisor-run-app`).
 
 ## Historial de auditorías
 
@@ -80,17 +80,17 @@ Hallazgos y acciones:
 
    | Skill | `SKILL.md` antes | `SKILL.md` después | `references/design-history.md` (nuevo) |
    |---|---|---|---|
-   | `us-stocks-cripto` | 578 líneas / 47,559 B | 326 líneas / 26,661 B | 264 líneas / 21,769 B |
-   | `us-stocks-portfolio` | 256 líneas / 19,685 B | 107 líneas / 6,747 B | 161 líneas / 13,668 B |
-   | `us-stocks-speculation` | 433 líneas / 35,319 B* | 137 líneas / 9,451 B | 313 líneas / 26,956 B |
-   | `us-stocks-run-app` | 138 líneas / 5,860 B | 88 líneas / 4,627 B | (sin references/ — ver más abajo) |
+   | `financial-advisor-cripto` | 578 líneas / 47,559 B | 326 líneas / 26,661 B | 264 líneas / 21,769 B |
+   | `financial-advisor-portfolio` | 256 líneas / 19,685 B | 107 líneas / 6,747 B | 161 líneas / 13,668 B |
+   | `financial-advisor-speculation` | 433 líneas / 35,319 B* | 137 líneas / 9,451 B | 313 líneas / 26,956 B |
+   | `financial-advisor-run-app` | 138 líneas / 5,860 B | 88 líneas / 4,627 B | (sin references/ — ver más abajo) |
 
-   *`us-stocks-speculation` ya había crecido a 433 líneas dentro de esta misma sesión (se le
+   *`financial-advisor-speculation` ya había crecido a 433 líneas dentro de esta misma sesión (se le
    agregó la sección del Market Reaction Zone Engine para acciones) antes de esta auditoría —
    el número "antes" de la tabla es el tamaño en el momento de auditar, no el original de sesiones
    previas.
 
-2. **`us-stocks-run-app` tenía ~90 líneas de bash embebido en prosa** (selección de puerto,
+2. **`financial-advisor-run-app` tenía ~90 líneas de bash embebido en prosa** (selección de puerto,
    health check, kill por línea de comando) que un LLM tenía que releer y re-tipear cada vez que
    arrancaba/paraba el servidor. Promovido a `scripts/run_app.sh` / `scripts/stop_app.sh` (probados
    de punta a punta: arranque, detección de instancia viva para reusar, y parada — los 3 caminos

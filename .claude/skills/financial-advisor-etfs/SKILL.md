@@ -1,6 +1,6 @@
 ---
-name: us-stocks-etfs
-description: Use when the user's request is scoped to the "🧺 ETFs" tab of the USStocks (Precio Justo) dashboard — the ETF list or a single ETF's detail page. Points to the files that make up this tab so work stays scoped to them.
+name: financial-advisor-etfs
+description: Use when the user's request is scoped to the "🧺 ETFs" tab of the financial-advisor (Precio Justo) dashboard — the ETF list or a single ETF's detail page. Points to the files that make up this tab so work stays scoped to them.
 ---
 
 # ETFs tab — context map

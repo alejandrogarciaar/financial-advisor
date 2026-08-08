@@ -3,7 +3,7 @@ binance_client.py`), no yfinance. Combina el mismo cuerpo de indicadores que Esp
 (`render_speculation_indicators()`, importado de `src/ui/speculation.py`) con el Market Reaction
 Zone Engine (`src/support_resistance.py`) — motor multi-metodología de zonas de soporte/
 resistencia rediseñado para priorizar calidad de reacción por sobre cantidad de touches.
-Extraído de app.py (que llegó a 2821 líneas) para modularizar — ver `us-stocks-cripto` skill
+Extraído de app.py (que llegó a 2821 líneas) para modularizar — ver `financial-advisor-cripto` skill
 para el diseño completo, los bugs reales encontrados construyendo el motor, y el estado de la
 validación fuera de muestra (pendiente de re-correr tras el rediseño)."""
 
@@ -166,7 +166,7 @@ def render_crypto():
         """Closure — captura ticker/historical_prices/closes/current_price del scope de
         render_crypto(). Reemplaza, en esta misma posición, lo que antes era el gráfico simple
         de "Soportes y Resistencias" (quitado por pedido explícito — ver
-        `us-stocks-speculation`'s references/design-history.md)."""
+        `financial-advisor-speculation`'s references/design-history.md)."""
         st.subheader("🧭 Market Reaction Zone Engine")
         st.caption(
             "Identifica zonas de soporte/resistencia con evidencia estadística suficiente, priorizando "

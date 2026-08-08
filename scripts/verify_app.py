@@ -7,7 +7,7 @@ Re-typed by hand in-session at least 3 times before this existed. Run this inste
 Exits 0 with no output on success; prints the exception and exits 1 on failure. Does not replace
 manually checking a real change in the browser (this only proves the script runs without
 exceptions, not that a specific feature renders/behaves correctly) — see the `run` skill /
-`us-stocks-run-app` skill for that.
+`financial-advisor-run-app` skill for that.
 """
 
 import sys

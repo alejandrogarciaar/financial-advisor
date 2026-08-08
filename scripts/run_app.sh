@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# Start the Precio Justo Streamlit app — extracted from us-stocks-run-app/SKILL.md's embedded
+# Start the Precio Justo Streamlit app — extracted from financial-advisor-run-app/SKILL.md's embedded
 # bash so it's a real, testable script instead of prose an LLM re-types every session. Reuses a
 # live instance if one already answers its health check; otherwise picks a free port (never
 # assumes 8501 is free — the user runs other things locally) and launches a fresh one.
