@@ -92,9 +92,26 @@ someone actually selected that provider — not an app-breaking crash on startup
 provider choice, which is what the docstring above already promised and the old code didn't
 actually deliver. `.cache/` (API responses) and `app_data/` (ticker-filter/verdict-history)
 are also gitignored and start empty on a fresh deploy — both self-heal on first use (cache
-refills, preferences/history start accumulating from scratch), unlike Portfolio's data, which
-can't be reconstructed at all, hence the tab-level gate above rather than just letting it start
-empty.
+refills, preferences/history start accumulating from scratch); Portfolio's data doesn't self-
+heal the same way (nothing to reconstruct it from), which is why it's committed to git instead
+(see "Portfolio tracking" below) rather than just left to start empty like these two.
+
+**"🪙 Cripto" does not work on this deploy — known limitation, not a bug, confirmed
+2026-08-08.** Binance (`src/data/binance_client.py`, this tab's only data source) returns HTTP
+451 to every request from Streamlit Community Cloud's IP range: `"Service unavailable from a
+restricted location according to 'b. Eligibility' in https://www.binance.com/en/terms"` —
+Binance blocks broad swaths of cloud-datacenter IPs outright, not just by country, so this isn't
+specific to Streamlit Cloud and would likely reproduce on most free hosts. `src/ui/cripto.py`
+already surfaces the real `DataError` detail (not just a generic "no pudimos consultar") in an
+`st.caption` under the error, specifically so this is self-diagnosable from the deployed UI
+without digging through host logs. Discussed with the user, who chose to leave this as-is for
+now rather than migrate the tab's data source (yfinance has `BTC-USD`/`ETH-USD`/`SOL-USD` with
+no geo-block, but no native 4h/1h klines — would require reworking the Market Reaction Zone
+Engine's reference-series assumptions and re-validating every Binance-derived OOS result, e.g.
+BTC's RSI-overbought regime refinement and support validation, against the new series; not a
+small change) or try Binance.US (separate entity, unconfirmed whether it's blocked too, shorter
+history). Revisit only if explicitly asked — don't silently start a data-source migration on
+the assumption that this limitation needs fixing.
 
 ## Architecture
 
