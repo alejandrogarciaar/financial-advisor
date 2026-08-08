@@ -127,6 +127,36 @@ chart's `historical_prices` and `reference_prices` arguments are literally the s
 are the daily series) — the "nearest reference bar" bisect inside the chart degenerates to an
 identity mapping in that case, no special-casing needed.
 
+**The simple "Soportes y Resistencias" trailing-min/max chart (Diaria/Semanal/Mensual/Anual) was
+removed entirely, and the Market Reaction Zone Engine section moved into its exact position —
+a later, explicit user request, once both engines existed side by side in the same tab.** With
+the sophisticated engine now available right below it, the simple chart read as redundant (same
+question, answered twice, once cheaply/without evidence and once with real statistical scoring)
+— the user asked to drop the simple one and have the sophisticated one take its place in the
+render order, rather than keep both or leave the sophisticated one at the bottom of the page
+where it used to sit. Deleted along with the chart: `compute_support_levels()`/
+`compute_resistance_levels()` (`src/speculation.py`, plus their only helpers
+`_sorted_dated_closes()`/`_extreme_since()`/`DAILY_WINDOW_DAYS`/`SupportLevels`/
+`ResistanceLevels`) and `LEVEL_CHART_COLORS`/`colored_metric()`/`SPECULATION_CHART_VIEWS`/
+`render_levels_chart()` (`src/ui/speculation.py`) — confirmed via repo-wide grep that nothing
+else referenced any of them before deleting, consistent with this project's "if you're certain
+it's unused, delete it, don't leave dead code" rule.
+
+Moving the Zone Engine into that exact slot required a real signature change:
+`render_speculation_indicators()` gained a required `render_zone_engine: Callable[[], None]`
+parameter, called via `st.divider(); render_zone_engine()` at the position the simple chart used
+to occupy (right after "Medias móviles", before the DCA box / MACD / Bollinger / ADX / OBV).
+Each caller (`render_speculation()`/`render_crypto()`) defines its own `_render_zone_engine()`
+closure — capturing `ticker`/`historical_prices`/`closes`/`current_price` from its own enclosing
+scope — and passes it in, rather than the shared function calling either tab's Zone Engine code
+directly: `src/ui/cripto.py` already imports `render_speculation_indicators` FROM
+`src/ui/speculation.py`, so `speculation.py` importing anything back from `cripto.py` (e.g. its
+`_cached_sr_levels`) would be a circular import. The callback pattern sidesteps that entirely —
+`speculation.py` never needs to know Cripto's caching function exists, and vice versa. Both
+tabs' Zone Engine block content is otherwise byte-for-byte what it was before (verified: `python
+scripts/verify_app.py` plus an `AppTest` run that actually clicks both "🔍 Calcular niveles
+multi-metodología" buttons — not just the default unclicked render — 0 exceptions on both).
+
 **Fibonacci levels were tried and removed.** The full arc (kept here because it explains why
 "Régimen y retorno histórico" below looks the way it does, and to stop a future session from
 re-treading the same ground): reverse-engineered from a user-supplied external chart (4 price
@@ -311,3 +341,166 @@ up but volume doesn't back it") — the same cross-referencing pattern as `trend
 not a backtested claim, so it doesn't need its own OOS validation to be shown this way (same
 justification MACD/Bollinger/ADX already rely on). `get_historical_prices()`
 (`yfinance_client.py`) now also returns `"volume"` per day (added alongside `"high"`/`"low"`).
+
+**Wyckoff "Spring" was proposed for Acciones, redirected to Especulación, tested, and rejected
+(2026-08-07) — no code shipped, nothing to revert.** The user asked whether the Wyckoff method
+could be added to the Acciones tab. Acciones is deliberately the one part of this app with zero
+timing language — 6 purely fundamental valuation formulas, no chart patterns of any kind (see
+`CLAUDE.md`) — so a technical/timing pattern like Wyckoff belongs with RSI/MACD/ADX/OBV in
+Especulación instead, same reasoning that's kept every other speculative signal out of Acciones
+since this tab split existed. Confirmed with the user via `AskUserQuestion` before doing any
+work (both the tab and which specific Wyckoff element to test — Wyckoff is a whole framework,
+not one formula, so "spring" needed to be picked out and made concrete before it could be
+backtested at all).
+
+Defined the classic "Spring" shape in the simplest form that's actually testable: on day t, let
+`support = min(low[t-lookback : t])` (trailing, excludes today — no lookahead). A spring fires
+when `low[t] < support` (price undercuts the recent range intraday) AND `close[t] >= support`
+(closes back at/above the broken level same day — the "recovery" that makes it a spring, not
+just a breakdown). Ran the exact same OOS methodology as every prior investigation in this
+tab — chronological 60/40 split, `REGIME_REACTION_HORIZONS_DAYS` (`[5, 10, 20, 30]`, this tab's
+own convention, not Portfolio's `[20, 60, 90, 180]`), `min_observations=15` — across all 8
+`TICKERS`, and (learning from the ADX/OBV/Fibonacci pattern above) tested 3 neighboring
+lookbacks (10/20/30 days) up front rather than committing to one value and checking neighbors
+only if it looked good.
+
+Price-only result: AAPL validated at lookback=10 (negative sign, all 4 horizons, train n=47/
+test n=24) but failed at 20 and 30. UBER validated at lookback=20 (positive sign — the opposite
+direction from AAPL's result, train n=52/test n=25-27) but failed at 10 and 30. Every other
+ticker (MSFT, AMZN, META, NVDA, TSLA, GOOGL) failed at all 3 lookbacks. This is the identical
+one-parameter-only fragility signature documented for Fibonacci/ADX/OBV above — a result that
+appears at exactly one lookback and vanishes at its immediate neighbors isn't a real effect,
+it's noise that happened to land in a gap. Two different tickers validating in *opposite*
+directions at *different* lookbacks is, if anything, stronger evidence this is noise than either
+alone would be.
+
+Then tried a volume-confirmed variant, since the "spring" in Wyckoff literature is specifically
+characterized by *light* volume on the undercut (read as an absence of real supply, not a
+capitulation) — added `volume[t] < trailing 20-day average volume` (window fixed at 20 to match
+`OBV_SMA_PERIOD` rather than swept too, since sweeping both the price lookback and a volume
+window at once would have multiplied the parameter search space and made any surviving hit even
+more likely to be noise, not less). This came back weaker, not stronger: the added filter
+roughly halved the sample size at every ticker/lookback, which pushed most train/test cells
+below the 15-observation floor before a sign could even be evaluated (most horizons reported
+`n/a`, not fail). Zero tickers validated across all 4 horizons at any lookback with volume
+confirmation.
+
+Conclusion: neither version of Wyckoff Spring cleared this project's bar. Nothing was added to
+`src/speculation.py` or `render_speculation_indicators()` — do not re-add on the strength of
+AAPL@10 or UBER@20's isolated results without redoing this test and getting a cleaner outcome
+than what this session found (same standing bar as Fibonacci/ADX/OBV above). Unlike ADX/OBV,
+this wasn't kept as a plain descriptive indicator either — a spring is a rare, binary event (a
+few dozen occurrences over ~5 years per ticker, not a continuously-valued line like ADX/OBV),
+so there's no equivalent "show it anyway, just don't claim it predicts anything" middle ground
+the way there was for those two.
+
+**Market Reaction Zone Engine re-validated for stocks under the current score formula
+(2026-08-08) — TSLA-support cleared the bar; nothing else did.** After the Wyckoff investigation
+above came back negative, the user asked what other strategies could be backtested; this was the
+strongest concrete candidate on hand: `STOCK_SR_VALIDATED_TICKERS` had shipped as `{}` since the
+"reaction quality" score redesign (see `us-stocks-cripto`'s Design history for the redesign
+itself), an explicit, disclosed gap rather than an oversight — the old TSLA/AAPL result was
+derived under the PRE-redesign formula and, per this project's standing rule (never reuse a
+validated result after reweighting without re-running the split), couldn't be assumed to still
+hold.
+
+Replicated the exact methodology already proven out for Cripto's own re-validation (same file,
+"Round 1"/"Round 2" above): chronological 60/40 split, horizons `[5, 10, 20, 30]`, score
+percentiles `[40, 55, 70]` to check threshold-fragility (same-sign-in-train-and-test required at
+ALL 3 percentiles and ALL 4 horizons to count as validated — no partial credit). Ran as a
+throwaway script (not committed), against `detect_levels()` output for each of the 8 `TICKERS`
+under `daily_reference_config()` (support+resistance kinds, so 16 combos total).
+
+Result — one clean pass, everything else negative:
+
+| Ticker | Support | Resistance |
+|---|---|---|
+| **TSLA** | **✅ validated** (positive sign, all 3 percentiles, all 4 horizons; train n=43-87, test n=21) | not validated (sign flips) |
+| AAPL, MSFT, AMZN, META, NVDA, UBER, GOOGL | not validated | not validated |
+
+TSLA-support is a genuinely non-fragile result — same sign at 40/55/70 (not just one lucky
+threshold) and at all 4 horizons, with the qualifying-zone day count large enough (43-87 train,
+21 test) that this isn't a thin-sample fluke either. Notable that it's the SAME ticker (and same
+side — support) that validated under the OLD pre-redesign formula too, i.e. this isn't a result
+appearing out of nowhere; TSLA's support behavior held up across two structurally different
+versions of the scoring engine. AAPL's old resistance result, by contrast, did not reproduce
+under the current formula — consistent with that older AAPL result having been flagged even at
+the time as having "threshold fragility."
+
+Shipped as `STOCK_SR_VALIDATED_TICKERS = {"TSLA": {"support"}}` in `src/ui/speculation.py` — no
+other code changes needed, since the "📋 Lectura validada fuera de muestra" section already
+reads this dict generically (same rendering path Cripto's equivalent section uses). The
+"no evidence for this ticker" caption shown for the other 7 tickers was updated to mention that
+a fresh, full re-validation was actually run (not just that the old one is stale), and to point
+at TSLA's card as the one exception, so a user browsing MSFT/AAPL/etc. understands the section
+isn't uniformly untested — it was tested and came back negative for their specific ticker.
+
+**Channel kind of the Market Reaction Zone Engine, tested the same day — negative result, no
+code change.** Immediately after the support/resistance re-validation above, the user asked what
+else could be backtested; extending to `kind="channel"` (paired near-parallel support/resistance
+trendlines, `_detect_channels()` in `src/support_resistance.py`) was the cheapest extension of
+work already done. One real wrinkle: channels don't carry a fixed `zone_low`/`zone_high` like
+support/resistance (they're diagonal, so their price band moves day to day) — "is price inside
+the channel on day i" had to be computed via `channel_support.value_at(i)`/
+`channel_resistance.value_at(i)` (min/max-ordered) instead of a static range check. Same
+methodology otherwise (60/40 split, horizons `[5, 10, 20, 30]`, percentiles `[40, 55, 70]`).
+Result: very few channels detected per ticker (0-3; AAPL and META had none at all), and every
+ticker that had any either had zero recent "near the channel" observations (the channel only
+existed in the older portion of history) or failed at least one horizon. No ticker validated.
+Nothing shipped — this is a pure negative result, recorded so a future session doesn't re-run
+the exact same channel test expecting a different answer without new price history.
+
+**Golden Cross / Death Cross (SMA50 vs SMA200), tested the same day as a follow-up — 3 tickers
+validated with unusually large samples, but the sign is NOT uniform across them.** Also proposed
+in the same "what else can we backtest" conversation. Key design decision: tested as a sustained
+REGIME STATE (is SMA50 currently above or below SMA200, checked every day) rather than the rare
+crossover EVENT itself — a crossover happens only a handful of times per ticker in ~5 years of
+daily data, nowhere near enough for a meaningful chronological split, while the regime-state
+framing (matching this file's own `classify_regime_series()` pattern, not a new idea) yields
+hundreds of observations per ticker. 50/200 is the single canonical definition of this signal —
+unlike Wyckoff's Spring lookback or the drawdown-bucket windows, there was no threshold to sweep
+for fragility here, since there's no invented parameter to have gotten lucky with.
+
+Result, run once against the regime state for all 8 `TICKERS`, horizons `[5, 10, 20, 30]`:
+
+| Ticker | Result | Sign of the golden-cross-vs-death-cross gap | Sample (train / test) |
+|---|---|---|---|
+| **AAPL** | ✅ validated | negative | n=300 / n=362-387 |
+| **TSLA** | ✅ validated | negative | n=163 / n=336 |
+| **UBER** | ✅ validated | positive | n=393 / n=301 |
+| MSFT, AMZN, META, NVDA, GOOGL | ❌ not validated | sign flips | — |
+
+These are the largest samples of any validated result in this project so far (hundreds of
+observations per cell, not dozens) — statistically the most robust finding to date, even though
+it's also the most counterintuitive one. For AAPL and TSLA, being in "golden cross" (the state
+folk wisdom calls bullish) predicted a WORSE forward return than being in "death cross" — the
+opposite of the textbook story. This isn't a bug: a moving-average crossover is a lagging
+indicator, so "golden cross confirmed" tends to arrive after a meaningful chunk of a rally has
+already happened, while the "death cross" state spans the sharp initial snapback off a bottom —
+exactly the kind of well-documented real-world critique of MA-crossover strategies (buying
+confirmation instead of the move itself). UBER validated with the "traditional" positive sign
+instead. Discussed with the user before shipping anything, specifically because a uniform
+"golden cross = bullish" label would have been actively wrong for 2 of the 3 validated tickers —
+the user agreed the fix is to show each ticker's own measured number instead of a shared
+directional label.
+
+Shipped in `src/speculation.py`: `classify_golden_cross_series()` (day-by-day `True`/`False`/
+`None`, same shape as `classify_regime_series()`), `GoldenCrossReaction` +
+`compute_golden_cross_reactions()` (raw conditional mean return per state — same "frozen
+validated set, live-recomputed number" pattern as `compute_regime_reactions()`/
+`current_bucket_reaction()` elsewhere in this project, NOT the train/test gap used to decide
+validation — those are two different numbers on purpose, same relationship as everywhere else
+this pattern appears). `GOLDEN_CROSS_VALIDATED_TICKERS = {"AAPL", "TSLA", "UBER"}` and the "📐
+Golden Cross / Death Cross" UI section live in `src/ui/speculation.py`, appended at the very end
+of `render_speculation()` — deliberately NOT inside the shared `render_speculation_indicators()`
+function, since this was never tested for BTC/ETH/SOL and must not silently appear on the Cripto
+tab (same reasoning already applied to `STOCK_SR_VALIDATED_TICKERS`). The UI never prints
+"alcista"/"bajista" — it shows the ticker's own measured number for whichever state it's
+currently in, and picks `st.success` (green) or `st.error` (red) by the actual sign of that
+number, the same rule Portfolio's confirmed sell-zone message uses, not by any assumption about
+which state "should" be good.
+
+Verified live via `AppTest` for all 4 relevant cases (AAPL currently in golden-cross, positive
+raw number, green; TSLA and UBER currently in death-cross, both positive raw numbers, green;
+MSFT as an unvalidated ticker, correctly shows the "no evidence" caption instead) — 0 exceptions
+in every case.

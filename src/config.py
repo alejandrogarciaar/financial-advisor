@@ -3,7 +3,7 @@ from dotenv import load_dotenv
 
 load_dotenv()
 
-FMP_API_KEY = os.environ["FMP_API_KEY"]
+FMP_API_KEY = os.environ.get("FMP_API_KEY")
 FMP_BASE_URL = "https://financialmodelingprep.com/stable"
 
 # Excluidos del universo:

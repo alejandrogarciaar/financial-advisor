@@ -58,6 +58,46 @@ returns, not part of the app UI):
 python -c "from src.backtest import run_backtest; print(run_backtest())"
 ```
 
+## Deploying (Streamlit Community Cloud)
+
+Free, official host for a Streamlit app — connects directly to this repo's GitHub remote, no
+server to manage. Steps: sign in at [share.streamlit.io](https://share.streamlit.io) with the
+GitHub account that owns this repo → "New app" → pick this repo, branch `main`, main file
+`app.py` → before (or after) deploying, open "Advanced settings" → "Secrets" and add:
+
+```toml
+SHOW_PORTFOLIO_TAB = "false"
+```
+
+**Why**: "💰 Portafolio" persists real financial data the user enters by hand (`portfolio_data/`,
+gitignored — see "Portfolio tracking" below). A public deploy starts with none of that data on
+disk (it's not in git), but the tab's *functionality* would still be live for any visitor to
+poke at (add fake purchases, etc.) unless explicitly turned off — `SHOW_PORTFOLIO_TAB` (read in
+`app.py`, defaults to `"true"`) does that, dropping the tab from `st.tabs()` entirely rather
+than just hiding its content, so nothing Portfolio-specific ever renders. Leave the secret unset
+(or `"true"`) for any deploy meant to include Portfolio — local `streamlit run app.py` always
+defaults to showing it, since `st.secrets` raises `StreamlitSecretNotFoundError` when no
+`secrets.toml` exists at all (the normal local case), and `app.py`'s `_show_portfolio_tab()`
+catches that and falls through to `True`. An `SHOW_PORTFOLIO_TAB` OS environment variable also
+works, as a fallback for hosts other than Streamlit Cloud (e.g. Docker) — `st.secrets` is
+checked first since that's where the rest of a Streamlit Cloud deploy's config already lives.
+
+`FMP_API_KEY` isn't needed for a public deploy — the UI defaults to the `yfinance` provider,
+which requires no key. **A real bug hit deploying this for the first time (2026-08-08)**:
+`src/config.py` used to read it as `os.environ["FMP_API_KEY"]` (bracket access, raises
+`KeyError` if unset) instead of `.get()` — crashed the whole app at import time on Streamlit
+Cloud, where there's no `.env` and the key was never set as a secret, even though nothing in
+the app actually needs it unless the user explicitly switches to the `fmp` provider. Fixed to
+`os.environ.get("FMP_API_KEY")` (`None` if absent); `fmp_client.py` only ever uses it as a
+request query param, so `None` there just means an FMP call would fail with an auth error if
+someone actually selected that provider — not an app-breaking crash on startup regardless of
+provider choice, which is what the docstring above already promised and the old code didn't
+actually deliver. `.cache/` (API responses) and `app_data/` (ticker-filter/verdict-history)
+are also gitignored and start empty on a fresh deploy — both self-heal on first use (cache
+refills, preferences/history start accumulating from scratch), unlike Portfolio's data, which
+can't be reconstructed at all, hence the tab-level gate above rather than just letting it start
+empty.
+
 ## Architecture
 
 **`app.py` is a thin entry point.** It used to be one 2821-line file holding all 6 tabs; it's
@@ -129,9 +169,11 @@ actually scoped to this tab, unlike this file which loads on every conversation.
 `(fair_value - price) / price` into "Acumulación fuerte" / "Acumulación" / "Precio justo" /
 "Sobrevalorado", calibrated to the classic Graham/Buffett margin-of-safety bands.
 
-**`st.tabs()` is not lazy**: all 6 tabs' bodies execute every rerun, in fixed script order —
-`tab_acciones` → `tab_validacion` → `tab_etfs` → `tab_especulacion` → `tab_cripto` → `tab_capital` (Acciones,
-Validación, ETFs, Especulación, Cripto, then Portafolio always last, by user request) — regardless of
+**`st.tabs()` is not lazy**: all 6 tabs' bodies execute every rerun (5 if `SHOW_PORTFOLIO_TAB`
+is off — see "Deploying" above), in fixed script order — `tab_acciones` → `tab_validacion` →
+`tab_etfs` → `tab_especulacion` → `tab_cripto` → `tab_capital` (Acciones,
+Validación, ETFs, Especulación, Cripto, then Portafolio always last when present, by user
+request) — regardless of
 which tab is visually active; this is a Streamlit characteristic, not a bug here. The tab
 *labels'* order in the `st.tabs([...])` call controls the visual left-to-right order, and the
 `with tab_X:` blocks further down are written in that same order on purpose — the two are

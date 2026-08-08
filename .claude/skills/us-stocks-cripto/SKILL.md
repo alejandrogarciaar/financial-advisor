@@ -25,28 +25,35 @@ config + tab wiring). This tab's code lives in `src/ui/cripto.py`:
 
 - `render_crypto()` — the whole tab: its own ticker selectbox (`CRYPTO_BINANCE_SYMBOLS` keys —
   `["BTC", "ETH", "SOL"]`, independent state from Especulación's), sticky price
-  (`render_sticky_price("niveles", ...)`, from `src/ui/shared.py`), a call to
-  `render_speculation_indicators("crypto", ...)` (imported from `src/ui/speculation.py` — the
-  shared indicator stack, see `us-stocks-speculation`), and then the "🧭 Market Reaction Zone
-  Engine" section (renamed from "Soportes y Resistencias — multi-metodología", see Design
-  history): the "⚙️ Configuración avanzada" expander (method toggles, top_n, min_touch_points —
-  default 3, was 2 — and `sr_include_1h`; `sr_include_4h` was REMOVED, 4h is now mandatory/always
-  fetched, see Design history), the compute button, the display filters (`sr_max_distance_pct`,
-  `sr_timeframe_filter`), the levels table (now includes "Magnitud rebote (ATR)",
-  `lv.avg_rebound_magnitude_atr`, and "Antigüedad (días)" — `lv.age_bars / 6`, since `age_bars`
-  is now in 4h-bar units, not daily), the chart (`render_advanced_levels_chart()`), and the
-  "📋 Lectura validada fuera de muestra" section.
+  (`render_sticky_price("niveles", ...)`, from `src/ui/shared.py`), defines a
+  `_render_zone_engine()` closure (the "🧭 Market Reaction Zone Engine" section, renamed from
+  "Soportes y Resistencias — multi-metodología", see Design history), then a single call to
+  `render_speculation_indicators("crypto", ticker, historical_prices, closes, current_price,
+  is_crypto=True, render_zone_engine=_render_zone_engine)` (imported from
+  `src/ui/speculation.py` — the shared indicator stack, see `us-stocks-speculation`). The
+  closure contains: the "⚙️ Configuración avanzada" expander (method toggles, top_n,
+  min_touch_points — default 3, was 2 — and `sr_include_1h`; `sr_include_4h` was REMOVED, 4h is
+  now mandatory/always fetched, see Design history), the compute button, the display filters
+  (`sr_max_distance_pct`, `sr_timeframe_filter`), the levels table (now includes "Magnitud
+  rebote (ATR)", `lv.avg_rebound_magnitude_atr`, and "Antigüedad (días)" — `lv.age_bars / 6`,
+  since `age_bars` is now in 4h-bar units, not daily), the chart
+  (`render_advanced_levels_chart()`), and the "📋 Lectura validada fuera de muestra" section.
 - `render_speculation_indicators(key_prefix, ticker, historical_prices, closes, current_price,
-  is_crypto)` — lives in `src/ui/speculation.py`, imported here and called with
-  `key_prefix="crypto"`, `is_crypto=True` (Especulación calls the same function with
-  `key_prefix="speculation"`, `is_crypto=False`). `key_prefix` exists ONLY to keep widget keys
-  unique between the two callers — `st.tabs()` isn't lazy (see CLAUDE.md), so both tabs' bodies
-  execute every rerun, and a hardcoded key here collides (`StreamlitDuplicateElementKey`, hit for
-  real while building this — see "Design history"). `is_crypto` gates just one thing: whether
-  the "📋 Plan de DCA sugerido" section renders (doesn't apply to stocks — no DCA plan concept
-  for them in this project). See `us-stocks-speculation` for what's actually inside this
-  function (RSI, EMA/SMA, simple Soportes/Resistencias, DCA box, MACD, Bollinger, ADX, OBV) —
-  it's the same code either way, just fed Binance data here instead of yfinance.
+  is_crypto, render_zone_engine)` — lives in `src/ui/speculation.py`, imported here and called
+  with `key_prefix="crypto"`, `is_crypto=True`, `render_zone_engine=_render_zone_engine` (this
+  file's own closure — see `render_crypto()` above; Especulación calls the same function with
+  `key_prefix="speculation"`, `is_crypto=False`, and its own closure). `render_zone_engine` is
+  called at the exact point inside the shared function where a simple "Soportes y Resistencias"
+  trailing-min/max chart used to render (removed entirely — see `us-stocks-speculation`'s Design
+  history for why and for the callback-vs-circular-import rationale). `key_prefix` exists ONLY
+  to keep widget keys unique between the two callers — `st.tabs()` isn't lazy (see CLAUDE.md), so
+  both tabs' bodies execute every rerun, and a hardcoded key here collides
+  (`StreamlitDuplicateElementKey`, hit for real while building this — see "Design history").
+  `is_crypto` gates just one thing: whether the "📋 Plan de DCA sugerido" section renders
+  (doesn't apply to stocks — no DCA plan concept for them in this project). See
+  `us-stocks-speculation` for what's actually inside this function (RSI, EMA/SMA, the Zone
+  Engine callback, DCA box, MACD, Bollinger, ADX, OBV) — it's the same code either way, just fed
+  Binance data here instead of yfinance.
 - `_cached_binance_historical_prices()` / `_cached_binance_historical_prices_4h()` /
   `_cached_binance_historical_prices_1h()` — thin `@st.cache_data(ttl=900)` wrappers over
   `src/data/binance_client.py`. The 4h wrapper now requests `years_back=2.0` explicitly (not

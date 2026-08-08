@@ -30,22 +30,29 @@ config + tab wiring). This tab's code — AND the indicator stack shared with Cr
 `src/ui/speculation.py`:
 
 - `render_speculation()` — thin: ticker selectbox (`TICKERS` only), fetch via
-  `_cached_historical_prices(ticker)` (`src/ui/shared.py`), sticky price, then a single call to
+  `_cached_historical_prices(ticker)` (`src/ui/shared.py`), sticky price, defines a
+  `_render_zone_engine()` closure (see below), then a single call to
   `render_speculation_indicators("speculation", ticker, historical_prices, closes,
-  current_price, is_crypto=False)`.
+  current_price, is_crypto=False, render_zone_engine=_render_zone_engine)`.
 - `render_speculation_indicators(key_prefix, ticker, historical_prices, closes, current_price,
-  is_crypto)` — the actual indicator stack (RSI, EMA/SMA section, the simple "Soportes y
-  Resistencias" trailing-min/max chart via `render_levels_chart()`/`SPECULATION_CHART_VIEWS`,
-  the "📋 Plan de DCA sugerido" box, MACD, Bollinger Bands, ADX, OBV) — shared with the Cripto
-  tab: `us-stocks-cripto`'s `render_crypto()` (`src/ui/cripto.py`) imports this exact function
-  and calls it with `key_prefix="crypto"`, `is_crypto=True`. Two things to know before touching
-  it:
+  is_crypto, render_zone_engine)` — the actual indicator stack: RSI, EMA/SMA section,
+  `render_zone_engine()` (the caller-supplied Market Reaction Zone Engine block — see below),
+  the "📋 Plan de DCA sugerido" box (`is_crypto` only), MACD, Bollinger Bands, ADX, OBV — shared
+  with the Cripto tab: `us-stocks-cripto`'s `render_crypto()` (`src/ui/cripto.py`) imports this
+  exact function and calls it with `key_prefix="crypto"`, `is_crypto=True`, its own
+  `_render_zone_engine()` closure. Things to know before touching it:
+  - `render_zone_engine` is a required `Callable[[], None]` parameter — each caller renders its
+    own Market Reaction Zone Engine block (own data source, own cache function, own validated-
+    tickers lookup) via a closure defined in its own scope, called at the exact point inside
+    this shared function where the simple "Soportes y Resistencias" trailing-min/max chart used
+    to render (removed by explicit user request — see Design history). This callback pattern,
+    not a straight function call, exists specifically because `cripto.py` already imports this
+    function from `speculation.py` — `speculation.py` importing anything back from `cripto.py`
+    would be a circular import, so each tab's own Zone Engine code has to stay in its own file.
   - `key_prefix` exists purely to keep widget keys unique across the two callers — `st.tabs()`
     isn't lazy (see CLAUDE.md), so both tabs' bodies run every rerun, and any hardcoded
     `key=` inside this function WILL collide between Especulación and Cripto
-    (`StreamlitDuplicateElementKey`, hit for real while splitting this out — currently only the
-    S/R window `st.segmented_control` needs it: `key=f"{key_prefix}_chart_view"`). Any new
-    widget added inside this function needs the same treatment.
+    (`StreamlitDuplicateElementKey`, hit for real while splitting this out).
   - `is_crypto` gates exactly one thing: the DCA box, which doesn't apply to stocks (no DCA-plan
     concept for them in this project). Everything else runs identically for either caller.
 - `REGIME_VALIDATED_COMBOS`, `REGIME_RSI_OVERBOUGHT_VALIDATED_HORIZONS` — static lookups from
@@ -57,18 +64,37 @@ config + tab wiring). This tab's code — AND the indicator stack shared with Cr
   were derived from yfinance-sourced crypto history; Cripto now feeds them Binance-sourced
   history instead — see `us-stocks-cripto`'s Design history for why that wasn't re-validated (a
   deliberate judgment call, not an oversight).
-- **"🧭 Market Reaction Zone Engine" section, added at the end of `render_speculation()`** — the
-  same multi-methodology support/resistance engine as Cripto (`src/support_resistance.py`), now
-  also available for stocks. `_cached_stock_sr_levels()` (`@st.cache_data(ttl=21600)`, same
-  CPU-cost rationale as Cripto's `_cached_sr_levels`) calls `daily_reference_config()` (see
-  that module's section below) and `detect_levels(historical_prices, config,
-  daily_prices=historical_prices)` — the same yfinance daily array passed as both arguments on
-  purpose (reference series AND the source for weekly/monthly resampling), not a copy-paste bug.
-  `STOCK_SR_VALIDATED_TICKERS` (this file) is `{}` — deliberately descriptive-only, see Design
-  history below. UI mirrors `render_crypto()`'s engine section closely (config expander, compute
-  button, levels table, chart via `render_advanced_levels_chart()` from `src/ui/shared.py`) with
-  one real difference: "Antigüedad (días)" is `lv.age_bars` **directly**, not `÷6` like Cripto's
-  table — here the reference series already IS daily, so `age_bars` is already in days.
+- **"🧭 Market Reaction Zone Engine" section — rendered via the `render_zone_engine` callback
+  described above**, at the position right after "Medias móviles" (originally added at the end
+  of `render_speculation()`, moved here — see Design history). The same multi-methodology
+  support/resistance engine as Cripto (`src/support_resistance.py`), also available for stocks.
+  `_cached_stock_sr_levels()` (`@st.cache_data(ttl=21600)`, same CPU-cost rationale as Cripto's
+  `_cached_sr_levels`) calls `daily_reference_config()` (see that module's section below) and
+  `detect_levels(historical_prices, config, daily_prices=historical_prices)` — the same
+  yfinance daily array passed as both arguments on purpose (reference series AND the source for
+  weekly/monthly resampling), not a copy-paste bug. `STOCK_SR_VALIDATED_TICKERS` (this file) is
+  `{"TSLA": {"support"}}` as of 2026-08-08 — re-validated under the current score formula
+  (chronological 60/40 split, horizons `[5, 10, 20, 30]`, score percentiles 40/55/70 to check
+  threshold-fragility) across all 8 `TICKERS`; only TSLA-soporte held the same sign at every
+  percentile and horizon, train and test. See Design history below for the full result table
+  and why every other (ticker, kind) combo — including the pre-redesign AAPL-resistance result —
+  didn't reproduce. UI mirrors `render_crypto()`'s
+  engine section closely (config expander, compute button, levels table, chart via
+  `render_advanced_levels_chart()` from `src/ui/shared.py`) with one real difference: "Antigüedad
+  (días)" is `lv.age_bars` **directly**, not `÷6` like Cripto's table — here the reference series
+  already IS daily, so `age_bars` is already in days.
+- **"📐 Golden Cross / Death Cross" section**, appended at the very end of `render_speculation()`
+  (not inside `render_speculation_indicators()` — never tested for crypto, so it must never
+  render on the Cripto tab, same reasoning as `STOCK_SR_VALIDATED_TICKERS` above). Validated
+  2026-08-08: SMA50 vs SMA200 tested as a sustained REGIME (not the rare crossover day itself —
+  too few crossovers in ~5 years to get a usable sample; the regime STATE gives hundreds of
+  observations per ticker instead). `GOLDEN_CROSS_VALIDATED_TICKERS = {"AAPL", "TSLA", "UBER"}`
+  — see Design history for the full result and why the sign differs by ticker (AAPL/TSLA
+  underperform in "golden cross" vs "death cross"; UBER outperforms). The UI never labels either
+  state "alcista"/"bajista" — it always shows the ticker's own measured number
+  (`compute_golden_cross_reactions()` in `src/speculation.py`, same "frozen validated set, live-
+  recomputed number" pattern as `current_bucket_reaction()`/`compute_regime_reactions()`), and
+  picks `st.success`/`st.error` by the actual sign of that number, not by which state it is.
 
 ## `src/ui/shared.py`
 
@@ -83,8 +109,6 @@ config + tab wiring). This tab's code — AND the indicator stack shared with Cr
 ## `src/speculation.py`
 
 - `compute_rsi()` / `compute_rsi_series()` — Wilder's smoothed RSI.
-- `compute_support_levels()` / `compute_resistance_levels()` — trailing min/max per window
-  (`daily`/`weekly`/`monthly`/`yearly`), sharing `_sorted_dated_closes()` / `_extreme_since()`.
 - `compute_macd()` — 12/26/9, via `_ema_series()` (full-series EMA, unlike `trend.py`'s
   final-value-only `_ema()`).
 - `compute_bollinger_bands()` — 20-period SMA ± 2 population std devs.
@@ -102,6 +126,10 @@ config + tab wiring). This tab's code — AND the indicator stack shared with Cr
   `compute_regime_rsi_reactions()` — the reproducibility path for the two validated-combo
   lookups in `src/ui/speculation.py`; keep even if `src/ui/speculation.py` stops calling one of
   them directly.
+- `classify_golden_cross_series()` / `GoldenCrossReaction` / `compute_golden_cross_reactions()`
+  — same shape as the regime functions above, but for SMA50-vs-SMA200 state instead of the
+  EMA/SMA-triple "fuerte/débil/mixta" regime. Feeds `GOLDEN_CROSS_VALIDATED_TICKERS` in
+  `src/ui/speculation.py`.
 
 ## `src/data/yfinance_client.py`
 
@@ -127,6 +155,25 @@ config + tab wiring). This tab's code — AND the indicator stack shared with Cr
   one SMA period — 20 days — but not at 10 or 30, the same nearby-parameter fragility as ADX;
   do not re-add on the strength of the 20-day result alone). OBV itself stays, but only as a
   descriptive confirmation/divergence cross-reference.
+- Wyckoff "Spring" pattern (proposed 2026-08-07, tested and rejected — never shipped, no code
+  in the repo). User asked about adding the Wyckoff method to Acciones; redirected to
+  Especulación instead since it's a technical/timing pattern, same category as RSI/ADX/OBV, not
+  a fundamentals signal (Acciones is 100% timing-language-free by design — see `CLAUDE.md`).
+  Defined as: `low[t] < trailing_min(low, lookback)` (support undercut) AND
+  `close[t] >= trailing_min(low, lookback)` (closed back above it same day) — tested at
+  lookback 10/20/30 across all 8 `TICKERS`, horizons `[5, 10, 20, 30]` (this tab's own
+  convention, not Portfolio's `[20, 60, 90, 180]`). Price-only version: AAPL validated at
+  lookback=10 (negative sign) but failed at 20/30; UBER validated at lookback=20 (positive
+  sign, i.e. the opposite direction from AAPL) but failed at 10/30 — the exact same
+  one-parameter-only fragility signature that sank Fibonacci/ADX/OBV. No ticker validated at
+  all 3 neighboring lookbacks. Volume-confirmed version (added `volume[t] < trailing 20-day
+  average volume` — the classic "low volume undercut = no real supply" Wyckoff reading, MA
+  window fixed at 20 to match `OBV_SMA_PERIOD` rather than swept too, to avoid multiplying the
+  search space) came back even weaker: the added filter roughly halves the sample per ticker/
+  lookback, pushing most train/test cells below `min_observations=15` before a sign could even
+  be checked, and zero tickers validated across all 4 horizons at any lookback. Do not re-add
+  on the strength of either version's isolated positive combos (AAPL@10, UBER@20) — both are
+  single-parameter hits that don't survive the neighbor check this project always requires.
 
 ## Design history
 

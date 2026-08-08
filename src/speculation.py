@@ -5,7 +5,6 @@ valoración ni con el Portafolio — es una zona aparte a propósito.
 """
 
 from dataclasses import dataclass
-from datetime import datetime, timedelta
 
 import numpy as np
 import pandas as pd
@@ -64,67 +63,6 @@ def compute_rsi_series(closes: list[float], period: int = RSI_PERIOD) -> list[fl
         avg_loss = (avg_loss * (period - 1) + losses[i]) / period
         rsi_series[i + 1] = _rsi(avg_gain, avg_loss)
     return rsi_series
-
-
-def _sorted_dated_closes(historical_prices: list[dict]) -> list[tuple[datetime, float]]:
-    return sorted(
-        ((datetime.strptime(p["date"], "%Y-%m-%d"), p["close"]) for p in historical_prices),
-        key=lambda pair: pair[0],
-    )
-
-
-def _extreme_since(dated: list[tuple[datetime, float]], days: int, pick) -> float | None:
-    if not dated:
-        return None
-    cutoff = dated[-1][0] - timedelta(days=days)
-    values = [close for date, close in dated if date >= cutoff]
-    return pick(values) if values else None
-
-
-DAILY_WINDOW_DAYS = 3
-
-
-@dataclass
-class SupportLevels:
-    daily: float | None
-    weekly: float | None
-    monthly: float | None
-    yearly: float | None
-
-
-def compute_support_levels(historical_prices: list[dict]) -> SupportLevels:
-    """Soporte = el cierre más bajo de la ventana — la lectura más simple y defendible de
-    'soporte': un nivel del que el precio ya rebotó en ese plazo. `daily` usa una ventana de
-    3 sesiones (no 1 sola) porque solo hay un cierre por día — un único cierre no tiene 'rango'
-    propio, así que el nivel más corto posible con este dato es el extremo de las últimas
-    pocas sesiones, no la de hoy."""
-    dated = _sorted_dated_closes(historical_prices)
-    return SupportLevels(
-        daily=_extreme_since(dated, DAILY_WINDOW_DAYS, min),
-        weekly=_extreme_since(dated, 7, min),
-        monthly=_extreme_since(dated, 30, min),
-        yearly=_extreme_since(dated, 365, min),
-    )
-
-
-@dataclass
-class ResistanceLevels:
-    daily: float | None
-    weekly: float | None
-    monthly: float | None
-    yearly: float | None
-
-
-def compute_resistance_levels(historical_prices: list[dict]) -> ResistanceLevels:
-    """Resistencia = el cierre más alto de la ventana — el espejo del soporte: un nivel del
-    que el precio ya retrocedió en ese plazo."""
-    dated = _sorted_dated_closes(historical_prices)
-    return ResistanceLevels(
-        daily=_extreme_since(dated, DAILY_WINDOW_DAYS, max),
-        weekly=_extreme_since(dated, 7, max),
-        monthly=_extreme_since(dated, 30, max),
-        yearly=_extreme_since(dated, 365, max),
-    )
 
 
 def _ema_series(closes: list[float], period: int) -> list[float]:
@@ -398,6 +336,74 @@ def compute_regime_reactions(closes: list[float]) -> list[RegimeReaction]:
             vals = forward_return[mask]
             reactions.append(
                 RegimeReaction(regime, horizon, n_obs, float(vals.mean()), float((vals > 0).mean()))
+            )
+    return reactions
+
+
+# "Golden cross"/"death cross" (SMA50 vs SMA200) probado como RÉGIMEN (el estado sostenido, no
+# solo el día puntual del cruce — el cruce en sí es demasiado raro en ~5 años de historial
+# diario para juntar observaciones suficientes). 50/200 es la definición canónica de esta señal,
+# no un valor descubierto barriendo umbrales cercanos — a diferencia del lookback inventado del
+# Spring de Wyckoff (ver design-history), acá no hace falta un chequeo de fragilidad de
+# parámetros porque no hay ningún parámetro que ajustar.
+GOLDEN_CROSS_HORIZONS_DAYS = [5, 10, 20, 30]
+GOLDEN_CROSS_MIN_OBSERVATIONS = 15
+
+
+def classify_golden_cross_series(closes: list[float]) -> list[bool | None]:
+    """True = SMA50 > SMA200 hoy ("golden cross" en curso), False = SMA50 <= SMA200 ("death
+    cross" en curso). None mientras no haya suficiente historial para la SMA_LONG_PERIOD (los
+    primeros SMA_LONG_PERIOD-1 días)."""
+    n = len(closes)
+    if n < SMA_LONG_PERIOD:
+        return [None] * n
+    closes_series = pd.Series(closes, dtype=float)
+    sma_short = closes_series.rolling(SMA_SHORT_PERIOD).mean()
+    sma_long = closes_series.rolling(SMA_LONG_PERIOD).mean()
+    states: list[bool | None] = [None] * n
+    for i in range(SMA_LONG_PERIOD - 1, n):
+        sma_s, sma_l = sma_short.iloc[i], sma_long.iloc[i]
+        if pd.isna(sma_s) or pd.isna(sma_l):
+            continue
+        states[i] = bool(sma_s > sma_l)
+    return states
+
+
+@dataclass
+class GoldenCrossReaction:
+    in_golden_cross: bool  # True = franja "golden cross", False = franja "death cross"
+    horizon_days: int
+    observations: int
+    mean_return: float | None
+    win_rate: float | None
+
+
+def compute_golden_cross_reactions(closes: list[float]) -> list[GoldenCrossReaction]:
+    """Para cada (estado, horizonte), junta todos los días históricos que estuvieron en ese
+    estado y mide qué retorno tuvieron horizon_days después — mismo patrón que
+    `compute_regime_reactions`. IMPORTANTE: el signo del retorno NO es el mismo para todos los
+    tickers validados (ver GOLDEN_CROSS_VALIDATED_TICKERS en src/ui/speculation.py) — para
+    AAPL/TSLA "golden cross" rindió, en promedio, PEOR que "death cross" (el cruce es un
+    indicador rezagado: para cuando confirma, ya pasó buena parte del rebote), mientras que para
+    UBER salió con el signo "tradicional" (positivo). Por eso la UI muestra el número real de
+    cada ticker en vez de una etiqueta genérica "alcista"/"bajista"."""
+    states = classify_golden_cross_series(closes)
+    closes_series = pd.Series(closes, dtype=float)
+    state_series = pd.Series(states)
+
+    reactions = []
+    for horizon in GOLDEN_CROSS_HORIZONS_DAYS:
+        forward_return = (closes_series.shift(-horizon) - closes_series) / closes_series
+        valid = forward_return.notna() & state_series.notna()
+        for state in (True, False):
+            mask = valid & (state_series == state)
+            n_obs = int(mask.sum())
+            if n_obs < GOLDEN_CROSS_MIN_OBSERVATIONS:
+                reactions.append(GoldenCrossReaction(state, horizon, n_obs, None, None))
+                continue
+            vals = forward_return[mask]
+            reactions.append(
+                GoldenCrossReaction(state, horizon, n_obs, float(vals.mean()), float((vals > 0).mean()))
             )
     return reactions
 

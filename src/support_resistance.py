@@ -1094,7 +1094,12 @@ def _score_level(
         timeframes=sorted(cand.timeframes),
         methods=sorted(cand.methods),
         volume_at_level=float(np.mean(walk["touch_volumes"])) if walk["touch_volumes"] else 0.0,
-        distance_to_price_pct=(current_price - line_value_now) / current_price if current_price else 0.0,
+        # Positivo = el nivel está POR ENCIMA del precio actual, negativo = por debajo — la
+        # convención que "Dist. al precio actual" (mostrado con signo en cripto.py/
+        # speculation.py) ya asumía en su lectura, pero la fórmula tenía el signo invertido
+        # (daba positivo cuando el nivel estaba abajo). El filtro de % de distancia usa
+        # abs(), así que no cambia qué se filtra — solo corrige el signo mostrado.
+        distance_to_price_pct=(line_value_now - current_price) / current_price if current_price else 0.0,
         avg_rebound_magnitude_atr=reaction_magnitude_avg,
         component_scores=components,
         confidence_score=confidence_score,

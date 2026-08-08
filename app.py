@@ -2,7 +2,9 @@
 líneas de las 6 pestañas juntas; se modularizó a `src/ui/` (un archivo por pestaña + `shared.py`
 para lo genuinamente cross-tab) para que trabajar en una sola pestaña no implique cargar/leer
 todo el resto. Acá solo queda: page config, inicialización de session_state, y el wiring de las
-6 pestañas — la lógica de cada una vive en su propio módulo."""
+6 (o 5, ver SHOW_PORTFOLIO_TAB) pestañas — la lógica de cada una vive en su propio módulo."""
+
+import os
 
 import streamlit as st
 
@@ -15,24 +17,50 @@ from src.ui.validation import render_validation
 
 st.set_page_config(page_title="Precio Justo — Acciones Americanas", layout="wide")
 
+
+def _show_portfolio_tab() -> bool:
+    """Portafolio persiste datos financieros reales del usuario (`portfolio_data/`, ver
+    CLAUDE.md) — gitignoreado, así que un deploy público (Streamlit Community Cloud) parte sin
+    ningún dato ahí, pero igual no debe exponer la FUNCIONALIDAD (cualquier visitante podría
+    cargar compras/ventas falsas en una instancia pública). Default `True` (se muestra) para no
+    cambiar nada en desarrollo local. Para un deploy público, setear
+    `SHOW_PORTFOLIO_TAB = "false"` en los Secrets de Streamlit Cloud (preferido — ahí vive el
+    resto de la config de un deploy) o como variable de entorno (fallback, por si se despliega
+    en otro lado que no sea Streamlit Cloud). `st.secrets` lanza `StreamlitSecretNotFoundError`
+    si no existe NINGÚN secrets.toml (ni siquiera vacío) — pasa siempre en desarrollo local, así
+    que el `try/except` es necesario, no defensivo de más."""
+    try:
+        if "SHOW_PORTFOLIO_TAB" in st.secrets:
+            return str(st.secrets["SHOW_PORTFOLIO_TAB"]).strip().lower() != "false"
+    except Exception:
+        pass
+    return os.environ.get("SHOW_PORTFOLIO_TAB", "true").strip().lower() != "false"
+
+
+SHOW_PORTFOLIO_TAB = _show_portfolio_tab()
+
 if "selected_ticker" not in st.session_state:
     st.session_state.selected_ticker = None
 if "selected_etf" not in st.session_state:
     st.session_state.selected_etf = None
 
 # Orden pedido por el usuario: Acciones, Validación, ETFs, Especulación, Cripto, Portafolio
-# SIEMPRE al final. El orden de esta tupla/lista fija tanto el orden visual de las pestañas como
-# el orden de ejecución de los bloques `with` de más abajo (st.tabs() no es lazy — ver nota en
-# CLAUDE.md), así que Portafolio último acá también preserva que corra después de Acciones y
-# ETFs, de donde reusa evaluaciones ya resueltas vía STOCK_EVAL_CACHE_KEY/ETF_EVAL_CACHE_KEY
-# (src/ui/shared.py). Cripto (antes "Niveles" — indicadores de especulación + el motor
-# multi-metodología de soportes/resistencias para BTC/ETH/SOL, todo sobre datos de Binance) va
-# justo después de Especulación (que quedó solo-acciones) y antes de Portafolio porque, como
-# Especulación, no hace ningún fetch eager propio (un solo ticker, botón-gated para el motor de
-# niveles), así que no retrasa a Portafolio corriendo en el medio.
-tab_acciones, tab_validacion, tab_etfs, tab_especulacion, tab_cripto, tab_capital = st.tabs(
-    ["📈 Acciones", "📊 Validación", "🧺 ETFs", "🎲 Especulación", "🪙 Cripto", "💰 Portafolio"]
-)
+# SIEMPRE al final (si está — ver SHOW_PORTFOLIO_TAB arriba). El orden de esta lista fija tanto
+# el orden visual de las pestañas como el orden de ejecución de los bloques `with` de más abajo
+# (st.tabs() no es lazy — ver nota en CLAUDE.md), así que Portafolio último acá también
+# preserva que corra después de Acciones y ETFs, de donde reusa evaluaciones ya resueltas vía
+# STOCK_EVAL_CACHE_KEY/ETF_EVAL_CACHE_KEY (src/ui/shared.py) cuando SÍ está presente. Cripto
+# (antes "Niveles" — indicadores de especulación + el motor multi-metodología de soportes/
+# resistencias para BTC/ETH/SOL, todo sobre datos de Binance) va justo después de Especulación
+# (que quedó solo-acciones) y antes de Portafolio porque, como Especulación, no hace ningún
+# fetch eager propio (un solo ticker, botón-gated para el motor de niveles), así que no retrasa
+# a Portafolio corriendo en el medio.
+tab_labels = ["📈 Acciones", "📊 Validación", "🧺 ETFs", "🎲 Especulación", "🪙 Cripto"]
+if SHOW_PORTFOLIO_TAB:
+    tab_labels.append("💰 Portafolio")
+tabs = st.tabs(tab_labels)
+tab_acciones, tab_validacion, tab_etfs, tab_especulacion, tab_cripto = tabs[:5]
+tab_capital = tabs[5] if SHOW_PORTFOLIO_TAB else None
 
 with tab_acciones:
     # st.empty() fuerza a Streamlit a limpiar TODO el contenido anterior de este slot antes de
@@ -73,6 +101,7 @@ with tab_cripto:
     with st.spinner("Cargando..."):
         render_crypto()
 
-with tab_capital:
-    with st.spinner("Cargando portafolio..."):
-        render_capital()
+if SHOW_PORTFOLIO_TAB:
+    with tab_capital:
+        with st.spinner("Cargando portafolio..."):
+            render_capital()
