@@ -146,8 +146,14 @@ def render_crypto():
 
     try:
         historical_prices, _ = _cached_binance_historical_prices(CRYPTO_BINANCE_SYMBOLS[ticker])
-    except DataError:
+    except DataError as exc:
         st.error(f"No pudimos consultar {ticker} ahora mismo.")
+        # Detalle real del error (código HTTP de Binance, texto de respuesta) en un caption
+        # aparte — no reemplaza el mensaje de arriba, pero es lo único que permite diagnosticar
+        # remotamente sin ir a buscar los logs del deploy (p. ej. Binance devuelve 451 a pedidos
+        # desde IPs de datacenters en EE. UU., que es donde corre Streamlit Community Cloud —
+        # geo-bloqueo, no un bug de este código).
+        st.caption(f"Detalle: {exc}")
         return
 
     closes = [p["close"] for p in historical_prices]
