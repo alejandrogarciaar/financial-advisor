@@ -1,0 +1,23 @@
+[
+  {
+    "ticker": "GOOGLCO",
+    "shares": 2,
+    "price_cop": 1210600.0,
+    "commission_cop": 7438.0,
+    "date": "2026-08-03"
+  },
+  {
+    "ticker": "METACO",
+    "shares": 1,
+    "price_cop": 1907660.0,
+    "commission_cop": 7438.0,
+    "date": "2026-08-03"
+  },
+  {
+    "ticker": "AMZNCO",
+    "shares": 2,
+    "price_cop": 916960.0,
+    "commission_cop": 7438.0,
+    "date": "2026-08-03"
+  }
+]

@@ -131,8 +131,12 @@ config + tab wiring). This tab's code lives in `src/ui/portfolio.py`:
 
 - `load_purchases()` / `save_purchases()` — persisted to `portfolio_data/purchases.json`.
   `load_sales()` / `save_sales()` — persisted to `portfolio_data/sales.json`, same shape
-  (ticker/shares/price_cop/commission_cop/date), separate file. Both gitignored, real user
-  data — never delete without asking, see memory. Purchases are **never** mutated by a sale —
+  (ticker/shares/price_cop/commission_cop/date), separate file. Real user data — never delete
+  without asking, see memory. **Committed to git since 2026-08-08** (explicit user request, so
+  the public Streamlit Cloud deploy shows real data — see `CLAUDE.md`'s "Deploying" section),
+  no longer gitignored like `app_data/` still is — a local edit via the UI/`scripts/add_sale.py`
+  needs an explicit `git add`/commit/push to actually reach the public deploy, nothing auto-
+  syncs. Purchases are **never** mutated by a sale —
   see "sales" in design history for why (user explicitly asked for this: buy history has to
   stay intact as a price-paid reference for future purchases).
 - `validate_purchases()` / `validate_sales()` — both reject fractional shares; `validate_sales()`

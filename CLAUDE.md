@@ -66,16 +66,19 @@ GitHub account that owns this repo → "New app" → pick this repo, branch `mai
 `app.py` → "Deploy".
 
 **All 6 tabs, including "💰 Portafolio", are public on this deploy — explicit user choice
-(2026-08-08).** A `SHOW_PORTFOLIO_TAB` secret/env-var flag existed briefly to drop Portfolio
-from `st.tabs()` on a public deploy (real financial data the user enters by hand,
-`portfolio_data/`, gitignored — see "Portfolio tracking" below) but was removed the same day at
-the user's explicit request ("subamos el portafolio, completo") — don't re-add that flag without
-being asked again. Consequence worth knowing before touching this further: with no
-authentication anywhere in this app, anyone with the deploy's URL can see the real portfolio
-data AND submit the purchase/sale forms (they write to the live instance's `portfolio_data/`,
-same as the owner using the UI) — this was flagged to the user before removing the flag, who
-chose to proceed anyway. If auth is ever wanted, that's a separate, not-yet-built feature — don't
-assume it exists.
+(2026-08-08), made in two steps the same day.** First, a `SHOW_PORTFOLIO_TAB` secret/env-var
+flag that dropped Portfolio from `st.tabs()` on a public deploy was added, then removed a few
+messages later at the user's explicit request ("subamos el portafolio, completo") — don't re-add
+that flag without being asked again. Then, since a public deploy pulls this git repo fresh with
+none of the user's actual purchase/sale history (that data lived only in the gitignored
+`portfolio_data/` on their local machine), the user asked for the real data to appear too — see
+"Portfolio tracking" below: `portfolio_data/*.json` is now committed to git, not gitignored,
+also an explicit, informed choice (the amounts/dates are in git history permanently, publicly).
+Consequence worth knowing before touching this further: with no authentication anywhere in this
+app, anyone with the deploy's URL can see the real portfolio data AND submit the purchase/sale
+forms (they write to the live instance's `portfolio_data/`, same as the owner using the UI) —
+this was flagged to the user before each of these two changes, who chose to proceed anyway both
+times. If auth is ever wanted, that's a separate, not-yet-built feature — don't assume it exists.
 
 `FMP_API_KEY` isn't needed for a public deploy — the UI defaults to the `yfinance` provider,
 which requires no key. **A real bug hit deploying this for the first time (2026-08-08)**:
@@ -153,7 +156,14 @@ references the EMA against the price verdict, same pattern as `quality_context_n
 
 **Portfolio tracking (`src/portfolio.py`, "Portafolio" tab)**: the only part of the app that
 persists user-entered data rather than API responses, so it deliberately lives outside
-`.cache/` (gitignored, safe to delete — `portfolio_data/` is not). Full design history — the COP
+`.cache/`. `portfolio_data/` used to also be gitignored (real data, not reconstructible from an
+API — same category as `app_data/` still is) but is now **committed to git** as of 2026-08-08,
+explicit user request so the public Streamlit Cloud deploy shows real purchase/sale data instead
+of starting empty (see "Deploying" above) — the user was told this means the actual COP amounts
+and dates are in git history permanently, publicly, and chose to proceed anyway. Concretely:
+`purchases.json`/`sales.json` need a manual `git add`/commit/push after every local edit (via
+the UI forms or `scripts/add_sale.py`) for the public deploy to reflect it — there's no
+auto-sync. Full design history — the COP
 commission model, the drawdown-bucket accumulation zone (`DRAWDOWN_VALIDATED_BUCKETS`), and the
 diversification/aggregate-risk-return/goal-projection sections — moved to
 `.claude/skills/us-stocks-portfolio/SKILL.md`'s "Design history" section. Invoke that skill

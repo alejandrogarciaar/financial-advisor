@@ -1,0 +1,51 @@
+[
+  {
+    "ticker": "GOOGLCO",
+    "shares": 1,
+    "price_cop": 1131860.0,
+    "commission_cop": 7438.0,
+    "date": "2026-07-17"
+  },
+  {
+    "ticker": "GOOGLCO",
+    "shares": 1,
+    "price_cop": 1023280.0,
+    "commission_cop": 7438.0,
+    "date": "2025-07-23"
+  },
+  {
+    "ticker": "AMZNCO",
+    "shares": 2,
+    "price_cop": 799400.0,
+    "commission_cop": 7438.0,
+    "date": "2026-06-22"
+  },
+  {
+    "ticker": "CSPXCO",
+    "shares": 1,
+    "price_cop": 2654600.0,
+    "commission_cop": 7438.0,
+    "date": "2026-07-14"
+  },
+  {
+    "ticker": "CSPXCO",
+    "shares": 1,
+    "price_cop": 2804000.0,
+    "commission_cop": 7438.0,
+    "date": "2026-06-12"
+  },
+  {
+    "ticker": "METACO",
+    "shares": 1,
+    "price_cop": 1668500.0,
+    "commission_cop": 7438.0,
+    "date": "2026-07-30"
+  },
+  {
+    "ticker": "AAPLCO",
+    "shares": 1,
+    "price_cop": 989040.0,
+    "commission_cop": 7438.0,
+    "date": "2026-08-06"
+  }
+]
