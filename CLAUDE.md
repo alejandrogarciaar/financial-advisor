@@ -332,9 +332,11 @@ klines). Has two parts: the full speculation indicator stack shared with Especul
 Binance data and `is_crypto=True`), and a 20-methodology support/resistance engine (DBSCAN, KDE,
 RANSAC/Theil-Sen/Huber, Hough transform, Volume Profile, VWAP, candle/volume confirmation,
 multi-timeframe via daily/weekly/monthly/4h, touch-point optimization, channels) producing a
-0-100 confidence score per level. The engine's confidence score WAS validated as an actionable
-signal for BTC (support) via the same chronological 60/40 split methodology used throughout this
-project — see the skill for the exact scope and caveats. This tab absorbed both the former
+0-100 confidence score per level. The engine's confidence score validated as an actionable signal
+for BTC (support) once, under an earlier version of the score — a later statistical-consistency
+adjustment (Wilson-bound shrinkage) broke that result on re-test, so `SR_VALIDATED_TICKERS` is
+currently `{}` (nothing validated) — see the skill for the full round-1/round-2 history and why
+it isn't loosened just to make something pass again. This tab absorbed both the former
 "🧭 Niveles" tab (which used to also cover stocks) and Especulación's crypto handling in the same
 session — full design history, the real bugs found and fixed while building it, and the exact
 validation results live in `.claude/skills/financial-advisor-cripto/SKILL.md`; invoke that skill before
