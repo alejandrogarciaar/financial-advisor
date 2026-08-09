@@ -4,6 +4,7 @@ llegó a 2821 líneas) para modularizar. Corre DESPUÉS de Acciones/ETFs en el o
 app.py (st.tabs() no es lazy) por pedido explícito del usuario sobre el orden de la página, no
 por ninguna dependencia técnica de datos de esas dos pestañas."""
 
+from dataclasses import dataclass
 from datetime import date, datetime
 
 import pandas as pd
@@ -20,6 +21,8 @@ from src.config import (
 from src.data.errors import DataError
 from src.drawdown_dca import (
     DRAWDOWN_BUCKETS,
+    DrawdownBucketReaction,
+    DrawdownSnapshot,
     build_laddered_buy_plan,
     classify_drawdown_bucket,
     current_bucket_reaction,
@@ -221,6 +224,87 @@ DRAWDOWN_VALIDATED_BUCKETS_COP = {
 DRAWDOWN_VALIDATED_SELL_BUCKETS = {
     "AAPL": {"0-5%"},
 }
+
+
+@dataclass
+class DrawdownZoneEvaluation:
+    ticker: str
+    underlying: str
+    basis_currency: str  # "USD" | "COP"
+    snapshot: DrawdownSnapshot
+    bucket: str
+    zone: str  # "acumulacion" | "distribucion" | "rango"
+    reaction: DrawdownBucketReaction | None
+    validated_buckets: set[str]
+    validated_sell_buckets: set[str]
+    basis_closes: list[float]
+
+
+def evaluate_drawdown_zone(ticker: str) -> DrawdownZoneEvaluation | None:
+    """Selección de base (COP nativo del CDI si tiene franja validada ahí, si no USD del
+    subyacente) + clasificación de bucket/zona — exactamente la lógica que `_render_portfolio_analysis()`
+    calculaba inline antes de esta función existir, factorizada porque
+    `scripts/telegram_tactical_signals.py` (fuera de Streamlit) también la necesita: dos
+    llamadores reales ya justifican extraerla, no antes. None si no hay suficiente historial
+    todavía (mismo criterio que `current_drawdown_snapshot`)."""
+    kind, underlying = PORTFOLIO_CDI_UNDERLYING[ticker]
+    symbol = underlying if kind == "stock" else ETF_TICKERS[underlying]
+    try:
+        dca_prices, _ = _cached_historical_prices(symbol)
+    except DataError:
+        dca_prices = []
+    closes = [p["close"] for p in dca_prices]
+
+    cop_validated_for_ticker = DRAWDOWN_VALIDATED_BUCKETS_COP.get(ticker, set())
+    cop_prices: list[dict] = []
+    if cop_validated_for_ticker:
+        try:
+            cop_prices, _ = _cached_historical_prices(PORTFOLIO_CDI_TICKERS[ticker])
+        except DataError:
+            cop_prices = []
+
+    if cop_validated_for_ticker and cop_prices:
+        basis_prices, basis_closes = cop_prices, [p["close"] for p in cop_prices]
+        basis_currency = "COP"
+        validated_for_ticker = cop_validated_for_ticker
+        validated_sell_for_ticker: set[str] = set()
+    else:
+        basis_prices, basis_closes = dca_prices, closes
+        basis_currency = "USD"
+        validated_for_ticker = DRAWDOWN_VALIDATED_BUCKETS.get(underlying, set())
+        validated_sell_for_ticker = DRAWDOWN_VALIDATED_SELL_BUCKETS.get(underlying, set())
+
+    snapshot = current_drawdown_snapshot(basis_prices)
+    if snapshot is None:
+        return None
+
+    bucket = classify_drawdown_bucket(snapshot.drawdown)
+    reaction = (
+        current_bucket_reaction(basis_closes)
+        if bucket in validated_for_ticker or bucket in validated_sell_for_ticker
+        else None
+    )
+
+    if bucket in validated_for_ticker:
+        zone = "acumulacion"
+    elif bucket == DRAWDOWN_BUCKETS[0][0]:
+        zone = "distribucion"
+    else:
+        zone = "rango"
+
+    return DrawdownZoneEvaluation(
+        ticker=ticker,
+        underlying=underlying,
+        basis_currency=basis_currency,
+        snapshot=snapshot,
+        bucket=bucket,
+        zone=zone,
+        reaction=reaction,
+        validated_buckets=validated_for_ticker,
+        validated_sell_buckets=validated_sell_for_ticker,
+        basis_closes=basis_closes,
+    )
+
 
 # La caché de precios subyacente (_cached_portfolio_price, _cached_historical_prices en
 # shared.py) vence cada 900s (15 min) —
@@ -429,35 +513,12 @@ def _render_portfolio_analysis(purchases: pd.DataFrame, sales: pd.DataFrame) -> 
             except DataError:
                 dca_prices = []
             underlying_prices[ticker] = dca_prices
-            closes = [p["close"] for p in dca_prices]
 
-            # Base de cálculo para ESTE ticker: nativa en COP (el propio CDI) si tiene franja
-            # validada ahí (`DRAWDOWN_VALIDATED_BUCKETS_COP`, ver arriba); si no, la de siempre
-            # en USD del subyacente (`DRAWDOWN_VALIDATED_BUCKETS`). Nunca se mezclan series para
-            # un mismo ticker — el bucket de hoy, la reacción histórica y las franjas del plan
-            # siempre salen de la MISMA serie que efectivamente se backtesteó, para que el
-            # número mostrado coincida con lo que la validación realmente probó (integridad
-            # pedida explícitamente por el usuario, 2026-08-06).
-            cop_validated_for_ticker = DRAWDOWN_VALIDATED_BUCKETS_COP.get(ticker, set())
-            cop_prices: list[dict] = []
-            if cop_validated_for_ticker:
-                try:
-                    cop_prices, _ = _cached_historical_prices(PORTFOLIO_CDI_TICKERS[ticker])
-                except DataError:
-                    cop_prices = []
-
-            if cop_validated_for_ticker and cop_prices:
-                basis_prices, basis_closes = cop_prices, [p["close"] for p in cop_prices]
-                basis_currency = "COP"
-                validated_for_ticker = cop_validated_for_ticker
-                # DRAWDOWN_VALIDATED_SELL_BUCKETS solo tiene entradas en base USD por ahora (ver
-                # su comentario) — ningún ticker en base COP validó todavía del lado venta.
-                validated_sell_for_ticker: set[str] = set()
-            else:
-                basis_prices, basis_closes = dca_prices, closes
-                basis_currency = "USD"
-                validated_for_ticker = DRAWDOWN_VALIDATED_BUCKETS.get(underlying, set())
-                validated_sell_for_ticker = DRAWDOWN_VALIDATED_SELL_BUCKETS.get(underlying, set())
+            # Selección de base (COP nativo del CDI si tiene franja validada ahí, si no USD del
+            # subyacente) + clasificación de bucket/zona — factorizado en evaluate_drawdown_zone()
+            # (arriba en este archivo) para que scripts/telegram_tactical_signals.py (fuera de
+            # Streamlit) pueda reusar exactamente el mismo criterio sin duplicarlo.
+            evaluation = evaluate_drawdown_zone(ticker)
 
             with plan_cols[i % 2]:
                 with st.container(border=True):
@@ -465,17 +526,9 @@ def _render_portfolio_analysis(purchases: pd.DataFrame, sales: pd.DataFrame) -> 
                     # prueba (pedido explícito del usuario, 2026-08-06) — siempre el CDI (p. ej.
                     # "AAPLCO"), nunca el subyacente, sea cual sea la base de cálculo usada abajo.
                     st.markdown(f"**{ticker}** → {underlying}")
-                    snapshot = current_drawdown_snapshot(basis_prices)
-                    if snapshot is None:
+                    if evaluation is None:
                         st.caption("No pudimos consultar el historial de precios ahora mismo.")
                         continue
-
-                    bucket = classify_drawdown_bucket(snapshot.drawdown)
-                    reaction = (
-                        current_bucket_reaction(basis_closes)
-                        if bucket in validated_for_ticker or bucket in validated_sell_for_ticker
-                        else None
-                    )
 
                     # 3 estados posibles, pedidos explícitamente por el usuario (2026-08-06):
                     # "acumulación" = la franja de hoy está en el gate estático validado fuera de
@@ -487,14 +540,13 @@ def _render_portfolio_analysis(purchases: pd.DataFrame, sales: pd.DataFrame) -> 
                     # resto (nunca se validó una tesis de venta ahí). "rango" = todo lo demás:
                     # una caída real pero que, para ESTE ticker puntual, todavía no tiene
                     # evidencia suficiente para llamarla acumulación — mejor eso que sobreclamar.
-                    # Los umbrales (DRAWDOWN_BUCKETS y los 2 gates validados) ya existían; no se
-                    # inventa ningún número nuevo acá.
-                    if bucket in validated_for_ticker:
-                        drawdown_zone, zone_color, zone_label = "acumulacion", ZONE_COLOR["Acumulación"], "🟢 Zona de acumulación"
-                    elif bucket == DRAWDOWN_BUCKETS[0][0]:
-                        drawdown_zone, zone_color, zone_label = "distribucion", ZONE_COLOR["Sobrevalorado"], "🔴 Zona de distribución / venta"
+                    # Clasificación real vive en evaluate_drawdown_zone(); acá solo el color/label.
+                    if evaluation.zone == "acumulacion":
+                        zone_color, zone_label = ZONE_COLOR["Acumulación"], "🟢 Zona de acumulación"
+                    elif evaluation.zone == "distribucion":
+                        zone_color, zone_label = ZONE_COLOR["Sobrevalorado"], "🔴 Zona de distribución / venta"
                     else:
-                        drawdown_zone, zone_color, zone_label = "rango", ZONE_COLOR["Precio justo"], "🟡 En rango"
+                        zone_color, zone_label = ZONE_COLOR["Precio justo"], "🟡 En rango"
 
                     # Sin el % de caída al lado (removido a pedido del usuario, 2026-08-06: "no
                     # le veo utilidad") — el badge solo ya dice lo que importa, y el % sigue
@@ -518,7 +570,8 @@ def _render_portfolio_analysis(purchases: pd.DataFrame, sales: pd.DataFrame) -> 
                     # (asume que esa razón se mantuvo ~constante en la ventana de 1 año, la misma
                     # premisa de "sigue 1:1 a su matriz" de `PORTFOLIO_CDI_UNDERLYING`) y se
                     # aclara en el caption. Sin precio de CDI disponible, cae a USD puro.
-                    if basis_currency == "COP":
+                    snapshot = evaluation.snapshot
+                    if evaluation.basis_currency == "COP":
                         to_cop = lambda x: x  # noqa: E731 — histórico real, sin conversión
                         currency_label = "COP"
                         st.caption(
@@ -548,7 +601,8 @@ def _render_portfolio_analysis(purchases: pd.DataFrame, sales: pd.DataFrame) -> 
                                 f"del CDI en COP ahora."
                             )
 
-                    if drawdown_zone == "acumulacion":
+                    bucket, reaction = evaluation.bucket, evaluation.reaction
+                    if evaluation.zone == "acumulacion":
                         if reaction is not None and reaction.mean_return is not None:
                             # st.success acá SÍ, porque este es el caso interesante y accionable
                             # (confirmado fuera de muestra) — mismo peso visual que el DCA box de
@@ -561,8 +615,8 @@ def _render_portfolio_analysis(purchases: pd.DataFrame, sales: pd.DataFrame) -> 
                             )
                         else:
                             st.caption("Sin confirmación histórica suficiente para esta franja todavía.")
-                    elif drawdown_zone == "distribucion":
-                        if bucket in validated_sell_for_ticker and reaction is not None and reaction.mean_return is not None:
+                    elif evaluation.zone == "distribucion":
+                        if bucket in evaluation.validated_sell_buckets and reaction is not None and reaction.mean_return is not None:
                             # st.error acá SÍ, mismo peso visual que st.success en acumulación —
                             # primera vez que este proyecto muestra un efecto de este lado
                             # confirmado fuera de muestra, no solo posicional. Lenguaje
@@ -586,7 +640,7 @@ def _render_portfolio_analysis(purchases: pd.DataFrame, sales: pd.DataFrame) -> 
                             "evidencia histórica suficiente confirmada para este ticker puntual."
                         )
 
-                    if not validated_for_ticker:
+                    if not evaluation.validated_buckets:
                         st.caption("Sin franja de caída validada para este ticker todavía — no hay plan escalonado.")
                         continue
 
@@ -605,7 +659,7 @@ def _render_portfolio_analysis(purchases: pd.DataFrame, sales: pd.DataFrame) -> 
                         key=f"ladder_budget_{ticker}",
                     )
                     plan = build_laddered_buy_plan(
-                        validated_for_ticker, basis_closes, snapshot.trailing_high, float(budget_cop)
+                        evaluation.validated_buckets, evaluation.basis_closes, snapshot.trailing_high, float(budget_cop)
                     )
                     plan_rows = []
                     for rung in plan:

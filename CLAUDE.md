@@ -410,7 +410,82 @@ Cripto, then actually OOS-tested (not just flagged as a future idea) and did NOT
 project's validation bar — see `financial-advisor-speculation`'s design-history for the full
 result; nothing from that bot went into any tab or into this alert. Needs `TELEGRAM_TOKEN` /
 `TELEGRAM_CHAT_ID` in `.env` (free, created via `@BotFather`); like `FMP_API_KEY`, their absence
-prints a warning and skips sending rather than crashing.
+prints a warning and skips sending rather than crashing. `enviar_telegram()` moved out to
+`src/telegram_client.py` once `telegram_tactical_signals.py` (below) became a second real
+caller — same "extract only once 2+ callers exist" rule this project always applies.
+
+**`src/tactical_signals.py` (the signal registry) + `scripts/telegram_stock_signals.py` /
+`telegram_crypto_signals.py`**: TACTICAL entry/exit timing alerts — deliberately separate from
+`telegram_alerts.py` above (long-term fair-value verdict), and deliberately split into one script
+per ECOSYSTEM (user's explicit choice, 2026-08-09: "un script... para la bolsa... y otro... para
+cripto"), with a further, more consequential request the same message: every strategy this
+project validates in the future should reach these scripts **without editing the scripts** —
+so `src/tactical_signals.py` holds a `SIGNAL_REGISTRY: list[SignalDefinition]`, and each script
+(`telegram_stock_signals.py` / `telegram_crypto_signals.py`) is a ~20-line wrapper that does
+nothing but `run_ecosystem_signals("stocks")` / `run_ecosystem_signals("crypto")` — filtering the
+same shared registry by one field. Adding or extending a strategy is a change to ONE list in ONE
+file; the two scripts never change. Each `SignalDefinition` has `subjects()` — a callable that
+derives WHAT to check directly from the relevant `_VALIDATED_*` dict's own keys, never a
+hardcoded ticker tuple (same "job counts are dynamic" rule as `len(selected)` elsewhere in this
+app) — so extending an EXISTING family to a new ticker (e.g. AAPL support validates tomorrow) is
+just editing that dict, zero code changes anywhere.
+
+The 4 families that pass validation today, each one `SignalDefinition` entry:
+
+| Family (`key`) | Ecosystem | Validated for | Source of the check |
+|---|---|---|---|
+| `drawdown` | stocks | GOOGL/AMZN/AAPL/MSFT (USD) + CSPXCO (COP) buy; AAPL (0-5%) sell | `evaluate_drawdown_zone()`, `src/ui/portfolio.py` |
+| `golden_cross` | stocks | AAPL, TSLA, UBER — sign NOT uniform | `GOLDEN_CROSS_VALIDATED_TICKERS`, `src/ui/speculation.py` |
+| `sr` | stocks | TSLA support only (subject = `"TSLA:support"`, a composite id — see below) | `STOCK_SR_VALIDATED_TICKERS`, `src/ui/speculation.py` |
+| `regime` | crypto | BTC, ETH (+ RSI≥70 refinement, BTC only) — SOL has no validated combo, so `_regime_subjects()` never yields it today | `REGIME_VALIDATED_COMBOS`, `src/ui/speculation.py` |
+
+`SR_VALIDATED_TICKERS` (Cripto's own S/R engine) is `{}` today — no `SignalDefinition` for it
+yet; add one (ecosystem `"crypto"`) the day something there validates.
+
+`subjects()` is usually a bare ticker, but the `sr` family's is a composite id
+(`f"{ticker}:{kind}"`, e.g. `"TSLA:support"`) because that family needs finer granularity than
+one-per-ticker (a ticker could validate both support AND resistance) — `evaluate()` is the only
+thing that needs to know a subject's internal shape; `run_ecosystem_signals()` treats every
+subject as an opaque string. The dedupe key in `tactical_signal_state.json` is
+`f"{subject}:{definition.key}"` (e.g. `"TSLA:support:sr"`) — this reshaped the `sr` family's old
+key (`"TSLA:sr_support"`, from before this registry existed) once, a one-time harmless
+migration: the new key started with no prior state, so its first run correctly didn't notify
+(same "no baseline, no alert" rule as everywhere else) rather than firing spuriously.
+
+Both scripts run on a **schedule** (`.github/workflows/telegram_signals.yml`, cron **every
+hour** + `workflow_dispatch` for a manual test run) — user's explicit choice. Honest caveat worth
+keeping in mind: all 4 families are validated on **daily** bars — checking hourly doesn't surface
+new information between one close and the next; most hourly runs will find nothing changed
+(that's expected, not a bug) and send nothing. Reuses `evaluate_drawdown_zone()`
+(`src/ui/portfolio.py`, extracted from `_render_portfolio_analysis()` once a script became its
+second real caller — UI rendering unchanged, verified via `AppTest`) and a new pure
+`find_qualifying_zone_hit()` (`src/support_resistance.py`, added alongside — a new function, not
+a refactor of the existing button-gated UI code in `render_speculation()`/`render_crypto()`,
+intentionally left untouched to avoid any risk to working UI).
+
+Three enrichments were confirmed with the user before building (`AskUserQuestion`), all pure
+reuse — none is a new signal, and each is added to the Telegram message only, never changing
+what triggers an alert: (1) the ticker's last recorded valuation verdict from
+`verdict_history.json` (`load_verdict_history()` — no new fetch); (2) the user's real Portfolio
+holdings for that ticker's CDI, if any (`UNDERLYING_TO_CDI`, the reverse of
+`PORTFOLIO_CDI_UNDERLYING`, + `load_purchases()`/`load_sales()`/`average_buy_price_by_ticker()`
+— shares net of sales, no current-price fetch needed for this); (3) RSI + trend regime, always
+labeled "para referencia" and never treated as part of the validated signal (same descriptive-
+only standing as ADX/OBV in the UI) — `classify_regime_series(closes)[-1]` doubles as both the
+crypto regime signal itself AND its own descriptive trend label, no extra computation. Crypto
+skips enrichments (1) and (2) entirely and says so in the message — this app tracks no
+fundamental verdict or Portfolio holdings for crypto.
+
+**State persistence across scheduled runs (`app_data/tactical_signal_state.json`,
+`src/tactical_signal_state.py`)**: GitHub Actions starts from a clean checkout every run, so
+without this the scripts would "forget" what they already alerted on and could re-notify on
+every hourly tick. Same fix already used for `portfolio_data/` (explicit, confirmed choice, not
+the default cache/artifact route): the workflow's last step commits the updated state file back
+to the repo (`[skip ci]` in the commit message avoids the commit triggering another run) — both
+scripts run sequentially in the SAME job (not parallel jobs) specifically to avoid a write race
+on that one shared file. Simpler than `verdict_history.json` on purpose — this only needs "what
+was the last known state," not a growing log, so `record_state(key, state)` just overwrites and
+returns `(previous, changed)`.
 
 ## Known data caveats (already handled deliberately — don't "fix" without re-reading the comment)
 

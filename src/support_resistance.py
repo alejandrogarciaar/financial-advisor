@@ -1298,6 +1298,23 @@ def score_percentile_threshold(levels: list[SRLevel], kind: str, percentile: flo
     return float(np.percentile(scores, percentile))
 
 
+def find_qualifying_zone_hit(
+    levels: list[SRLevel], kind: str, current_price: float, score_threshold: float
+) -> SRLevel | None:
+    """El mismo chequeo "¿el precio de hoy está dentro de la zona de algún nivel `kind` con
+    confidence_score >= score_threshold?" que ya hacían render_speculation()/render_crypto()
+    inline (uno por uno, sobre la lista completa) — factorizado como función pura para que un
+    script fuera de Streamlit (alertas tácticas) pueda reusar el mismo criterio sin duplicarlo.
+    Devuelve el primer nivel calificado que efectivamente contiene el precio (no todos — mismo
+    comportamiento que el `any(...)` que reemplaza), o None si ninguno califica."""
+    for lv in levels:
+        if lv.kind != kind or lv.confidence_score < score_threshold or lv.zone_low is None:
+            continue
+        if lv.zone_low <= current_price <= lv.zone_high:
+            return lv
+    return None
+
+
 @dataclass
 class LevelZoneReaction:
     horizon_days: int

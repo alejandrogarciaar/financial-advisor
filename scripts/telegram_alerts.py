@@ -19,8 +19,6 @@ import os
 import sys
 from pathlib import Path
 
-import requests
-
 # La consola de Windows suele quedar en cp1252, que no puede codificar los emoji de los prints
 # de abajo (crashea con UnicodeEncodeError apenas el primer ⚠️/✅ llega a stdout) — a diferencia
 # de Streamlit (corre en el navegador, UTF-8 siempre), este es un script de terminal.
@@ -31,32 +29,14 @@ sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 
 from src.config import TICKERS
 from src.data.errors import DataError
+from src.telegram_client import enviar_telegram
 from src.valuation.fair_value import evaluate_ticker, summarize_signals
 from src.verdict_history import load_verdict_history, record_verdict
 
-TELEGRAM_TOKEN = os.environ.get("TELEGRAM_TOKEN")
-TELEGRAM_CHAT_ID = os.environ.get("TELEGRAM_CHAT_ID")
 PROVIDER = os.environ.get("TELEGRAM_ALERTS_PROVIDER", "yfinance")
 
 VERDICT_EMOJI = {"cheap": "🟢", "expensive": "🔴", "mixed": "🟡"}
 VERDICT_LABEL_ES = {"cheap": "barata", "expensive": "cara", "mixed": "mixta"}
-
-
-def enviar_telegram(mensaje: str) -> None:
-    if not TELEGRAM_TOKEN or not TELEGRAM_CHAT_ID:
-        print("  ⚠️ Faltan TELEGRAM_TOKEN o TELEGRAM_CHAT_ID en .env — no se mandó nada.")
-        return
-    url = f"https://api.telegram.org/bot{TELEGRAM_TOKEN}/sendMessage"
-    try:
-        r = requests.post(
-            url, data={"chat_id": TELEGRAM_CHAT_ID, "text": mensaje, "parse_mode": "HTML"}, timeout=10
-        )
-        if r.status_code != 200:
-            print(f"  ⚠️ Error Telegram: {r.status_code} | {r.text[:200]}")
-        else:
-            print("  ✅ Telegram enviado")
-    except Exception as exc:
-        print(f"  ⚠️ Error Telegram: {exc}")
 
 
 def formato_mensaje(ticker: str, summary: dict, price: float, verdicto_anterior: str) -> str:
