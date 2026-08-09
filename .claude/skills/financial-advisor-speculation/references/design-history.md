@@ -504,3 +504,76 @@ Verified live via `AppTest` for all 4 relevant cases (AAPL currently in golden-c
 raw number, green; TSLA and UBER currently in death-cross, both positive raw numbers, green;
 MSFT as an unvalidated ticker, correctly shows the "no evidence" caption instead) — 0 exceptions
 in every case.
+
+**Market-structure (BOS/CHoCH) signal from an external gold-trading bot was investigated and
+rejected (2026-08-09) — same multiple-comparisons fragility signature as ADX/OBV/Fibonacci/
+Wyckoff above.** The user shared a standalone XAU/USD Telegram-alert bot (SMC-style: M15 trend
+filter, M5 structure setup with order blocks/liquidity sweeps, M1 entry confirmation) while
+scoping the unrelated `scripts/telegram_alerts.py` feature (verdict-change notifications, see
+`CLAUDE.md`), and asked what could be extracted from it. Two pieces of that bot's logic —
+market-structure tracking (BOS: a close breaking a confirmed swing pivot; CHoCH: a BOS that also
+flips the prevailing bias) and liquidity-sweep detection — were identified as genuinely novel vs.
+anything in Especulación/Cripto today (RSI/MACD/Bollinger/ADX/OBV are all oscillators; nothing
+here tracks directional swing breaks). Rather than porting either straight into a tab, BOS/CHoCH
+was tested first, following this project's standing rule that nothing gets trusted without the
+same OOS treatment as every signal above.
+
+Extracted `pivot_high`/`pivot_low` + the `market_bias` bull_bos/bear_bos/bull_choch/bear_choch
+loop faithfully from the bot's source (a `left`/`right`-bar-confirmed swing pivot, no lookahead —
+the pivot at bar i genuinely isn't knowable until `right` bars later, matching how the bot's own
+live loop behaves, not a backtest bug). Real methodological compromise, disclosed rather than
+glossed over: the bot's `STRUCT_LEN=2` was designed for M5 candles (~10-minute swings); yfinance
+doesn't have enough intraday history for a chronological 60/40 split with a meaningful sample, so
+this ran on **daily** GC=F (gold futures, same Yahoo Finance symbol the bot itself used as its
+own fallback) instead — a materially different swing size than the strategy was built for, which
+is exactly why `STRUCT_LEN` was swept (2/3/5/10) rather than committed to one value, same
+fragility-check habit as every investigation above. Tested BOS and CHoCH separately, both
+directions (4 signal types × 4 `STRUCT_LEN` values × 4 horizons `[5, 10, 20, 30]` = 64 cells),
+against ~26 years of GC=F daily closes (2000-08-30 to 2026-08-07, 6,508 candles).
+
+Result: only 1 of the 16 (signal-type × `STRUCT_LEN`) combinations validated across all 4
+horizons — bullish BOS at `STRUCT_LEN=2` (train_gap +0.06% to +0.56%, test_gap +0.14% to +0.92%,
+same sign at every horizon, n=340-697) — and its own neighbors (`STRUCT_LEN=3/5/10`) each failed
+at least one horizon (mostly 20d/30d), the identical "looks good at one parameter, fails next
+door" pattern that sank ADX/OBV/Fibonacci/Wyckoff. Bearish BOS validated at 0 of 4 `STRUCT_LEN`
+values. CHoCH (the reversal-only subset, far fewer signals per variant — as few as 29-48
+train/test observations) validated at 0 of 4 for the bullish side and only 1 of 4
+(`STRUCT_LEN=10`, bearish, n as low as 14-15 — right at the `min_observations=15` floor) for the
+bearish side. Conclusion: market structure (BOS/CHoCH), at least as tested here, does not clear
+this project's validation bar — not built into Especulación, Cripto, or the Telegram alert
+script. Liquidity-sweep detection (the other piece flagged as novel) was NOT tested this session;
+if revisited, test it the same way before shipping it either. Do not re-add BOS/CHoCH signal
+code on the strength of the lone `STRUCT_LEN=2` bullish-BOS result without redoing this test
+(ideally on intraday data closer to the bot's original M5 design, if a data source with enough
+history for a real train/test split becomes available) and getting a cleaner outcome across
+neighboring parameters than what this session found. Ran as a throwaway scratchpad script
+(`run_oos_validation_sweep` from `scripts/oos_validate.py`, not committed) — not part of the
+repo.
+
+**Re-run same day on 30-minute GC=F candles — bearish BOS looked clean (16/16 cells), but this
+is read as a single-regime artifact, not a stronger confirmation, and the rejection above
+stands.** Requested explicitly to get closer to the bot's original M5 design than the daily run
+above managed. yfinance caps 30m history at roughly 60-70 calendar days for this symbol (2,266
+candles, 2026-05-29 to 2026-08-07) — the honest tradeoff is the reverse of the daily run's: much
+closer to the bot's real timeframe, but only ~2.5 months of one continuous market move (gold fell
+from ~$4,531 to ~$4,397 over the whole window) instead of 26 years spanning many regimes.
+Horizons `[5, 10, 20, 30]` are 30-minute BARS here (2.5h–15h forward), not calendar days.
+
+Bearish BOS validated at all 4 swept `STRUCT_LEN` values (2/3/5/10), all 4 horizons each — 16/16
+cells, zero threshold-fragility on its own terms (e.g. `STRUCT_LEN=5`: train_gap -0.20% to -0.51%,
+test_gap -0.14% to -0.38%, n=76-197). Read in isolation this would clear the bar. It is **not**
+trusted anyway, for a reason specific to this data window rather than the fragility check: train
+and test here are just the earlier and later halves of the *same* ~2.5-month downtrend, not two
+genuinely different market conditions — `run_oos_validation`'s baseline subtraction already nets
+out each half's own average drift, but a bearish-continuation signal validating cleanly during a
+period that was, start to finish, one continuous decline is exactly the setup where a real effect
+and "the trend kept going" are hardest to tell apart. The daily run above — 26 years, many
+regimes, the far more powerful test — found bearish BOS did NOT validate at any `STRUCT_LEN`. A
+short, single-regime window "confirming" what a multi-decade, multi-regime window rejected is a
+reason for *more* suspicion of the short window, not less (same logic already applied when two
+tickers validated Wyckoff Spring in opposite directions at different lookbacks, above — agreement
+that only shows up in a narrow slice isn't corroboration). Bullish BOS and both CHoCH directions
+still failed on 30m too (CHoCH sample sizes as thin as 10-35 total signals, mostly below
+`min_observations`). Conclusion unchanged: nothing from this ships. If revisited with a data
+source that has enough 30m/M5 history to cover more than one regime, that would be the version of
+this test actually worth trusting.

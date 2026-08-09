@@ -138,6 +138,7 @@ mapa es solo para ubicarse rápido, no para reemplazar esa lectura.
 | `verify_app.py` | Smoke test de las 6 pestañas vía `AppTest`, sin navegador. |
 | `run_app.sh` / `stop_app.sh` | Arrancar/parar el servidor Streamlit local (puerto libre, health check, kill confiable por línea de comando). |
 | `add_sale.py` | Agrega una venta a `portfolio_data/sales.json` desde la terminal, validada igual que la tabla "Tus ventas" de la UI — para registrar una venta dictada por chat sin abrir el navegador. |
+| `telegram_alerts.py` | Manda una alerta de Telegram por ticker cuyo veredicto cambió desde el último registro — corrida manual, no programada. |
 
 ## Skills (`.claude/skills/`)
 

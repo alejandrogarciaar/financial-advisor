@@ -395,6 +395,21 @@ no latency to any other tab's rerun even though `st.tabs()` isn't lazy (see abov
   chart (dataviz skill's "a table view exists" companion for any chart carrying meaning in
   color).
 
+**`scripts/telegram_alerts.py`**: sends a Telegram message per ticker whose verdict changed
+since the last recorded entry — deliberately a manual, on-demand script (user's explicit choice,
+2026-08-09), not wired to any scheduler (cron/GitHub Actions/Task Scheduler) yet; revisit only if
+asked. Computes nothing new — calls the exact same `evaluate_ticker()` / `summarize_signals()` /
+`record_verdict()` as `render_list()`/`render_detail()`, so running it also backfills
+`verdict_history.json` on days nobody opened the dashboard, rather than keeping a second
+"last notified" state file that could drift from what Validación's chart shows. The alert
+trigger is intentionally the already-validated valuation verdict, not a new signal — the same gold
+bot's market-structure (BOS/CHoCH) logic was floated as a possible addition to Especulación/
+Cripto, then actually OOS-tested (not just flagged as a future idea) and did NOT clear this
+project's validation bar — see `financial-advisor-speculation`'s design-history for the full
+result; nothing from that bot went into any tab or into this alert. Needs `TELEGRAM_TOKEN` /
+`TELEGRAM_CHAT_ID` in `.env` (free, created via `@BotFather`); like `FMP_API_KEY`, their absence
+prints a warning and skips sending rather than crashing.
+
 ## Known data caveats (already handled deliberately — don't "fix" without re-reading the comment)
 
 - `src/config.py` excludes CSPXCO (an ETF, no financial statements) and NU (blocked on FMP's
