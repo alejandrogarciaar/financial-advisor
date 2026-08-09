@@ -40,6 +40,7 @@ def record_verdict(ticker: str, summary: dict, price: float) -> None:
             "fair": summary["fair"],
             "expensive": summary["expensive"],
             "price": price,
+            "family_margins": summary.get("family_margins", {}),
         }
     )
     VERDICT_HISTORY_FILE.parent.mkdir(exist_ok=True)

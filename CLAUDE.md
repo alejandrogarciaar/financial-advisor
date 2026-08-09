@@ -191,6 +191,25 @@ actually scoped to this tab, unlike this file which loads on every conversation.
 `(fair_value - price) / price` into "Acumulación fuerte" / "Acumulación" / "Precio justo" /
 "Sobrevalorado", calibrated to the classic Graham/Buffett margin-of-safety bands.
 
+**DCF range table and family fair-value evolution chart (`src/ui/stocks.py`)**: two additions to
+the detail page, both surfacing numbers that already existed rather than computing anything new.
+`render_dcf_range_table()` replaces the DCF method card's old plain-text "Rango: $X — $Y"
+caption with a small table (Pesimista/Base/Optimista, each with $ value and % vs. today's price)
+— first built as a compact Plotly range-bar chart, replaced with this table same-session on user
+feedback that the mini-chart didn't read any clearer than text in that little a space; a table
+did. `render_family_fair_value_chart()` is new state consumption, not a new
+computation: it plots price vs. each of the 3 `SIGNAL_FAMILIES`' fair value in dollars
+(`price_that_day × (1 + family_margin_that_day)`) across `verdict_history.json`'s daily entries
+(see "Verdict-history section" above for the `family_margins` field this reads) — same "starts
+accumulating from whenever this shipped, skip the chart below 2 points" honesty pattern as
+Validación's own verdict-history chart, and a `st.dataframe` table view underneath for the same
+reason that chart has one. Unlike `VERDICT_COLOR`/`ZONE_COLOR`, the 3 families genuinely need
+categorical (identity) color — they're 3 co-equal series the reader must tell apart, not a
+status — so `FAMILY_COLOR`/`FAMILY_SHORT_LABEL` in `stocks.py` assign fixed slots by
+`zip()`-ing `SIGNAL_FAMILIES`' iteration order against 3 hex values (not a literal dict keyed by
+the family name strings), so a future rename of a family's display text in `fair_value.py`
+can't silently desync the color/label from the family it's supposed to describe.
+
 **`st.tabs()` is not lazy**: all 6 tabs' bodies execute every rerun, in fixed script order —
 `tab_acciones` → `tab_validacion` → `tab_etfs` → `tab_especulacion` → `tab_cripto` → `tab_capital` (Acciones,
 Validación, ETFs, Especulación, Cripto, then Portafolio always last, by user request) — regardless of
@@ -348,7 +367,12 @@ no latency to any other tab's rerun even though `st.tabs()` isn't lazy (see abov
 - **Verdict-history section** is genuinely new state, not a recomputation: `src/verdict_history.py`
   (same `app_data/` pattern as `src/preferences.py` — not reconstructible from an API, so it's
   gitignored but lives outside `.cache/`) persists one `{date, verdict, headline, cheap, fair,
-  expensive, price}` entry per ticker per calendar day to `app_data/verdict_history.json`.
+  expensive, price, family_margins}` entry per ticker per calendar day to
+  `app_data/verdict_history.json`. `family_margins` (`{family: median_margin}`, added alongside
+  Acciones' own fair-value-evolution chart below — not used by this Validación section) is
+  `summarize_signals()`'s per-family median margin, the same number that already decided each
+  family's zone — entries recorded before this field existed simply lack the key, which the
+  chart below treats as "no data that day" rather than 0.
   `record_verdict()` dedupes on `entries[-1]["date"] == today` so it's safe to call more than
   once; `_maybe_record_verdict()` in `src/ui/stocks.py` additionally gates on a
   `st.session_state["_verdict_recorded_today"]` set so a session with many reruns (every widget

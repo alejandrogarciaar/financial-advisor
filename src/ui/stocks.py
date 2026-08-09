@@ -3,12 +3,14 @@
 puntos donde se computa un resumen de TICKERS y por eso los dos únicos que llaman
 `_maybe_record_verdict()` (historial de veredictos, ver `financial-advisor-validation`)."""
 
+import pandas as pd
+import plotly.graph_objects as go
 import streamlit as st
 
 from src.config import TICKERS
 from src.data.errors import DataError
 from src.preferences import load_selected_tickers, save_selected_tickers
-from src.verdict_history import record_verdict
+from src.verdict_history import load_verdict_history, record_verdict
 from src.ui.shared import (
     ZONE_COLOR,
     STOCK_EVAL_CACHE_KEY,
@@ -23,6 +25,7 @@ from src.ui.shared import (
 )
 from src.valuation.fair_value import (
     PROVIDERS,
+    SIGNAL_FAMILIES,
     compare_providers,
     multiple_quality_context_note,
     quality_context_note,
@@ -31,6 +34,14 @@ from src.valuation.fair_value import (
 )
 
 PROVIDER_LABELS = {"fmp": "Financial Modeling Prep", "yfinance": "yfinance"}
+
+# Colores categóricos fijos (no de estado) para distinguir las 3 familias en el gráfico de
+# evolución — a diferencia de ZONE_COLOR (verde/ámbar/rojo), que es de ESTADO (barata/cara) y
+# está reservado para eso en toda la app. zip() con SIGNAL_FAMILIES (no un dict literal por
+# nombre de familia) para que el orden/color no se desincronice en silencio si el texto de una
+# familia cambia en fair_value.py.
+FAMILY_COLOR = dict(zip(SIGNAL_FAMILIES, ["#2a78d6", "#eb6834", "#1baf7a"]))
+FAMILY_SHORT_LABEL = dict(zip(SIGNAL_FAMILIES, ["DCF", "Valor patrimonial", "Múltiplos"]))
 
 # El Portafolio solo acepta los CDIs colombianos (GOOGLCO, ...), no las acciones en USD de
 # TICKERS — las compras reales del usuario se hacen en pesos vía estos CDIs. No participan
@@ -235,11 +246,96 @@ def explain_analyst_view(evaluation) -> str:
     return " ".join(parts) if parts else "No hay suficiente información de analistas para explicar esta sección."
 
 
+def render_dcf_range_table(evaluation):
+    """Los 3 escenarios del DCF (y el valor esperado ponderado) ya se calculaban en dcf.py — esto
+    solo les da una tabla legible en la tarjeta en vez de enterrarlos en una caption de texto o en
+    el expander técnico. Se probó primero como mini-gráfico de rango; se descartó por no aportar
+    lectura más clara que una tabla simple en un espacio tan chico (feedback del usuario)."""
+    d = evaluation.dcf
+    price = evaluation.current_price
+    rows = [
+        ("Pesimista", d.pessimistic.fair_value_per_share),
+        ("Base (esperado)", d.fair_value_per_share),
+        ("Optimista", d.optimistic.fair_value_per_share),
+    ]
+    df = pd.DataFrame(
+        [
+            {"Escenario": label, "Valor": f"${value:,.2f}", "vs. precio hoy": f"{(value - price) / price:+.0%}"}
+            for label, value in rows
+        ]
+    )
+    st.dataframe(df, hide_index=True, use_container_width=True)
+
+
+def render_family_fair_value_chart(ticker: str):
+    """Cómo cambió, día a día, el fair value en dólares de cada FAMILIA (no fórmula suelta —
+    mismas 3 de summarize_signals) contra el precio real. Reusa el registro que ya alimenta
+    Validación (`app_data/verdict_history.json`, vía `family_margins`, agregado junto con este
+    gráfico) — no es un cálculo nuevo, es la misma mediana de márgenes que ya decide la zona de
+    cada familia, convertida a dólares con el precio de ESE día ($ = precio_día × (1+margen))."""
+    history = [e for e in load_verdict_history(ticker) if e.get("family_margins")]
+    if len(history) < 2:
+        st.caption(
+            "Todavía no hay suficiente historial para graficar esto — se registra automáticamente "
+            "una vez por día, la primera vez que ves esta acción. Volvé a revisar en unos días."
+        )
+        return
+
+    fig = go.Figure()
+    fig.add_trace(
+        go.Scatter(
+            x=[e["date"] for e in history],
+            y=[e["price"] for e in history],
+            mode="lines+markers",
+            name="Precio",
+            line=dict(color="#898781", width=2, dash="dot"),
+            marker=dict(size=6),
+            hovertemplate="Precio: $%{y:,.2f}<extra></extra>",
+        )
+    )
+    for family in SIGNAL_FAMILIES:
+        xs = [e["date"] for e in history if family in e["family_margins"]]
+        ys = [e["price"] * (1 + e["family_margins"][family]) for e in history if family in e["family_margins"]]
+        if not xs:
+            continue
+        fig.add_trace(
+            go.Scatter(
+                x=xs, y=ys, mode="lines+markers",
+                name=FAMILY_SHORT_LABEL[family],
+                line=dict(color=FAMILY_COLOR[family], width=2),
+                marker=dict(size=6),
+                hovertemplate=f"{FAMILY_SHORT_LABEL[family]}: $" + "%{y:,.2f}<extra></extra>",
+            )
+        )
+    fig.update_layout(
+        plot_bgcolor="rgba(0,0,0,0)",
+        paper_bgcolor="rgba(0,0,0,0)",
+        font=dict(color="#898781"),
+        legend=dict(orientation="h", yanchor="bottom", y=1.02, xanchor="left", x=0),
+        margin=dict(l=10, r=10, t=10, b=10),
+        height=320,
+        xaxis=dict(showgrid=False),
+        yaxis=dict(tickprefix="$", gridcolor="rgba(128,128,128,0.2)"),
+    )
+    st.plotly_chart(fig, use_container_width=True)
+
+    table_rows = []
+    for e in reversed(history):
+        row = {"Fecha": e["date"], "Precio": f"${e['price']:,.2f}"}
+        for family in SIGNAL_FAMILIES:
+            margin = e["family_margins"].get(family)
+            row[FAMILY_SHORT_LABEL[family]] = f"${e['price'] * (1 + margin):,.2f}" if margin is not None else "—"
+        table_rows.append(row)
+    st.dataframe(pd.DataFrame(table_rows), hide_index=True, use_container_width=True)
+
+
 def render_method_card(method: dict):
     st.markdown(f"#### {method['title']}")
     if method["value"] is not None:
         st.metric(method["metric_label"], method["value"], f"{method['margin']:+.1%}")
-        if method.get("extra_caption"):
+        if method.get("range_table"):
+            method["range_table"]()
+        elif method.get("extra_caption"):
             st.caption(method["extra_caption"])
         st.markdown(zone_badge(method["zone"]), unsafe_allow_html=True)
     else:
@@ -555,10 +651,7 @@ def render_detail(ticker: str):
             "metric_label": "Valor esperado (pesimista/base/optimista)",
             "value": f"${evaluation.dcf.fair_value_per_share:,.2f}",
             "margin": evaluation.dcf_margin,
-            "extra_caption": (
-                f"Rango: ${evaluation.dcf.pessimistic.fair_value_per_share:,.2f} — "
-                f"${evaluation.dcf.optimistic.fair_value_per_share:,.2f}"
-            ),
+            "range_table": lambda: render_dcf_range_table(evaluation),
             "zone": evaluation.dcf_zone,
             "explain": explain_dcf(evaluation),
         },
@@ -618,6 +711,15 @@ def render_detail(ticker: str):
     if not_applicable_methods:
         st.markdown("##### ➖ No aplican para esta empresa")
         render_method_grid(not_applicable_methods)
+
+    st.divider()
+    st.subheader("📈 Evolución del fair value por familia")
+    st.caption(
+        "Cómo cambió el precio contra el fair value de cada familia, día a día. Se registra "
+        "automáticamente, una vez por día, la primera vez que ves esta acción — no hay forma de "
+        "reconstruir esto para días pasados que la app no vio."
+    )
+    render_family_fair_value_chart(ticker)
 
     st.divider()
 

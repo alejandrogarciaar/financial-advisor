@@ -126,11 +126,14 @@ def summarize_signals(evaluation: TickerEvaluation) -> dict:
     mediana de sus miembros disponibles. El filtro de calidad (ROIC vs WACC) NO entra acá —
     es una pregunta distinta ('¿crea valor?') y mezclarla distorsionaría el conteo de precio."""
     family_zones = {}
+    family_margins = {}
     for family, fields in SIGNAL_FAMILIES.items():
         margins = [getattr(evaluation, f) for f in fields]
         margins = [m for m in margins if m is not None]
         if margins:
-            family_zones[family] = classify_margin(_median(margins))
+            median_margin = _median(margins)
+            family_margins[family] = median_margin
+            family_zones[family] = classify_margin(median_margin)
 
     zones = list(family_zones.values())
     cheap = sum(1 for z in zones if z in CHEAP_ZONES)
@@ -162,6 +165,7 @@ def summarize_signals(evaluation: TickerEvaluation) -> dict:
         "headline": headline,
         "verdict": verdict,
         "family_zones": family_zones,
+        "family_margins": family_margins,
     }
 
 
