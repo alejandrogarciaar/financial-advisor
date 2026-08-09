@@ -243,10 +243,11 @@ class DrawdownZoneEvaluation:
 def evaluate_drawdown_zone(ticker: str) -> DrawdownZoneEvaluation | None:
     """Selección de base (COP nativo del CDI si tiene franja validada ahí, si no USD del
     subyacente) + clasificación de bucket/zona — exactamente la lógica que `_render_portfolio_analysis()`
-    calculaba inline antes de esta función existir, factorizada porque
-    `scripts/telegram_tactical_signals.py` (fuera de Streamlit) también la necesita: dos
-    llamadores reales ya justifican extraerla, no antes. None si no hay suficiente historial
-    todavía (mismo criterio que `current_drawdown_snapshot`)."""
+    calculaba inline antes de esta función existir, factorizada porque un segundo llamador real
+    (un script de alertas de Telegram, después extraído a su propio repo,
+    `market-signals-telegram`, que hoy la importa directo de acá vía checkout hermano) también la
+    necesitaba: dos llamadores reales ya justifican extraerla, no antes. None si no hay
+    suficiente historial todavía (mismo criterio que `current_drawdown_snapshot`)."""
     kind, underlying = PORTFOLIO_CDI_UNDERLYING[ticker]
     symbol = underlying if kind == "stock" else ETF_TICKERS[underlying]
     try:
@@ -516,8 +517,8 @@ def _render_portfolio_analysis(purchases: pd.DataFrame, sales: pd.DataFrame) -> 
 
             # Selección de base (COP nativo del CDI si tiene franja validada ahí, si no USD del
             # subyacente) + clasificación de bucket/zona — factorizado en evaluate_drawdown_zone()
-            # (arriba en este archivo) para que scripts/telegram_tactical_signals.py (fuera de
-            # Streamlit) pueda reusar exactamente el mismo criterio sin duplicarlo.
+            # (arriba en este archivo) para que un llamador externo (hoy: market-signals-telegram,
+            # ver su docstring) pueda reusar exactamente el mismo criterio sin duplicarlo.
             evaluation = evaluate_drawdown_zone(ticker)
 
             with plan_cols[i % 2]:

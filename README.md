@@ -129,9 +129,6 @@ mapa es solo para ubicarse rápido, no para reemplazar esa lectura.
 | `backtest.py` | ¿El veredicto de hace N años habría anticipado el retorno real? Limitaciones documentadas en su propio docstring. |
 | `preferences.py` | Persiste el filtro de tickers de Acciones entre reinicios (`app_data/preferences.json`). |
 | `verdict_history.py` | Historial diario de veredictos por ticker (`app_data/verdict_history.json`). |
-| `telegram_client.py` | `enviar_telegram()` — envío de mensajes a Telegram, compartido por los 3 scripts de alertas. |
-| `tactical_signal_state.py` | Último estado conocido de cada señal táctica, para detectar cambios (`app_data/tactical_signal_state.json`). |
-| `tactical_signals.py` | Registro central de señales tácticas ya validadas (`SIGNAL_REGISTRY`) + `run_ecosystem_signals()` — único lugar a tocar para agregar una estrategia nueva; los scripts de Telegram solo filtran por ecosistema. |
 
 ### `scripts/` — procesos delegados a CPU (no LLM)
 
@@ -141,9 +138,6 @@ mapa es solo para ubicarse rápido, no para reemplazar esa lectura.
 | `verify_app.py` | Smoke test de las 6 pestañas vía `AppTest`, sin navegador. |
 | `run_app.sh` / `stop_app.sh` | Arrancar/parar el servidor Streamlit local (puerto libre, health check, kill confiable por línea de comando). |
 | `add_sale.py` | Agrega una venta a `portfolio_data/sales.json` desde la terminal, validada igual que la tabla "Tus ventas" de la UI — para registrar una venta dictada por chat sin abrir el navegador. |
-| `telegram_alerts.py` | Manda una alerta de Telegram por ticker cuyo veredicto cambió desde el último registro — corrida manual, no programada. |
-| `telegram_stock_signals.py` | Alertas tácticas del ecosistema stocks (drawdown/golden-cross/S-R) — filtra `SIGNAL_REGISTRY` por `ecosystem="stocks"`. Programado (cada hora) vía `.github/workflows/telegram_signals.yml`. |
-| `telegram_crypto_signals.py` | Alertas tácticas del ecosistema crypto (régimen BTC/ETH/SOL) — filtra `SIGNAL_REGISTRY` por `ecosystem="crypto"`. Mismo workflow que el de arriba. |
 
 ## Skills (`.claude/skills/`)
 
