@@ -342,6 +342,50 @@ session — full design history, the real bugs found and fixed while building it
 validation results live in `.claude/skills/financial-advisor-cripto/SKILL.md`; invoke that skill before
 touching this tab.
 
+**Fear & Greed Index (`src/data/fear_greed_client.py`, `render_fear_greed_index()` in
+`src/ui/cripto.py`)**: one external, well-known market-sentiment gauge (alternative.me, no API
+key) — genuinely different from every other `src/data/*.py` client in that it takes no symbol at
+all, since there's only ONE value for the whole crypto market, not one per BTC/ETH/SOL. Rendered
+as **static** content, above the ticker selectbox and its own `st.divider()`, specifically so it
+reads as independent of whatever ticker is chosen below (verified via `AppTest`: switching the
+selectbox leaves this section's caption byte-for-byte identical). Same standing as ADX/OBV —
+shown descriptively because it's a standard, widely-cited index, not because this project
+validated it; the caption says so explicitly. The gauge's red→green band coloring is a
+deliberate exception to this project's usual palette choices: it's the universally recognized
+convention for this specific index everywhere it's displayed, so matching that (rather than a
+generic diverging pair) is the more accessible/recognizable choice here. Classification label
+("Miedo"/"Codicia"/etc.) always renders as visible text via `fear_greed_badge()` — same
+`zone_badge()`/`quality_badge()` HTML pattern used elsewhere, never color-alone. Cached at
+`ttl=3600` (the index only updates once a day upstream, unlike price at 900s).
+
+`FEAR_GREED_BANDS`/`FEAR_GREED_LABEL_ES`/`_cached_fear_greed_index()`/`fear_greed_badge()` live
+in `src/ui/shared.py`, not `cripto.py` — moved there once the "📋 Plan de DCA sugerido" box in
+`src/ui/speculation.py` (the `is_crypto` branch of `render_speculation_indicators()`) became a
+second real caller, same threshold this project always uses before extracting to `shared.py`.
+That box now cross-references today's Fear & Greed reading against whichever regime message it
+already shows (`st.caption`, unconditional — runs regardless of which of the 3 regime branches
+fired), disclosing a real OOS finding tested the same session: Fear & Greed DOES correlate with
+BTC/ETH forward returns at moderate thresholds (≤45/≥55), but in the momentum direction (fear →
+worse, greed → better), not the classic contrarian reversal story, and it does NOT add
+information beyond the already-validated regime signal (`REGIME_VALIDATED_COMBOS`) — same
+underlying momentum, tested and confirmed redundant via the identical within-regime-refinement
+methodology already used for the RSI-overbought check. See
+`financial-advisor-cripto`'s design-history for the full numbers. This caption is disclosure,
+not a new decision input — nothing about when the box shows `st.success`/`st.info` changed.
+
+**Wyckoff Spring (`render_wyckoff_spring()` in `src/ui/cripto.py`, own section, appended at the
+end of `render_crypto()`)**: rejected for the 8 stock `TICKERS` in
+`financial-advisor-speculation`'s design-history, then re-tested for BTC/ETH/SOL the same
+session as Fear & Greed above and validated cleanly for BTC/ETH (all 3 swept lookbacks
+10/20/30, all 4 horizons, no threshold-fragility) — but with the sign OPPOSITE to what Wyckoff
+theory claims a spring predicts (underperformance vs. the ticker's own average, not a bounce).
+SOL didn't validate. Deliberately NOT inside the shared `render_speculation_indicators()` (same
+reasoning as Golden Cross: never tested for stocks, must never silently appear in Especulación —
+verified via `AppTest` that exactly one such section exists app-wide). See
+`financial-advisor-cripto`'s design-history for the full numbers and the BTC-vs-ETH nuance
+(ETH's spring-day return is negative in absolute terms both train and test; BTC's is only
+below-average, not reliably negative outright).
+
 **"📊 Validación" tab (`render_validation()` in `src/ui/validation.py`)**: not a price signal like the other 4
 tabs — it's a check on how well the *existing* signals have performed, added after the user
 asked "what else could we add" and picked this + a rejected support/resistance idea (see above)

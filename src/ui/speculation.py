@@ -31,10 +31,12 @@ from src.support_resistance import (
     score_percentile_threshold,
 )
 from src.ui.shared import (
+    FEAR_GREED_LABEL_ES,
     SR_KIND_RGB,
     SR_METHOD_LABELS,
     SR_TIMEFRAME_LABELS,
     SR_TIMEFRAME_ORDER,
+    _cached_fear_greed_index,
     _cached_historical_prices,
     classify_trend_state,
     render_advanced_levels_chart,
@@ -300,6 +302,23 @@ def render_speculation_indicators(
                 + f" Sugerencia: mantené tu plan de DCA habitual en {ticker} sin cambios — no "
                 "hay base para pausar ni para acelerar compras."
             )
+
+        try:
+            fg_data, fg_meta = _cached_fear_greed_index()
+            fg_label = FEAR_GREED_LABEL_ES.get(fg_data["classification"], fg_data["classification"])
+            st.caption(
+                f"💬 Para contexto (no para decidir nada acá): el Índice de Miedo y Codicia "
+                f"cripto hoy está en **{fg_data['value']}/100 ({fg_label})** (pestaña Cripto, "
+                "arriba del selector). Se probó fuera de muestra si agrega algo a esta "
+                "recomendación (mismo split 60/40 que el refuerzo de RSI arriba) y el resultado "
+                "fue que SÍ hay una relación real para BTC/ETH — pero de **momentum, no la "
+                "reversión contraria** que suele asociarse a este índice (miedo predijo retorno "
+                "futuro peor que el promedio, codicia predijo mejor, validado en umbrales "
+                "moderados ≤45/≥55, no en sus extremos) — y no agrega información más allá del "
+                "régimen de arriba: es, en el fondo, la misma señal."
+            )
+        except DataError:
+            pass
 
     st.divider()
     st.subheader("MACD (12/26/9)")

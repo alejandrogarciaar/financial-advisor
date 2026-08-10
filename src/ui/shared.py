@@ -15,8 +15,49 @@ import plotly.graph_objects as go
 import streamlit as st
 
 from src.config import ETF_TICKERS, PORTFOLIO_CDI_TICKERS, RISK_FREE_RATE
+from src.data import fear_greed_client
 from src.valuation.etf_analysis import evaluate_etf
 from src.valuation.fair_value import PROVIDERS, evaluate_ticker
+
+# Bandas convencionales del Índice de Miedo y Codicia (0-100) — el rojo->verde es la paleta que
+# este índice específico usa en todas partes donde se lo ve (CNN, alternative.me, cualquier
+# widget de cripto), deliberadamente distinta de la paleta diverging azul/rojo default de este
+# proyecto — para ESTE índice puntual el rojo/verde ya es la convención reconocida. Vive acá (no
+# en cripto.py) porque tanto `render_fear_greed_index()` (Cripto, el gauge) como el "📋 Plan de
+# DCA sugerido" (Especulación/speculation.py, el cruce con el régimen) lo necesitan — 2
+# llamadores reales, mismo criterio de extracción que el resto de este archivo.
+FEAR_GREED_BANDS = [
+    (0, 25, "#d32f2f"),
+    (25, 45, "#f57c00"),
+    (45, 55, "#fbc02d"),
+    (55, 75, "#7cb342"),
+    (75, 100, "#388e3c"),
+]
+
+FEAR_GREED_LABEL_ES = {
+    "Extreme Fear": "Miedo extremo",
+    "Fear": "Miedo",
+    "Neutral": "Neutral",
+    "Greed": "Codicia",
+    "Extreme Greed": "Codicia extrema",
+}
+
+
+@st.cache_data(ttl=3600, show_spinner=False)
+def _cached_fear_greed_index():
+    # TTL de 1h, no los 900s de precio — alternative.me actualiza este índice una vez por día,
+    # no tiene sentido re-pedirlo tan seguido como el precio.
+    return fear_greed_client.get_fear_greed_index()
+
+
+def fear_greed_badge(color: str, label: str) -> str:
+    # Mismo patrón HTML que zone_badge()/quality_badge() más abajo — no una nueva convención
+    # visual para este índice.
+    return (
+        f'<span style="background:{color}22;color:{color};border:1px solid {color};'
+        f'padding:3px 12px;border-radius:12px;font-size:0.85rem;font-weight:600;'
+        f'white-space:nowrap;">{label}</span>'
+    )
 
 # colores de estado reservados: verde=atractivo, ámbar=razonable, rojo=caro
 ZONE_COLOR = {

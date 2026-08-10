@@ -10,11 +10,16 @@ validación fuera de muestra (pendiente de re-correr tras el rediseño)."""
 from datetime import datetime, timedelta
 
 import pandas as pd
+import plotly.graph_objects as go
 import streamlit as st
 
 from src.config import CRYPTO_BINANCE_SYMBOLS
 from src.data import binance_client
 from src.data.errors import DataError
+from src.speculation import (
+    classify_wyckoff_spring_series,
+    compute_wyckoff_spring_reactions,
+)
 from src.support_resistance import (
     SRConfig,
     SRLevel,
@@ -23,14 +28,112 @@ from src.support_resistance import (
     score_percentile_threshold,
 )
 from src.ui.shared import (
+    FEAR_GREED_BANDS,
+    FEAR_GREED_LABEL_ES,
     SR_KIND_RGB,
     SR_METHOD_LABELS,
     SR_TIMEFRAME_LABELS,
     SR_TIMEFRAME_ORDER,
+    _cached_fear_greed_index,
+    fear_greed_badge,
     render_advanced_levels_chart,
     render_sticky_price,
 )
 from src.ui.speculation import render_speculation_indicators
+
+
+def render_fear_greed_index() -> None:
+    """Índice de Miedo y Codicia (alternative.me) — UN solo valor para todo el mercado cripto, no
+    por ticker (ver docstring de `src/data/fear_greed_client.py`) — por eso se renderiza ANTES
+    del selector de ticker, como contenido estático que no cambia según qué ticker esté
+    seleccionado más abajo. Puramente descriptivo, no una señal validada por este proyecto —
+    mismo criterio de disclosure que ADX/OBV en Especulación."""
+    try:
+        data, meta = _cached_fear_greed_index()
+    except DataError as exc:
+        st.caption(f"No pudimos consultar el Índice de Miedo y Codicia ahora mismo. Detalle: {exc}")
+        return
+
+    value = data["value"]
+    label_es = FEAR_GREED_LABEL_ES.get(data["classification"], data["classification"])
+    band_color = next(color for lo, hi, color in FEAR_GREED_BANDS if lo <= value < hi or value >= 100 >= hi)
+
+    st.subheader("😨🤑 Índice de Miedo y Codicia (cripto)")
+    fig = go.Figure(
+        go.Indicator(
+            mode="gauge+number",
+            value=value,
+            number={"font": {"size": 36}},
+            gauge={
+                "axis": {"range": [0, 100], "tickcolor": "#898781"},
+                "bar": {"color": "rgba(11,11,11,0.55)", "thickness": 0.3},
+                "bgcolor": "rgba(0,0,0,0)",
+                "borderwidth": 0,
+                "steps": [{"range": [lo, hi], "color": color} for lo, hi, color in FEAR_GREED_BANDS],
+            },
+        )
+    )
+    fig.update_layout(
+        height=180,
+        margin=dict(l=20, r=20, t=10, b=10),
+        paper_bgcolor="rgba(0,0,0,0)",
+        font=dict(color="#898781"),
+    )
+    st.plotly_chart(fig, use_container_width=True, config={"displayModeBar": False})
+    st.markdown(fear_greed_badge(band_color, label_es), unsafe_allow_html=True)
+
+    cache_note = " (dato en caché — no pudimos actualizarlo recién)" if meta["from_cache"] else ""
+    st.caption(
+        f"Fuente: alternative.me, actualizado el {data['timestamp']}{cache_note}. Es un solo "
+        "valor para todo el mercado cripto, no cambia según el ticker elegido abajo, y es "
+        "puramente descriptivo — no es una señal validada por este proyecto."
+    )
+
+
+# Rechazado para las 8 acciones de TICKERS (ver design-history de financial-advisor-speculation) —
+# re-testeado para cripto y validado limpio para BTC/ETH en los 3 lookbacks barridos (10/20/30),
+# sin fragilidad de parámetro. SOL no validó en ningún lookback. El signo es AL REVÉS de la
+# teoría de Wyckoff — ver docstring de render_wyckoff_spring() y el design-history de
+# financial-advisor-cripto para el detalle completo y los números.
+WYCKOFF_SPRING_VALIDATED_TICKERS = {"BTC", "ETH"}
+
+
+WYCKOFF_SPRING_HEADLINE_HORIZON = 20  # un solo horizonte para la probabilidad — no una tabla
+
+
+def render_wyckoff_spring(ticker: str, historical_prices: list[dict], closes: list[float]) -> None:
+    """Sección PROPIA, no dentro de render_speculation_indicators() — mismo criterio que Golden
+    Cross en speculation.py: esto nunca se testeó para acciones, así que no debe aparecer
+    silenciosamente en Especulación. Reducido a lo mínimo por pedido directo del usuario (2 veces:
+    primero "no es para nada clara", después "puede ser más sencillo") — solo estado (¿hay un
+    spring activo hoy?) + una probabilidad, nada de tabla ni de explicación de la metodología."""
+    st.divider()
+    st.subheader("🌊 Wyckoff Spring")
+    if ticker not in WYCKOFF_SPRING_VALIDATED_TICKERS:
+        st.caption(f"Todavía no hay evidencia suficiente para {ticker}.")
+        return
+
+    lows = [p["low"] for p in historical_prices]
+    if len(lows) != len(closes) or not closes:
+        st.caption("No hay suficiente historial todavía para calcular esto.")
+        return
+
+    springs = classify_wyckoff_spring_series(lows, closes)
+    reactions = {r.horizon_days: r for r in compute_wyckoff_spring_reactions(lows, closes)}
+
+    if springs and springs[-1]:
+        st.error(f"🔴 Spring activo hoy en {ticker}.")
+    else:
+        st.info(f"⚪ Sin spring activo hoy en {ticker}.")
+
+    r = reactions.get(WYCKOFF_SPRING_HEADLINE_HORIZON)
+    if r is not None and r.win_rate is not None:
+        st.metric(
+            f"Probabilidad histórica de que {ticker} suba a los {WYCKOFF_SPRING_HEADLINE_HORIZON} días de un spring",
+            f"{r.win_rate:.0%}",
+        )
+    else:
+        st.caption("Sin observaciones suficientes todavía.")
 
 
 @st.cache_data(ttl=900, show_spinner=False)
@@ -140,6 +243,12 @@ def render_crypto():
         f"Datos de Binance (no yfinance) para BTC/ETH/SOL — más historia real (~5 años) y velas "
         "de 4h nativas. Especulación (acciones) sigue usando yfinance, sin cambios."
     )
+
+    # Contenido ESTÁTICO — no depende del selector de ticker de abajo (ver docstring de
+    # render_fear_greed_index()). Va primero y con su propio divider para que quede claro que no
+    # es parte de lo que cambia al elegir BTC/ETH/SOL más abajo.
+    render_fear_greed_index()
+    st.divider()
 
     crypto_tickers = list(CRYPTO_BINANCE_SYMBOLS.keys())
     ticker = st.selectbox("Ticker", crypto_tickers, key="sr_ticker")
@@ -376,3 +485,4 @@ def render_crypto():
     render_speculation_indicators(
         "crypto", ticker, historical_prices, closes, current_price, is_crypto=True, render_zone_engine=_render_zone_engine
     )
+    render_wyckoff_spring(ticker, historical_prices, closes)

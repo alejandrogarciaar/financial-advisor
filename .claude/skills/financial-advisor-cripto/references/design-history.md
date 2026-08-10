@@ -262,3 +262,168 @@ existing (unaffected) path. This is what eventually led to consolidating all of 
 into one tab (see the top of this section) — once BTC/ETH/SOL had their own dedicated data path,
 it stopped making sense to have their speculation indicators living in a different tab under a
 different data source (yfinance) than their S/R levels (Binance).
+
+**Fear & Greed Index added as static content (2026-08-10), then investigated as a possible
+signal and found redundant with the already-validated regime signal — shown descriptively only,
+same standing as ADX/OBV.** `render_fear_greed_index()` (`src/ui/cripto.py`) + `src/data/
+fear_greed_client.py` (alternative.me, no API key, one value for the whole crypto market — see
+that module's docstring for why it has no per-symbol parameter unlike every other `src/data/*`
+client) render above the ticker selectbox, outside anything the selectbox controls — verified via
+`AppTest` that switching BTC/ETH/SOL leaves this section byte-for-byte identical.
+
+Immediately after shipping it, the user asked whether Fear & Greed relates to strong trending
+moves — worth testing given the index's own "momentum/volume" component (~25% of its weight per
+alternative.me's methodology) already overlaps conceptually with this project's own regime
+classification. Ran the full OOS treatment (chronological 60/40 split, `scripts/oos_validate.py`,
+horizons `[5, 10, 20, 30]`, `min_observations=15`) against ~8.5 years of daily history
+(2018-02-01 onward, alternative.me's full available range) for BTC/ETH/SOL, throwaway script, not
+committed:
+
+1. **The moderate-threshold split (Miedo/"Fear or worse" ≤45 vs. Codicia/"Greed or better" ≥55)
+   validated cleanly for BTC and ETH — all 4 horizons, same sign, both train and test.** The
+   sign is the OPPOSITE of the classic contrarian narrative ("be greedy when others are fearful"):
+   Fear predicted returns WORSE than the unconditional mean, Greed predicted returns BETTER —
+   a momentum, not mean-reversion, signature. This is the same direction every other reversion
+   hypothesis tested in this project has landed on (RSI overbought showing persistence instead of
+   pullback, above; the rejected support/resistance proximity investigation in
+   `financial-advisor-speculation`'s design-history finding a heavily-touched level is more likely
+   to break than hold) — a repeating pattern across this project's tickers, not a one-off.
+2. **The TRUE extremes (Miedo/Codicia "extrema", ≤25/≥75 — exactly what the gauge's colored bands
+   highlight) did NOT validate for any ticker.** Sign flipped between train and test on most
+   horizons for BTC, ETH, and SOL alike — smaller samples (there are always fewer extreme days
+   than moderate ones) and noisier. Neither the contrarian story nor the momentum story holds up
+   specifically at the extremes with this history.
+3. **Refinement test — does Extreme Greed add anything BEYOND already being in a "fuerte" regime,
+   or is it the same signal restated?** Filtered to days already classified `"fuerte"` by
+   `classify_regime_series()` (`src/speculation.py`) and compared the Extreme-Greed subset's
+   forward return against the REST of the `"fuerte"` days specifically (not against all days —
+   same methodology as the RSI-overbought-within-regime refinement in
+   `financial-advisor-speculation`'s design-history). Failed for all 3 tickers, nearly every
+   horizon (one lone `[OK]` cell for BTC at 10d, nowhere near the "all 4 horizons" bar this
+   project requires). **Conclusion: whatever real signal Fear & Greed carries for BTC/ETH is
+   redundant with `REGIME_VALIDATED_COMBOS`** (`src/ui/speculation.py`) — same underlying
+   momentum, not incremental information, consistent with the index's own methodology already
+   folding in a momentum/volume component.
+4. SOL: none of the 4 direct conditions validated at all — shorter listing history (2020+),
+   noisier signs train-to-test.
+
+Nothing shipped as a NEW signal — `render_fear_greed_index()` stays exactly as built, purely
+descriptive with its existing "no es una señal validada por este proyecto" caption, same
+standing as ADX/OBV. What DID ship, same session, right after this investigation: the user asked
+to disclose findings (1)-(4) directly in the "📋 Plan de DCA sugerido" box itself (Especulación/
+`speculation.py`, the `is_crypto` branch), cross-referencing today's live Fear & Greed reading
+against whichever regime message that box already shows. This is disclosure, not a new trigger —
+the box's `st.success`/`st.info` branching logic (`regime_has_validated_edge`/`regime_rsi_edge`)
+is completely unchanged; the new `st.caption()` runs unconditionally alongside it, same pattern
+as the ADX/OBV disclosure captions elsewhere in that function. Required promoting
+`FEAR_GREED_BANDS`/`FEAR_GREED_LABEL_ES`/`_cached_fear_greed_index()`/`fear_greed_badge()` from
+`cripto.py` to `shared.py` (the DCA box lives in `speculation.py`, a second real caller — same
+threshold as everything else in `shared.py`). Do not build a "buy on Fear, sell on Greed" (or its
+momentum-flavored inverse) feature on the strength of finding (1) without first deciding it's
+worth surfacing as literally the same thing `REGIME_VALIDATED_COMBOS` already provides — the
+honest framing, if this is ever revisited, is "Fear & Greed is a rough, redundant proxy for the
+regime signal already in this app," not a new independent one.
+
+**Wyckoff Spring, rejected for the 8 stock `TICKERS` in `financial-advisor-speculation`'s design-
+history, was re-tested for BTC/ETH/SOL (2026-08-10) — and this time BTC and ETH validated
+cleanly, though the effect runs OPPOSITE to what Wyckoff theory claims a spring predicts.**
+Prompted by the user asking whether the stocks-only rejection had ever been checked against
+crypto — it hadn't. Same exact definition and methodology as the original stocks test (see that
+design-history entry for the full method): on day t, `support = min(low[t-lookback:t])`
+(trailing, excludes today), a spring fires when `low[t] < support` AND `close[t] >= support`
+(undercuts the recent range intraday, recovers same day) — chronological 60/40 split, horizons
+`[5, 10, 20, 30]`, `min_observations=15`, 3 lookbacks (10/20/30) swept up front, plus the same
+volume-confirmed variant (`volume[t] <` its own trailing 20-day average). Throwaway script, not
+committed, against ~8-9 years of Binance daily history per ticker (BTC/ETH since 2017-08; SOL
+since its 2020 listing).
+
+Price-only result: **BTC and ETH validated at ALL 3 lookbacks, all 4 horizons each — 24/24
+cells, zero threshold-fragility** (the textbook opposite of what sank ADX/OBV/Fibonacci/the
+stocks version of this same investigation). SOL: none of the 3 lookbacks validated (sign
+inconsistent train-to-test). The volume-confirmed variant failed for all three tickers — same
+pattern as the stocks investigation, the extra filter roughly halves the sample and mostly pushes
+cells below `min_observations` before a sign can even be checked.
+
+**The sign is backwards from the textbook interpretation, and the two validated tickers tell
+slightly different versions of that story — checked with the raw conditional means, not just the
+gap, before concluding anything:**
+- **ETH**: spring days show a NEGATIVE absolute mean forward return in BOTH train and test (e.g.
+  20d: -2.9% train / -2.4% test) while the unconditional baseline over the same periods is
+  strongly positive (+4.7% / +1.5%) — a real decline while the broader market kept climbing, not
+  merely "underperforms a strong average."
+- **BTC**: the gap vs. baseline is consistently negative across all 3 lookbacks (same validation
+  criterion), but the spring's own absolute return flips sign between train (negative, e.g. -3.5%
+  at 20d) and test (positive but below baseline, e.g. +1.8% vs. +2.4%) — "underperforms the
+  market" is the stable claim here, "loses money outright" is not.
+
+A Wyckoff spring is supposed to mark accumulation/a false breakdown ahead of a bounce — instead,
+in this data, it's associated with subsequent underperformance (ETH: outright decline) relative
+to how BTC/ETH behaved the rest of the time over the same ~8-9 years. Same class of result as
+Golden Cross above (AAPL/TSLA rendering worse in "golden cross" than "death cross") — a real,
+non-fragile, validated effect that contradicts the pattern's own textbook narrative, not a
+methodology bug.
+
+**Shipped same session, once the finding held up**: `render_wyckoff_spring()` in
+`src/ui/cripto.py`, its own section (like Golden Cross, NOT inside the shared
+`render_speculation_indicators()` — this never validated for stocks, so it must never silently
+appear in Especulación; verified via `AppTest` that exactly one "🌊 Wyckoff Spring" subheader
+exists across the whole app). `WYCKOFF_SPRING_VALIDATED_TICKERS = {"BTC", "ETH"}` gates it, same
+pattern as `STOCK_SR_VALIDATED_TICKERS`/`SR_VALIDATED_TICKERS`. The pure computation
+(`classify_wyckoff_spring_series()`, `WyckoffSpringReaction`,
+`compute_wyckoff_spring_reactions()`) lives in `src/speculation.py`, mirroring
+`classify_golden_cross_series()`/`compute_golden_cross_reactions()` — except a spring is a rare
+discrete EVENT, not a sustained regime, so there's no symmetric "non-spring" state worth
+computing; the UI computes the ticker's own unconditional mean per horizon inline instead, as the
+comparison baseline. `WYCKOFF_SPRING_LOOKBACK = 20` (the middle of the 3 swept lookbacks, all 3
+having validated — no single lucky parameter to defend). The message always shows the real gap
+number for whichever ticker is selected (never a generic "alcista"/"bajista" label, same rule as
+Golden Cross) and, whether or not a spring is active today, always states the caveat that this
+runs opposite to Wyckoff's own textbook claim — `st.error` (not `st.warning`) when a spring IS
+active today, matching this project's convention of giving a validated NEGATIVE finding the same
+visual weight `st.success` gets for validated positive ones (see Portfolio's AAPL distribution-
+zone finding for the same rule applied earlier).
+
+**Simplified twice, same session, on direct user feedback.** First pass: "no es para nada clara"
+— the dense one-line-per-horizon text (gap/win-rate/n all crammed together) became a plain
+3-column table (horizon, spring return, ticker's own average), and the stocks-didn't-validate
+aside was cut outright ("no interesa"). Second pass, after seeing that: "puede ser más sencillo"
+— cut further to just two things: an `st.error`/`st.info` state line ("Spring activo hoy" /
+"Sin spring activo hoy") and one `st.metric` with a single win-rate probability at a fixed
+`WYCKOFF_SPRING_HEADLINE_HORIZON = 20` days. No table, no methodology caveat, no baseline-
+comparison number in the visible UI anymore — all of that still lives in this file and in
+`CLAUDE.md`, not in the app itself. `WYCKOFF_SPRING_HORIZONS_DAYS` (all 4 horizons) is still what
+`compute_wyckoff_spring_reactions()` computes internally; the UI just reads the one entry it
+needs off that list now instead of looping over all four.
+
+**Upthrust (the Spring's mirror image, above resistance instead of below support) was tested for
+BTC/ETH/SOL the same session and did NOT clear this project's bar — nothing shipped.** The user
+asked directly whether Wyckoff's other named zones (accumulation/distribution, capitulation) were
+conventional theory; while explaining that Upthrust/UTAD is the genuine formal mirror of Spring
+(distribution's equivalent shakeout, above resistance instead of below support — "capitulación"
+is not formal Wyckoff vocabulary, it maps loosely onto "Selling Climax" within accumulation), the
+user asked to test it. Exact mirror definition: on day t, `resistance = max(high[t-lookback:t])`
+(trailing, excludes today), fires when `high[t] > resistance` (pokes above intraday) AND
+`close[t] <= resistance` (fails to hold, closes back at/below it same day). Same methodology as
+Spring — chronological 60/40 split, horizons `[5, 10, 20, 30]`, `min_observations=15`, 3
+lookbacks swept (10/20/30). Volume-confirmation variant tested `volume[t] >` its own trailing
+20-day average — the OPPOSITE direction from Spring's `<`, deliberately: Wyckoff literature
+characterizes a real Spring by LOW volume (no genuine supply pushing price down) but a real
+Upthrust/UTAD by HIGH volume (heavy distribution into the rally), so mirroring Spring's `<`
+verbatim would have tested the wrong theoretical claim.
+
+Result: price-only NEVER validated cleanly for any ticker at any lookback — every lookback
+failed at least the 5d and/or 10d horizon while 20d/30d tended to pass, an inconsistency-across-
+horizons pattern, not a threshold-fragility one, but disqualifying either way under this
+project's "all 4 horizons must hold" rule. The volume-confirmed variant (the theoretically
+correct one) showed a real directional signal — again backwards from Wyckoff theory, same as
+Spring (upthrusts predicted BETTER-than-average forward returns, not the decline UTAD is
+supposed to anticipate) — but with real threshold-fragility across the 3 swept lookbacks: ETH
+validated at 2 of 3 (10, 20), SOL at 2 of 3 (10, 30), BTC at only 1 of 3 (30). No ticker had all 3
+neighboring lookbacks agree, the exact "looks good at one parameter, fails next door" signature
+that sank ADX/OBV — a materially weaker result than Spring's clean 24/24 (BTC+ETH × 3 lookbacks
+× 4 horizons) with zero failures. Nothing shipped — no `render_upthrust()`, no
+`classify_upthrust_series()`. Do not add either without first getting a cleaner sweep than what
+this session found; noticing that 20d/30d horizons passed far more often than 5d/10d across
+nearly every variant is NOT grounds to retest looking only at those two — that would be exactly
+the post-hoc horizon-narrowing this project's methodology exists to prevent. Ran as a throwaway
+scratchpad script (not committed), same as every other investigation in this file.

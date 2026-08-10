@@ -456,3 +456,68 @@ def compute_regime_rsi_reactions(closes: list[float]) -> list[RegimeRsiReaction]
             RegimeRsiReaction(horizon, n_obs, float(vals.mean()), float((vals > 0).mean()))
         )
     return reactions
+
+
+# Wyckoff Spring: rechazado para las 8 acciones de TICKERS (ver design-history de
+# financial-advisor-speculation) — re-testeado para cripto (BTC/ETH/SOL, misma sesión que agregó
+# el Índice de Miedo y Codicia) y validó limpio para BTC/ETH en los 3 lookbacks (10/20/30), sin
+# fragilidad de parámetro. El signo es AL REVÉS de lo que dice la teoría de Wyckoff: un spring
+# se supone que anticipa un rebote alcista (falsa ruptura antes de acumulación), pero acá
+# anticipó peor retorno que el promedio del propio ticker (ETH: retorno absoluto negativo
+# mientras el mercado en general subía; BTC: por debajo del promedio, sin signo absoluto estable
+# entre train/test). SOL no validó en ningún lookback. Ver
+# WYCKOFF_SPRING_VALIDATED_TICKERS en src/ui/cripto.py para el scope exacto.
+WYCKOFF_SPRING_LOOKBACK = 20  # el del medio de los 3 (10/20/30) que se barrieron — los 3 validaron
+WYCKOFF_SPRING_HORIZONS_DAYS = REGIME_REACTION_HORIZONS_DAYS
+WYCKOFF_SPRING_MIN_OBSERVATIONS = REGIME_MIN_OBSERVATIONS
+
+
+def classify_wyckoff_spring_series(lows: list[float], closes: list[float], lookback: int = WYCKOFF_SPRING_LOOKBACK) -> list[bool]:
+    """Un spring dispara en el día i si `lows[i]` perfora el mínimo de los `lookback` días
+    anteriores (trailing, sin mirar el propio día i — sin lookahead) Y `closes[i]` cierra de
+    vuelta en o por encima de ese mínimo el mismo día (la "recuperación" que distingue un spring
+    de una ruptura común). Definición idéntica a la usada en la investigación de acciones
+    (rechazada ahí, ver design-history de financial-advisor-speculation)."""
+    n = len(closes)
+    out = [False] * n
+    for i in range(lookback, n):
+        support = min(lows[i - lookback:i])
+        if lows[i] < support and closes[i] >= support:
+            out[i] = True
+    return out
+
+
+@dataclass
+class WyckoffSpringReaction:
+    horizon_days: int
+    observations: int
+    mean_return: float | None
+    win_rate: float | None
+
+
+def compute_wyckoff_spring_reactions(
+    lows: list[float], closes: list[float], lookback: int = WYCKOFF_SPRING_LOOKBACK
+) -> list[WyckoffSpringReaction]:
+    """Retorno futuro promedio de los días donde disparó un spring (mismo patrón que
+    `compute_golden_cross_reactions`, pero sin el estado complementario — un spring es un evento
+    raro, no un régimen sostenido, así que no hay un "no-spring" simétrico interesante para
+    mostrar). El número relevante es el gap contra el promedio SIN condicionar del propio ticker,
+    no contra cero — mismo criterio que el resto de este proyecto con BTC/ETH/SOL (drift fuerte),
+    la UI es la que calcula y muestra ese promedio de referencia."""
+    springs = classify_wyckoff_spring_series(lows, closes, lookback)
+    closes_series = pd.Series(closes, dtype=float)
+    spring_series = pd.Series(springs)
+
+    reactions = []
+    for horizon in WYCKOFF_SPRING_HORIZONS_DAYS:
+        forward_return = (closes_series.shift(-horizon) - closes_series) / closes_series
+        mask = forward_return.notna() & spring_series
+        n_obs = int(mask.sum())
+        if n_obs < WYCKOFF_SPRING_MIN_OBSERVATIONS:
+            reactions.append(WyckoffSpringReaction(horizon, n_obs, None, None))
+            continue
+        vals = forward_return[mask]
+        reactions.append(
+            WyckoffSpringReaction(horizon, n_obs, float(vals.mean()), float((vals > 0).mean()))
+        )
+    return reactions
