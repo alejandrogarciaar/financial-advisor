@@ -47,5 +47,19 @@
     "price_cop": 989040.0,
     "commission_cop": 7438.0,
     "date": "2026-08-06"
+  },
+  {
+    "ticker": "AAPLCO",
+    "shares": 1,
+    "price_cop": 968420.0,
+    "commission_cop": 7438.0,
+    "date": "2026-08-10"
+  },
+  {
+    "ticker": "METACO",
+    "shares": 1,
+    "price_cop": 1908380.0,
+    "commission_cop": 7438.0,
+    "date": "2026-08-11"
   }
 ]
