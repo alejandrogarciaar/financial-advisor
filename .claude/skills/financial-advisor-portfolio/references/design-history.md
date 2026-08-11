@@ -478,3 +478,47 @@ all.
   pasado no asegura nada") specifically because a projected dollar figure reads as a prediction
   regardless of how mechanical the underlying math is — this is the one place in these 3 new
   sections where that risk is real, even though nothing here is an unvalidated signal.
+
+**Drawdown-bucket coverage sweep (2026-08-10): re-tested against each ticker's FULL available
+daily history (back to IPO) and 4 horizons (20/60/90/180d) instead of the single 90-day horizon
+the live `current_bucket_reaction()` number uses — investigation only, no code touched, no
+constant updated yet.** Same session as the Especulación coverage sweep (see that skill's
+design-history for régimen/Golden Cross/Zona de Reacción) — this piece covers
+`DRAWDOWN_VALIDATED_BUCKETS` specifically, run against all 8 `TICKERS` (not just the 4 the
+current dict covers — GOOGL/AMZN/AAPL/MSFT), via a throwaway scratchpad script (not committed)
+reusing `compute_drawdown_bucket_reactions`'s exact trailing-high/bucket math (`src/drawdown_dca.py`)
+against `yfinance_client.get_historical_prices_multi_timeframe(ticker, "1d")`'s full IPO-to-date
+series and `run_oos_validation` (`scripts/oos_validate.py`) — same chronological 60/40 split, same
+"every horizon must hold sign in both halves" bar as everywhere else in this project. Horizons
+20/60/90/180 were chosen to match the precedent already set for the CSPXCO COP-native
+re-validation above, not confirmed to be identical to whatever horizon set originally produced
+today's `DRAWDOWN_VALIDATED_BUCKETS` — so this is the same methodology, not a strict
+apples-to-apples re-run of the exact original test. Treat the comparison below as directionally
+meaningful, not as a byte-for-byte reproduction.
+
+Result, bucket-by-bucket against what `DRAWDOWN_VALIDATED_BUCKETS`/`DRAWDOWN_VALIDATED_SELL_
+BUCKETS` claim today:
+
+- **GOOGL 5-10%** (currently validated) — **confirmed**, holds cleanly across all 4 horizons with
+  full history. The one existing claim that survived unscathed.
+- **AMZN 5-10% and 10-15%** (both currently validated) — **do NOT survive** full history + this
+  horizon set. Both fail at least one horizon.
+- **MSFT 5-10%, 10-15%, and 20-30%** (all 3 currently validated — MSFT has the most buckets of
+  any ticker today) — **none of the 3 survive**. Full invalidation for MSFT specifically.
+- New candidates that were never tested before (none of these tickers/buckets are in either
+  dict today): **AAPL 15-20%**, **META 20-30%**, **NVDA 5-10%**, and — the strongest result in
+  the whole sweep — **TSLA**, which validates cleanly in 4 of its 6 buckets at once (10-15%,
+  15-20%, 20-30%, 30%+). TSLA has never been in `DRAWDOWN_VALIDATED_BUCKETS` at all; this sweep
+  suggests it may be the single most drawdown-predictable ticker of the 8, not just absent from
+  the dict for lack of testing.
+- UBER: nothing validates (consistent with UBER's short 2019- history giving thin per-bucket
+  samples at some horizons).
+
+Net read: the picture this sweep produced is substantially different from what
+`DRAWDOWN_VALIDATED_BUCKETS` currently encodes — one claim confirmed (GOOGL), four claims
+(AMZN×2, MSFT×3) that don't reproduce with more data and a wider horizon set, and four new
+candidates never tested before (AAPL, META, NVDA, and especially TSLA). Nothing in
+`DRAWDOWN_VALIDATED_BUCKETS`/`DRAWDOWN_VALIDATED_SELL_BUCKETS` has been changed off this sweep —
+flagged here for a deliberate decision, since `render_capital()`'s 🟢/🔴 badges and the "🪜 Plan
+de compra escalonada" section currently show `st.success`/build a plan off the OLD dict, and
+some of what they claim as confirmed did not reproduce here.

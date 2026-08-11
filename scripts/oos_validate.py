@@ -27,6 +27,14 @@ investigation should look like:
 
 instead of a new script re-deriving `chronological_split`/forward-return math/sign-consistency
 checks line by line.
+
+`run_timeframe_sweep()` generalizes this one step further: instead of sweeping a strategy
+PARAMETER against one fixed price series, it sweeps the same condition/horizon logic across
+several TIMEFRAMES of the same ticker (e.g. 1h/4h/daily/weekly), each with its own dates/closes.
+Only real for providers without yfinance's severe intraday history caps (Binance today — see
+`src/data/binance_client.py`'s `BINANCE_INTERVALS`; yfinance's viable set is much narrower, see
+`src/data/yfinance_client.py`'s `YFINANCE_VIABLE_INTERVALS`) — 1m/5m/15m/30m intraday stock data
+is capped at 7-60 days by Yahoo, nowhere near enough for a 60/40 split with a real sample.
 """
 
 from __future__ import annotations
@@ -198,6 +206,36 @@ def run_oos_validation_sweep(
     }
 
 
+def run_timeframe_sweep(
+    series_by_timeframe: dict[str, tuple[list[str], list[float]]],
+    condition_fn,
+    horizons_bars: list[int] = (5, 10, 20, 30),
+    train_frac: float = 0.6,
+    min_observations: int = 15,
+) -> dict[str, OOSResult]:
+    """Como `run_oos_validation_sweep`, pero la variable que cambia entre variantes es la
+    TEMPORALIDAD, no un parámetro de la estrategia sobre una sola serie — cada temporalidad trae
+    su propia serie de `dates`/`closes` (no se puede compartir una sola, a diferencia del sweep
+    de parámetros de arriba), así que el llamador entrega un dict `{etiqueta: (dates, closes)}`
+    ya armado (ver `src/data/binance_client.py`/`yfinance_client.py`'s funciones
+    `get_historical_prices_multi_timeframe()` para construirlo) en vez de una sola serie
+    compartida.
+
+    `condition_fn(closes) -> list[bool]` se re-ejecuta una vez por temporalidad, sobre los
+    closes de ESA temporalidad — tiene que tener sentido en cualquier granularidad (ej. un
+    lookback en BARRAS, no en "días calendario"), y `horizons_bars` significa lo mismo: N barras
+    hacia adelante en la temporalidad de esa serie, no N días — 20 barras en 1h son ~20 horas, 20
+    barras en diario son ~20 días. Mismo criterio de "no reportar solo la que dio bien" que
+    `run_oos_validation_sweep`: una temporalidad que valida sola, mientras las vecinas
+    (1h/4h/daily, por ejemplo) no, es la misma fragilidad de múltiples comparaciones aplicada al
+    eje de temporalidad en vez de al de parámetro."""
+    results = {}
+    for label, (dates, closes) in series_by_timeframe.items():
+        condition = condition_fn(closes)
+        results[label] = run_oos_validation(dates, closes, condition, horizons_bars, train_frac, min_observations)
+    return results
+
+
 if __name__ == "__main__":
     # Self-test with synthetic data (deterministic, no network/provider dependency) — proves the
     # split/statistics logic itself is correct, independent of any real investigation. A real
@@ -221,3 +259,20 @@ if __name__ == "__main__":
     result = run_oos_validation(dates, closes, condition, horizons_days=[5, 10, 20])
     print(result.summary())
     print("all_validated:", result.all_validated)
+
+    # Mismo self-test, ahora vía run_timeframe_sweep() con 2 "temporalidades" sintéticas idénticas
+    # (mismos closes/dates para ambas — alcanza para probar que el plumbing por-serie funciona,
+    # no hace falta generar 2 series realmente distintas para esto) — condition_fn recibe los
+    # closes y re-deriva la misma condición.
+    def _condition_fn(cl):
+        out = [False] * len(cl)
+        for i in range(len(cl)):
+            if i + 10 < len(cl):
+                out[i] = cl[i + 10] > cl[i] * 1.02
+        return out
+
+    sweep = run_timeframe_sweep(
+        {"tf_a": (dates, closes), "tf_b": (dates, closes)}, _condition_fn, horizons_bars=[5, 10, 20]
+    )
+    for label, r in sweep.items():
+        print(f"\n[{label}]\n{r.summary()}\nall_validated: {r.all_validated}")

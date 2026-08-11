@@ -238,3 +238,47 @@ def get_historical_prices(ticker: str) -> tuple[list[dict], dict]:
         ]
 
     return _with_cache("historical-price-eod-full", {"symbol": ticker}, fetch)
+
+
+# Yahoo/yfinance recorta durísimo la historia intradía — a diferencia de Binance (sin ese tope
+# para cripto, ver binance_client.py), acá "todas las temporalidades" NO es un ejercicio real
+# para todas: 1m son 7 días, 2m/5m/15m/30m/90m son 60 días — insuficiente para un split 60/40 con
+# muestra seria (mismo problema ya documentado para el bot de oro). Solo estas 4 tienen historia
+# suficiente: 1h (~730 días, el tope real de Yahoo para 60m) y 1d/1wk/1mo (historia completa, sin
+# tope). `get_historical_prices_multi_timeframe()` solo acepta estas — pedir 1m/5m/etc. acá sería
+# prometer una muestra que yfinance no puede dar.
+YFINANCE_VIABLE_INTERVALS = ["1h", "1d", "1wk", "1mo"]
+
+# Período máximo real de Yahoo para 1h (60m); 1d/1wk/1mo no tienen ese tope, "max" trae todo.
+_MAX_PERIOD_BY_INTERVAL = {"1h": "730d", "1d": "max", "1wk": "max", "1mo": "max"}
+
+
+def get_historical_prices_multi_timeframe(ticker: str, interval: str) -> tuple[list[dict], dict]:
+    """Genérico sobre las temporalidades de yfinance con historia suficiente
+    (`YFINANCE_VIABLE_INTERVALS`) — usa automáticamente el período máximo real de Yahoo para esa
+    temporalidad (`_MAX_PERIOD_BY_INTERVAL`), no un valor a elegir por quien llama (a diferencia
+    de `binance_client.get_historical_prices_multi_timeframe()`, donde años_back sí es una
+    decisión real porque Binance no tiene un tope que lo fije de antemano)."""
+    if interval not in YFINANCE_VIABLE_INTERVALS:
+        raise ValueError(
+            f"'{interval}' no tiene historia suficiente en yfinance para un split 60/40 — "
+            f"usar una de {YFINANCE_VIABLE_INTERVALS}."
+        )
+    date_fmt = "%Y-%m-%d %H:%M:%S" if interval == "1h" else "%Y-%m-%d"
+
+    def fetch():
+        hist = _ticker(ticker).history(period=_MAX_PERIOD_BY_INTERVAL[interval], interval=interval)
+        return [
+            {
+                "date": idx.strftime(date_fmt),
+                "open": float(row["Open"]),
+                "close": float(row["Close"]),
+                "high": float(row["High"]),
+                "low": float(row["Low"]),
+                "volume": float(row["Volume"]),
+            }
+            for idx, row in hist.iterrows()
+            if pd.notna(row["Close"])
+        ]
+
+    return _with_cache("historical-price-multi-timeframe", {"symbol": ticker, "interval": interval}, fetch)

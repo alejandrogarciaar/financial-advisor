@@ -111,3 +111,27 @@ def get_historical_prices_intraday_1h(symbol: str, years_back: float = 2.0) -> t
     limita cada respuesta a 1000 velas), y una temporalidad "operativa" de corto plazo no
     necesita ese historial completo de todos modos."""
     return _get_klines(symbol, "1h", "%Y-%m-%d %H:%M:%S", years_back)
+
+
+# Intervalos nativos de Binance, del más fino al más grueso — Binance no tiene el tope de
+# historia de yfinance en ninguno de estos, así que "todas las temporalidades" es un ejercicio
+# real acá (no lo es para acciones vía yfinance, ver scripts/oos_validate.py y su
+# run_timeframe_sweep()). Los 3 de arriba (daily/4h/1h) ya tenían su propia función con un
+# years_back por defecto pensado para su caso de uso puntual (el motor de S/R); esta lista y
+# get_historical_prices_multi_timeframe() son para pedir CUALQUIER otro intervalo sin agregar una
+# función nueva por cada uno.
+BINANCE_INTERVALS = ["1m", "3m", "5m", "15m", "30m", "1h", "2h", "4h", "6h", "8h", "12h", "1d", "3d", "1w", "1M"]
+
+_INTRADAY_INTERVALS = {"1m", "3m", "5m", "15m", "30m", "1h", "2h", "4h", "6h", "8h", "12h"}
+
+
+def get_historical_prices_multi_timeframe(symbol: str, interval: str, years_back: float) -> tuple[list[dict], dict]:
+    """Genérico sobre cualquier intervalo nativo de Binance (`BINANCE_INTERVALS`) — a diferencia
+    de las 3 funciones de arriba, sin un `years_back` por defecto a propósito: a temporalidades
+    finas (1m/3m/5m), pedir "todo lo disponible" son miles de requests paginados (Binance limita
+    cada respuesta a 1000 velas) — quien llama tiene que elegir una ventana consciente para el
+    intervalo que está pidiendo, no heredar un default pensado para otro caso."""
+    if interval not in BINANCE_INTERVALS:
+        raise ValueError(f"Intervalo '{interval}' no es uno de los nativos de Binance: {BINANCE_INTERVALS}")
+    date_fmt = "%Y-%m-%d %H:%M:%S" if interval in _INTRADAY_INTERVALS else "%Y-%m-%d"
+    return _get_klines(symbol, interval, date_fmt, years_back)

@@ -427,3 +427,66 @@ this session found; noticing that 20d/30d horizons passed far more often than 5d
 nearly every variant is NOT grounds to retest looking only at those two — that would be exactly
 the post-hoc horizon-narrowing this project's methodology exists to prevent. Ran as a throwaway
 scratchpad script (not committed), same as every other investigation in this file.
+
+**Multi-timeframe "fractal" sweep of régimen "fuerte", régimen+RSI≥70, and Wyckoff Spring (BTC/
+ETH/SOL, 10 Binance timeframes from 15m to 1w) — investigation only, nothing shipped, no code
+touched.** Following the timeframe-fragility tooling added for the "de acciones que tenemos
+respaldado por backtesting" thread (`run_timeframe_sweep()` in `scripts/oos_validate.py`, plus
+`get_historical_prices_multi_timeframe()` in both `binance_client.py` and `yfinance_client.py`),
+the user asked directly whether any of Cripto's already-validated signals hold across
+temporalidades, not just at the one temporalidad each was originally validated on — and which
+ones are genuinely "fractal" (work consistently across adjacent/nested timeframes) vs.
+temporalidad-specific. Explicit constraint: run entirely from a scratchpad script outside the
+repo that only imports/calls existing pure functions (`classify_regime_series`,
+`classify_wyckoff_spring_series`, `compute_rsi_series` from `src/speculation.py`;
+`get_historical_prices_multi_timeframe` from `binance_client.py`; `run_timeframe_sweep`/
+`run_oos_validation` from `scripts/oos_validate.py`) — do not touch or add to project code for
+this. Ladder: 15m/30m/1h/2h/4h/6h/12h/1d/3d/1w (1m/3m/5m excluded — thousands of pages of
+1000-candle history for a 5-9 year window would be impractical; 1M excluded — too few candles,
+~96 in 8 years), horizons `[5, 10, 20, 30]` **bars** (not days — a 30-bar horizon on 15m data is
+~7.5 hours, not 30 days; this is the same "horizon means something different per temporalidad"
+caveat `run_timeframe_sweep()`'s own docstring already carries).
+
+Result, per signal:
+
+- **Régimen "fuerte" is the one signal that showed genuine fractal behavior.** BTC validated
+  (`all_validated=True`, all 4 horizons, both train/test halves) across a CONTIGUOUS band —
+  4h→6h→12h→1d — and failed everywhere finer (15m/30m/1h/2h) or coarser (3d/1w, both of which
+  also showed wild, likely-spurious train-half swings, e.g. 1w train_gap=-69.88%, thin n). ETH
+  matched closely (4h, 12h, 1d, 1w all passed) but broke at 6h in the middle of that band — not
+  quite as clean as BTC's. SOL validated ONLY at 4h — consistent with SOL never validating this
+  signal at daily in the original (single-temporalidad) work, and confirming SOL's regime signal
+  isn't fractal at all, just a single lucky cell. Working theory for why the band has edges on
+  both ends: the signal's underlying lookback (EMA55/SMA-based) represents a wildly different
+  real-world window depending on temporalidad — 55 bars is ~14 hours at 15m vs. ~2.5 months at
+  daily — so "regime" stops meaning the same thing once bars stop corresponding to a similar
+  amount of real elapsed time.
+- **Régimen + RSI≥70 refinement did NOT show fractal behavior — scattered, no contiguous band.**
+  BTC passed at 15m, 30m, 6h, 12h, 1d, 3d but FAILED at 1h, 2h, 4h — i.e., passes at both very
+  fine and mid-to-coarse temporalidades with a gap in between, the opposite of a clean band. ETH
+  passed at 15m, 4h, 6h, 12h but not 1d (consistent with this refinement never having validated
+  for ETH at daily in the original work) and not at any other cell. SOL failed at every single
+  temporalidad. Read as reinforcing, not contradicting, this refinement's already-known fragility
+  (originally validated for BTC-at-daily only) — a scattered non-contiguous pass pattern across
+  10 cells is closer to what you'd expect from noise occasionally lining up than from a real
+  effect, and is flagged to the user as needing the same multiple-comparisons skepticism this
+  project already applies to threshold sweeps (testing 10 temporalidades raises the odds of a
+  spurious hit, on top of the existing per-cell 4-horizon fragility check).
+- **Wyckoff Spring is temporalidad-specific, not fractal — confirmed, not just assumed.** ETH
+  validated ONLY at 1d (matching the original single-temporalidad finding exactly) and nowhere
+  else in the ladder. BTC validated at 1h, 12h, and 1d — technically 3 passes, but scattered
+  (no adjacency: 1h is isolated from the 12h/1d pair by five failing cells in between), so not a
+  contiguous band the way régimen "fuerte" showed. SOL failed everywhere, consistent with SOL
+  never validating Spring at daily either.
+
+Bottom line reported to the user: régimen "fuerte" is the only signal here that generalizes
+across a real temporalidad band (4h-1d, cleanest for BTC) rather than being a single-cell result;
+the RSI refinement and Wyckoff Spring both remain what they already were — narrow, mostly
+daily-specific findings — and multi-timeframe testing did not turn either into something broader.
+No `REGIME_VALIDATED_COMBOS`/`REGIME_RSI_OVERBOUGHT_VALIDATED_HORIZONS`/
+`WYCKOFF_SPRING_VALIDATED_TICKERS` constant was touched — all three already only encode the
+single (ticker, temporalidad) cells previously validated (implicitly daily, since that's the only
+temporalidad the app itself ever fetches for these signals), and this sweep didn't surface a case
+strong enough to extend any of them to a new temporalidad or ticker. `git status` confirmed after
+the sweep that no project file changed. Ran as a throwaway scratchpad script (not committed),
+same as every other investigation in this file.

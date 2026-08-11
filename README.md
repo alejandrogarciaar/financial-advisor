@@ -81,7 +81,7 @@ mapa es solo para ubicarse rápido, no para reemplazar esa lectura.
 |---|---|
 | `fmp_client.py` | Wrapper sobre la API de Financial Modeling Prep — 7 funciones (`get_quote`, `get_profile`, estados financieros, `get_historical_prices`, `get_analyst_view`), cacheadas en disco con fallback a la última respuesta buena. |
 | `yfinance_client.py` | Mismas 7 funciones que `fmp_client.py` (misma forma de dict, para que `fair_value.py` sea agnóstico al proveedor activo); sin API key, sin límite de años de estados financieros. |
-| `binance_client.py` | Klines públicas de Binance (sin API key) — única fuente de datos de BTC/ETH/SOL (diario, 4h y 1h nativos). |
+| `binance_client.py` | Klines públicas de Binance (sin API key) — única fuente de datos de BTC/ETH/SOL (diario, 4h y 1h nativos, + cualquier otro intervalo nativo vía `get_historical_prices_multi_timeframe()`). |
 | `fear_greed_client.py` | Índice de Miedo y Codicia cripto (alternative.me, sin API key) — un solo valor para todo el mercado, no por ticker. |
 | `cache.py` | Caché en disco compartida entre proveedores (`.cache/`) — última respuesta buena por llamada, sin TTL propio (el TTL vive en `@st.cache_data` del lado de `src/ui/shared.py`). |
 | `errors.py` | `DataError` — excepción común a los 3 proveedores. |
@@ -135,7 +135,7 @@ mapa es solo para ubicarse rápido, no para reemplazar esa lectura.
 
 | Archivo | Rol |
 |---|---|
-| `oos_validate.py` | Validador fuera de muestra reusable (split cronológico 60/40, consistencia de signo, barrido de umbrales) — reemplaza re-derivar esta metodología a mano en cada investigación. |
+| `oos_validate.py` | Validador fuera de muestra reusable (split cronológico 60/40, consistencia de signo, barrido de umbrales/temporalidades) — reemplaza re-derivar esta metodología a mano en cada investigación. |
 | `verify_app.py` | Smoke test de las 6 pestañas vía `AppTest`, sin navegador. |
 | `run_app.sh` / `stop_app.sh` | Arrancar/parar el servidor Streamlit local (puerto libre, health check, kill confiable por línea de comando). |
 | `add_sale.py` | Agrega una venta a `portfolio_data/sales.json` desde la terminal, validada igual que la tabla "Tus ventas" de la UI — para registrar una venta dictada por chat sin abrir el navegador. |

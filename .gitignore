@@ -9,3 +9,5 @@ streamlit.log
 streamlit.pid
 streamlit.port
 .claude/settings.local.json
+*.zip
+/zips/

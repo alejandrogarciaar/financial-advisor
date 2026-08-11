@@ -577,3 +577,91 @@ still failed on 30m too (CHoCH sample sizes as thin as 10-35 total signals, most
 `min_observations`). Conclusion unchanged: nothing from this ships. If revisited with a data
 source that has enough 30m/M5 history to cover more than one regime, that would be the version of
 this test actually worth trusting.
+
+**Coverage sweep (2026-08-10): régimen/RSI/ADX/OBV run against the 8 `TICKERS` for the first
+time ever, plus Golden Cross and the Zona de Reacción re-tested against each ticker's FULL
+available daily history instead of the 5-year window `get_historical_prices()` caps everything
+at — investigation only, no code touched, no constant updated yet.** Prompted by an inventory
+the user asked for ("qué señales/indicadores nos hacen falta validar" for the yfinance
+temporalidades available for stocks) that surfaced two distinct gaps: régimen "fuerte" and its
+3 refinements (RSI/ADX/OBV) had ONLY ever been tested against BTC/ETH/SOL, never once against a
+single stock; and Golden Cross / the Zona de Reacción had only ever been validated against the
+5-year-capped daily series, even though `yfinance_client.get_historical_prices_multi_timeframe
+(ticker, "1d")` (added earlier this same session) can pull each ticker's full history back to
+IPO. Ran as a throwaway scratchpad script (not committed) importing only existing pure functions
+(`classify_regime_series`, `compute_rsi_series`, `classify_golden_cross_series` from
+`speculation.py`; `daily_reference_config`/`detect_levels`/`score_percentile_threshold` from
+`support_resistance.py`; `run_oos_validation` from `scripts/oos_validate.py`) plus two new
+full-series helpers written ad hoc in the scratch script (`adx_series`/`obv_series` — `compute_adx`/
+`compute_obv` in `speculation.py` only ever returned the LAST value, not a day-by-day series, so
+there was nothing importable to reuse for this; both mirror their production counterparts'
+exact math, just without truncating to the final row). Same chronological 60/40 split, same
+"every horizon must hold the same sign in both halves" bar as every other investigation in this
+file. History depths pulled: AAPL 11,506 daily bars back to 1980, MSFT 10,180 to 1986, AMZN 7,354
+to 1997, GOOGL 5,528 to 2004, NVDA 6,929 to 1999, META 3,576 to 2012, TSLA 4,053 to 2010, UBER
+1,822 to 2019 — vs. ~1,255 bars (5 years) every existing stock validation in this project has
+used until now.
+
+*Régimen "fuerte" alone, never tested for any stock before*: validated cleanly (all 4 horizons,
+both halves) for exactly one ticker — **AMZN** — and with the sign **backwards** from what it
+meant for BTC/ETH (there, "fuerte" anticipated a better-than-average forward return; for AMZN it
+anticipated a WORSE one, -0.13% to -0.55% train, -0.04% to -0.55% test). The other 7 tickers
+failed at least one horizon. Same "validated but backwards from the popular reading" signature
+already on file for Golden Cross (AAPL/TSLA) and crypto's Wyckoff Spring — not a reason to
+distrust the number, just a reason to never phrase it as "régimen fuerte = alcista" without
+checking which ticker.
+
+*Régimen + RSI≥70, never tested for any stock before*: validated for 3 of 8 — **AAPL** and
+**UBER** with the "traditional" positive sign (overbought-within-an-uptrend outperforming),
+**GOOGL** with the sign backwards (-0.29% to -1.61% across horizons, both halves). MSFT, AMZN,
+META, NVDA, TSLA failed at least one horizon (TSLA came closest: 3 of 4 horizons agreed, broke
+at 20d).
+
+*Régimen + ADX (sweep 20/25/30), never tested for any stock before*: **zero of 8 tickers survive
+the neighboring-threshold fragility check** — every apparent single-threshold pass (e.g. AAPL at
+25, MSFT/UBER at 20 or 30, GOOGL at 30) flips to a fail at an adjacent, equally defensible
+threshold. Exactly the same fragility signature this refinement already showed for BTC/ETH/SOL
+(see the entry above) — now confirmed to be a property of the ADX-regime interaction itself, not
+something specific to crypto's volatility profile. Do not add an
+`REGIME_ADX_VALIDATED_HORIZONS`-style lookup for any stock off this sweep.
+
+*Régimen + OBV rising (sweep SMA 10/20/30), never tested for any stock before*: **one genuinely
+clean, non-fragile result** — **GOOGL** validates at all 3 neighboring SMA periods (10/20/30),
+same negative sign throughout (-0.23% to -2.15% train, -0.02% to -0.29% test, all 4 horizons,
+n in the hundreds every cell). This is the strongest single finding in this whole sweep: unlike
+every ADX cell above and every OBV cell for every other ticker (AAPL passes only at SMA10,
+everyone else fails outright), GOOGL's OBV-regime interaction doesn't depend on which nearby SMA
+period you pick. A real out-of-sample candidate if this project decides to extend the "📋 Plan de
+DCA sugerido"-style reinforcement concept to stocks (it doesn't exist for stocks today — that
+box is `is_crypto`-gated, see `render_speculation_indicators()`) — not added anywhere yet,
+pending that decision.
+
+*Golden Cross, re-tested with full history against the existing `GOLDEN_CROSS_VALIDATED_TICKERS
+= {"AAPL", "TSLA", "UBER"}`*: **two of the three original passes do not survive deeper history.**
+AAPL now fails at 5d (train_gap +0.04%/test -0.06% — wrong sign at the shortest horizon it didn't
+have enough 5-year data to expose before); TSLA now fails at 10d. Only **UBER** still validates
+cleanly across all 4 horizons — unsurprising, since UBER's full history (2019-) barely exceeds
+its old 5-year window, so there was little new data to disagree with the old sample. A ticker
+never in the original set newly validates with full history: **MSFT**, clean across all 4
+horizons (-0.03% to -0.15% train, -0.02% to -0.15% test). Read plainly: the original AAPL/TSLA
+Golden Cross validation was very likely a small-sample artifact of the 5-year window, not a
+durable effect — this project's own `st.success` copy for those two tickers is, as of this
+sweep, standing on a result that no longer reproduces with more data. `GOLDEN_CROSS_VALIDATED_
+TICKERS` has NOT been changed — this is flagged here for a deliberate decision, not applied
+silently, since it changes what real users currently see as a confirmed signal.
+
+*Zona de Reacción (soporte/resistencia), re-tested with full history against
+`STOCK_SR_VALIDATED_TICKERS = {"TSLA": {"support"}}`*: **inconclusive, not rejected** — this
+re-test hit a real methodological wall rather than producing a clean answer. `detect_levels()`'s
+top-scored levels, run once against 10-46 years of daily bars, cluster near TODAY's price (the
+scoring's age/recency-weighted components dominate over a multi-decade span in a way they never
+had the chance to over a 5-year window) — so the older 60% of history almost never actually
+traded inside those zones (`train n=0` in nearly every one of the 48 ticker×kind×percentile
+cells checked). The one nonzero-train cell found (TSLA resistance, p40, train n=2,431) produced
+a suspicious `train_gap=+0.00%`, consistent with a zone wide enough to contain most of the
+price history rather than a real level. **This is a test-design problem, not evidence the
+signal doesn't hold** — a meaningful deep-history re-test of this engine would need walk-forward
+level detection (re-fit levels using only data available as of each point in time), not a single
+whole-history level set checked against an old/new split. Nothing changed in
+`STOCK_SR_VALIDATED_TICKERS` off this result; flagged so a future session doesn't re-run the same
+naive full-history version expecting a different outcome.

@@ -56,7 +56,14 @@ skill no vuelva a proponer lo mismo.
   consistencia de signo train/test en varios horizontes, barrido de umbrales para detectar
   fragilidad). Importar `run_oos_validation`/`run_oos_validation_sweep` en vez de re-derivar esta
   metodología para una nueva investigación puntual (régimen, RSI, drawdown, score de un motor,
-  etc.) — ver el docstring del módulo para el patrón de uso.
+  etc.) — ver el docstring del módulo para el patrón de uso. `run_timeframe_sweep()` (agregado
+  2026-08-10) generaliza esto al eje de TEMPORALIDAD en vez de parámetro — mismo chequeo de
+  fragilidad, pero barriendo 1h/4h/daily/etc. de un mismo ticker en vez de barrer un umbral sobre
+  una sola serie. Solo tiene sentido hoy para cripto (Binance no tiene el tope de historia
+  intradía que sí tiene yfinance) — `src/data/binance_client.py`'s `get_historical_prices_
+  multi_timeframe()` acepta cualquier intervalo nativo de Binance; `src/data/yfinance_client.py`'s
+  equivalente solo acepta `YFINANCE_VIABLE_INTERVALS` (1h/1d/1wk/1mo) porque 1m/5m/15m/30m/90m
+  están capados por Yahoo en 7-60 días, insuficiente para un split 60/40 con muestra real.
 - `scripts/verify_app.py` — smoke test de las 6 pestañas vía `streamlit.testing.v1.AppTest`
   (`./venv/Scripts/python.exe scripts/verify_app.py`) en vez de retipear el snippet de AppTest
   cada sesión.
