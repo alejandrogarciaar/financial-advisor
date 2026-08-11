@@ -30,13 +30,13 @@ from src.drawdown_dca import (
 )
 from src.portfolio import (
     DEFAULT_COMMISSION_COP,
-    average_buy_price_by_ticker,
     build_synthetic_portfolio_series,
     commission_summary,
     load_purchases,
     load_sales,
     project_future_value,
     realized_gains_summary,
+    sale_cost_basis_by_row,
     save_purchases,
     save_sales,
     simulate_additional_purchase,
@@ -55,11 +55,22 @@ from src.valuation.risk_return import evaluate_risk_return
 PORTFOLIO_TICKERS = list(PORTFOLIO_CDI_TICKERS.keys())
 
 
-def render_portfolio_total_hero(total_invested_cop: float, total_value_cop: float | None) -> None:
+def render_portfolio_total_hero(
+    total_invested_cop: float, total_value_cop: float | None, total_net_value_cop: float | None = None
+) -> None:
     """La rentabilidad total es el único número que esta sección debería 'liderar' — figura
-    hero grande y con color de estado (verde/rojo), con Invertido/Valor actual como tiles de
+    hero grande y con color de estado (verde/rojo), con Invertido/Valor de mercado como tiles de
     apoyo más chicas y neutras al lado. Reusa la misma paleta que zone_badge/quality_badge,
-    no una nueva."""
+    no una nueva.
+
+    `total_net_value_cop` (si se pasa) es lo que realmente se usa para calcular
+    ganancia/rentabilidad — ya neto de una comisión de venta hipotética por posición, mismo
+    criterio que `return_pct` en `summarize_by_ticker()`. `total_value_cop` (bruto, precio de
+    mercado) sigue siendo lo que se muestra en el tile "Valor de mercado". Si no se pasa
+    `total_net_value_cop`, cae de vuelta a `total_value_cop` (compatibilidad con cualquier otro
+    caller que solo tenga el valor bruto)."""
+    if total_net_value_cop is None:
+        total_net_value_cop = total_value_cop
     if total_value_cop is None:
         st.markdown(
             """
@@ -75,7 +86,7 @@ def render_portfolio_total_hero(total_invested_cop: float, total_value_cop: floa
             unsafe_allow_html=True,
         )
     else:
-        gain_cop = total_value_cop - total_invested_cop
+        gain_cop = total_net_value_cop - total_invested_cop
         gain_pct = gain_cop / total_invested_cop if total_invested_cop else 0.0
         color = ZONE_COLOR["Acumulación"] if gain_cop >= 0 else ZONE_COLOR["Sobrevalorado"]
         sign = "+" if gain_cop >= 0 else "-"
@@ -102,7 +113,7 @@ def render_portfolio_total_hero(total_invested_cop: float, total_value_cop: floa
         (tile1, "Invertido", f"${total_invested_cop:,.0f} COP"),
         (
             tile2,
-            "Valor actual",
+            "Valor de mercado",
             f"${total_value_cop:,.0f} COP" if total_value_cop is not None else "No disponible",
         ),
     ):
@@ -360,10 +371,8 @@ def _render_cartera_and_total(purchases: pd.DataFrame, sales: pd.DataFrame) -> N
             {
                 "Ticker": summary["ticker"],
                 "Acciones": summary["shares"],
-                "Costo prom. compra (COP)": summary["avg_price_cop"],
-                "Precio actual (COP)": summary["current_price_cop"],
                 "Invertido (COP)": summary["invested_cop"],
-                "Valor actual (COP)": summary["current_value_cop"],
+                "Valor de mercado (COP)": summary["current_value_cop"],
                 "Rentabilidad": summary["return_pct"],
             }
         )
@@ -382,14 +391,19 @@ def _render_cartera_and_total(purchases: pd.DataFrame, sales: pd.DataFrame) -> N
 
         styled = display.style.format(
             {
-                "Costo prom. compra (COP)": "${:,.0f}",
-                "Precio actual (COP)": lambda v: f"${v:,.0f}" if pd.notna(v) else "No disponible",
                 "Invertido (COP)": "${:,.0f}",
-                "Valor actual (COP)": lambda v: f"${v:,.0f}" if pd.notna(v) else "—",
+                "Valor de mercado (COP)": lambda v: f"${v:,.0f}" if pd.notna(v) else "—",
                 "Rentabilidad": _format_return,
             }
         ).map(_color_return, subset=["Rentabilidad"])
         st.dataframe(styled, hide_index=True, use_container_width=True)
+        st.caption(
+            "La rentabilidad ya incluye la comisión de compra (metida en el costo promedio) y "
+            f"descuenta una comisión de venta hipotética de ${DEFAULT_COMMISSION_COP:,.0f} COP "
+            "por posición — lo que ganarías/perderías realmente si vendieras hoy, no solo la "
+            "variación del precio de mercado. \"Valor de mercado\" sí sigue siendo el precio de "
+            "mercado sin descontar nada."
+        )
 
     st.divider()
     st.subheader("Total")
@@ -397,8 +411,10 @@ def _render_cartera_and_total(purchases: pd.DataFrame, sales: pd.DataFrame) -> N
     total_invested_cop = float(summary["invested_cop"].sum()) if not summary.empty else 0.0
     valued_rows = summary["current_value_cop"].dropna() if not summary.empty else pd.Series(dtype=float)
     total_value_cop = float(valued_rows.sum()) if not valued_rows.empty else None
+    net_valued_rows = summary["net_current_value_cop"].dropna() if not summary.empty else pd.Series(dtype=float)
+    total_net_value_cop = float(net_valued_rows.sum()) if not net_valued_rows.empty else None
 
-    render_portfolio_total_hero(total_invested_cop, total_value_cop)
+    render_portfolio_total_hero(total_invested_cop, total_value_cop, total_net_value_cop)
 
     if not summary.empty and len(valued_rows) < len(summary):
         st.caption("⚠️ El precio actual de algún ticker no está disponible ahora — el total no lo incluye.")
@@ -891,9 +907,8 @@ def render_capital():
     if sales.empty:
         st.caption("Todavía no registraste ninguna venta.")
     else:
-        avg_buy_price_cop = average_buy_price_by_ticker(purchases)
         sales_display = sales.copy()
-        sales_display["avg_buy_price_cop"] = sales_display["ticker"].map(avg_buy_price_cop)
+        sales_display["avg_buy_price_cop"] = sale_cost_basis_by_row(purchases, sales)
         sales_display = sales_display[
             ["ticker", "shares", "avg_buy_price_cop", "price_cop", "commission_cop", "date"]
         ]
@@ -1001,10 +1016,15 @@ def render_capital():
         r2.metric("Precio promedio si comprás", f"${sim['new_avg_price_cop']:,.0f}")
     r3.metric("Acciones totales después", f"{sim['new_shares']:,d}")
 
-    if sim_current_price is not None and sim["new_avg_price_cop"]:
-        sim_return_pct = (sim_current_price - sim["new_avg_price_cop"]) / sim["new_avg_price_cop"]
+    if sim_current_price is not None and sim["new_invested_cop"]:
+        # Mismo criterio que return_pct en summarize_by_ticker(): "si vendiera hoy" incluye la
+        # comisión de compra (ya adentro de new_invested_cop) Y una comisión de venta
+        # hipotética — no solo la variación de precio de mercado.
+        sim_net_value_cop = sim["new_shares"] * sim_current_price - DEFAULT_COMMISSION_COP
+        sim_return_pct = (sim_net_value_cop - sim["new_invested_cop"]) / sim["new_invested_cop"]
         st.caption(
-            f"Con el precio de mercado de hoy (${sim_current_price:,.0f}), tu rentabilidad en "
+            f"Con el precio de mercado de hoy (${sim_current_price:,.0f}) y una comisión de "
+            f"venta hipotética de ${DEFAULT_COMMISSION_COP:,.0f} COP, tu rentabilidad real en "
             f"{sim_ticker} quedaría en **{sim_return_pct:+.1%}** después de esta compra."
         )
     else:

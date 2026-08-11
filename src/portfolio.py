@@ -115,20 +115,82 @@ def validate_sales(df: pd.DataFrame, valid_tickers: list[str], purchases: pd.Dat
     return errors
 
 
-def average_buy_price_by_ticker(purchases: pd.DataFrame) -> dict:
-    """Costo promedio de compra (COP) por ticker sobre TODAS las compras (costo promedio, no
-    FIFO) — mismo criterio que `avg_price_cop` en `summarize_by_ticker()` y `avg_buy_price_cop`
-    en `realized_gains_summary()`; extraído acá para que "Tus ventas" pueda mostrar ese mismo
-    número por fila sin duplicar la fórmula una tercera vez."""
-    if purchases.empty:
-        return {}
-    result = {}
-    for ticker, group in purchases.groupby("ticker"):
-        shares_purchased = int(group["shares"].sum())
-        if not shares_purchased:
-            continue
-        total_invested_cop = float((group["shares"] * group["price_cop"] + group["commission_cop"]).sum())
-        result[ticker] = total_invested_cop / shares_purchased
+def _chronological_ledger(ticker_purchases: pd.DataFrame, ticker_sales: pd.DataFrame) -> list[dict]:
+    """Recorre las compras y ventas de UN ticker en orden cronológico manteniendo un costo
+    promedio ponderado corriente (el método estándar de "costo promedio", no FIFO por lotes): una
+    compra mezcla su propio costo con el promedio que ya venía corriendo; una venta reduce las
+    acciones en cartera SIN tocar el promedio de lo que queda — ese promedio, en el momento de la
+    venta, es exactamente la base de costo que le corresponde a esa venta. Un empate de fecha
+    compra/venta procesa la compra primero (evita que `shares_held` quede transitoriamente
+    negativo, aunque en la práctica este proyecto no suele tener ambas el mismo día).
+
+    Reemplaza un atajo que este proyecto usaba antes: un único promedio calculado sobre TODAS las
+    compras de un ticker sin mirar fechas, aplicado por igual a las acciones que quedan en
+    cartera Y a cada venta pasada. Ese atajo tenía dos fallas reales, ambas confirmadas con datos
+    del portafolio el 2026-08-11:
+    1. Una compra cargada DESPUÉS de una venta corría el promedio hacia adelante y cambiaba
+       retroactivamente la ganancia YA REPORTADA de esa venta (METACO: una compra 8 días después
+       de una venta le bajó la ganancia realizada de esa venta de $224.284 a $104.344 COP).
+    2. Simétricamente, un lote YA VENDIDO seguía mezclado en el costo promedio de las acciones
+       compradas y retenidas después de esa venta (METACO otra vez: la acción que efectivamente
+       se tiene hoy —comprada después de vender la anterior— mostraba una ganancia en vivo de
+       +5.3% cuando su costo real implicaba una pérdida cercana a -1.3%, coincidiendo con lo que
+       mostraba una plataforma externa, -1.05%).
+    Ambas violan la regla de que "Ganancias realizadas" es de solo lectura y no debería cambiar
+    salvo por una venta nueva (ver CLAUDE.md / financial-advisor-portfolio skill)."""
+    events = [
+        {
+            "index": r.Index,
+            "date": r.date,
+            "type": "buy",
+            "shares": int(r.shares),
+            "price_cop": float(r.price_cop),
+            "commission_cop": float(r.commission_cop),
+        }
+        for r in ticker_purchases.itertuples()
+    ] + [
+        {
+            "index": r.Index,
+            "date": r.date,
+            "type": "sell",
+            "shares": int(r.shares),
+            "price_cop": float(r.price_cop),
+            "commission_cop": float(r.commission_cop),
+        }
+        for r in ticker_sales.itertuples()
+    ]
+    events.sort(key=lambda e: (e["date"], 0 if e["type"] == "buy" else 1))
+
+    shares_held = 0
+    avg_cost_cop = 0.0
+    ledger = []
+    for e in events:
+        if e["type"] == "buy":
+            total_cost_before = shares_held * avg_cost_cop
+            new_cost = e["shares"] * e["price_cop"] + e["commission_cop"]
+            shares_held += e["shares"]
+            avg_cost_cop = (total_cost_before + new_cost) / shares_held if shares_held else 0.0
+        else:
+            shares_held -= e["shares"]
+        ledger.append({**e, "avg_cost_cop": avg_cost_cop, "shares_held_after": shares_held})
+    return ledger
+
+
+def sale_cost_basis_by_row(purchases: pd.DataFrame, sales: pd.DataFrame) -> pd.Series:
+    """Costo promedio de compra CRONOLÓGICO (vía `_chronological_ledger`) vigente en el momento
+    de cada venta puntual — un valor por FILA de `sales`, no uno solo por ticker (dos ventas del
+    mismo ticker en fechas distintas pueden tener bases de costo distintas si hubo una compra en
+    el medio). Reemplaza a la vieja `average_buy_price_by_ticker` (un único valor por ticker,
+    ignorando fechas); usado por "Tus ventas" para mostrar, junto a cada venta, la misma base de
+    costo que `realized_gains_summary()` usa internamente para calcular su ganancia."""
+    if sales.empty:
+        return pd.Series(dtype=float)
+    result = pd.Series(index=sales.index, dtype=float)
+    for ticker, sale_group in sales.groupby("ticker"):
+        ticker_purchases = purchases[purchases["ticker"] == ticker] if not purchases.empty else purchases
+        for e in _chronological_ledger(ticker_purchases, sale_group):
+            if e["type"] == "sell":
+                result.loc[e["index"]] = e["avg_cost_cop"]
     return result
 
 
@@ -137,10 +199,19 @@ def summarize_by_ticker(
 ) -> pd.DataFrame:
     """Una fila por ticker TODAVÍA EN CARTERA (acciones compradas menos vendidas > 0) — un
     ticker completamente vendido desaparece de acá, su resultado vive en
-    `realized_gains_summary()` en cambio. `avg_price_cop` es el costo promedio de TODAS las
-    compras (costo promedio, no por lotes), y `invested_cop` es ese costo promedio aplicado
-    solo a las acciones que quedan en cartera — no la suma histórica de todo lo comprado, que
-    ya no representa lo que hay invertido hoy si hubo ventas parciales."""
+    `realized_gains_summary()` en cambio. `avg_price_cop` es el costo promedio CRONOLÓGICO (vía
+    `_chronological_ledger` — no un promedio estático de todas las compras sin mirar fechas), y
+    `invested_cop` es ese costo promedio aplicado solo a las acciones que quedan en cartera.
+
+    `return_pct` responde "si vendiera hoy, ¿cuánto gané/perdí realmente?" — no solo la variación
+    de precio de mercado. `invested_cop` YA incluye la comisión de compra (ver `avg_price_cop`
+    arriba), y acá además se resta de `current_value_cop` una comisión de venta hipotética
+    (`DEFAULT_COMMISSION_COP`, la misma que usa el formulario de "Registrar una venta nueva" por
+    defecto) para llegar a `net_current_value_cop` — así `return_pct` queda simétrico con
+    `realized_gains_summary()`, que sí resta la comisión de venta real una vez que la venta
+    ocurre de verdad. `current_value_cop` (sin neteo) se conserva aparte porque "Valor actual" en
+    la UI debe seguir siendo el valor de mercado literal, no un valor ya neto de una operación
+    que todavía no pasó."""
     if purchases.empty:
         return pd.DataFrame()
 
@@ -148,20 +219,22 @@ def summarize_by_ticker(
 
     rows = []
     for ticker, group in purchases.groupby("ticker"):
-        shares_purchased = int(group["shares"].sum())
-        total_invested_cop = float((group["shares"] * group["price_cop"] + group["commission_cop"]).sum())
-        avg_price_cop = total_invested_cop / shares_purchased if shares_purchased else 0.0
+        ticker_sales = sales[sales["ticker"] == ticker] if not sales.empty else sales
+        ledger = _chronological_ledger(group, ticker_sales)
+        avg_price_cop, shares = (ledger[-1]["avg_cost_cop"], ledger[-1]["shares_held_after"]) if ledger else (0.0, 0)
 
-        shares = shares_purchased - int(sold_by_ticker.get(ticker, 0))
         if shares <= 0:
             continue
         invested_cop = avg_price_cop * shares
 
         current_price_cop = current_prices_cop.get(ticker)
         current_value_cop = shares * current_price_cop if current_price_cop is not None else None
+        net_current_value_cop = (
+            current_value_cop - DEFAULT_COMMISSION_COP if current_value_cop is not None else None
+        )
         return_pct = (
-            (current_value_cop - invested_cop) / invested_cop
-            if current_value_cop is not None and invested_cop
+            (net_current_value_cop - invested_cop) / invested_cop
+            if net_current_value_cop is not None and invested_cop
             else None
         )
         rows.append(
@@ -172,6 +245,7 @@ def summarize_by_ticker(
                 "invested_cop": invested_cop,
                 "current_price_cop": current_price_cop,
                 "current_value_cop": current_value_cop,
+                "net_current_value_cop": net_current_value_cop,
                 "return_pct": return_pct,
             }
         )
@@ -179,40 +253,30 @@ def summarize_by_ticker(
 
 
 def realized_gains_summary(purchases: pd.DataFrame, sales: pd.DataFrame) -> pd.DataFrame:
-    """Una fila por ticker con al menos una venta: ganancia realizada usando costo promedio de
-    compra (no FIFO por lotes — mismo criterio que `avg_price_cop` en `summarize_by_ticker`) como
-    base de costo, y el precio de venta NETO de la comisión de venta como ingreso — misma lógica
-    simétrica que ya usa el lado de compra (`invested_cop` ya suma la comisión al costo), así que
-    la comisión de venta reduce la ganancia acá en vez de quedar afuera del cálculo.
-
-    El costo promedio solo considera compras con fecha <= la venta más reciente de ese ticker en
-    este grupo — nunca compras posteriores. Sin este corte, una compra cargada DESPUÉS de una
-    venta ya registrada corría el costo promedio hacia adelante y cambiaba retroactivamente la
-    ganancia ya realizada de esa venta (bug real, detectado 2026-08-11: agregar una compra de
-    METACO 8 días después de una venta ya hecha le bajó la ganancia realizada reportada de esa
-    venta de $224.284 a $104.344 COP) — viola la regla explícita de que esta sección es de solo
-    lectura y no debería cambiar salvo por una venta nueva (ver CLAUDE.md /
-    financial-advisor-portfolio skill)."""
+    """Una fila por ticker con al menos una venta: ganancia realizada usando costo promedio
+    CRONOLÓGICO (vía `_chronological_ledger` — la base de costo vigente en el momento de CADA
+    venta, no un promedio estático recalculado sobre todas las compras) como base de costo, y el
+    precio de venta NETO de la comisión de venta como ingreso — misma lógica simétrica que ya usa
+    el lado de compra (`invested_cop` ya suma la comisión al costo), así que la comisión de venta
+    reduce la ganancia acá en vez de quedar afuera del cálculo. Con varias ventas del mismo ticker
+    en fechas distintas, cada una usa SU PROPIA base de costo (pueden diferir si hubo una compra
+    entre medio) y esta función suma sus resultados en una sola fila por ticker."""
     if sales.empty:
         return pd.DataFrame()
 
     rows = []
     for ticker, sale_group in sales.groupby("ticker"):
-        cutoff_date = sale_group["date"].max()
-        ticker_purchases = purchases[(purchases["ticker"] == ticker) & (purchases["date"] <= cutoff_date)]
-        shares_purchased = int(ticker_purchases["shares"].sum())
-        invested_cop = float(
-            (ticker_purchases["shares"] * ticker_purchases["price_cop"] + ticker_purchases["commission_cop"]).sum()
-        )
-        avg_buy_price_cop = invested_cop / shares_purchased if shares_purchased else 0.0
+        ticker_purchases = purchases[purchases["ticker"] == ticker]
+        sell_events = [e for e in _chronological_ledger(ticker_purchases, sale_group) if e["type"] == "sell"]
 
-        shares_sold = int(sale_group["shares"].sum())
-        gross_proceeds_cop = float((sale_group["shares"] * sale_group["price_cop"]).sum())
-        sale_commission_cop = float(sale_group["commission_cop"].sum())
+        shares_sold = sum(e["shares"] for e in sell_events)
+        gross_proceeds_cop = float(sum(e["shares"] * e["price_cop"] for e in sell_events))
+        sale_commission_cop = float(sum(e["commission_cop"] for e in sell_events))
+        cost_basis_cop = float(sum(e["shares"] * e["avg_cost_cop"] for e in sell_events))
         net_proceeds_cop = gross_proceeds_cop - sale_commission_cop
-        cost_basis_cop = avg_buy_price_cop * shares_sold
         realized_gain_cop = net_proceeds_cop - cost_basis_cop
         realized_gain_pct = realized_gain_cop / cost_basis_cop if cost_basis_cop else None
+        avg_buy_price_cop = cost_basis_cop / shares_sold if shares_sold else 0.0
 
         rows.append(
             {
@@ -241,19 +305,17 @@ def simulate_additional_purchase(
 ) -> dict:
     """Cuánto cambiaría el precio promedio de `ticker` si se sumara una compra hipotética —
     puro cálculo, no persiste nada. Sirve para planificar antes de cargarla de verdad.
-    `current_avg_price_cop` es el costo promedio de TODO lo comprado (una venta parcial no
-    cambia el costo promedio de las acciones que quedan, solo cuántas quedan), pero
-    `current_shares`/`current_invested_cop` reflejan lo que efectivamente se tiene hoy (compradas
-    menos vendidas), igual que `summarize_by_ticker`."""
+    `current_avg_price_cop`/`current_shares` salen del mismo ledger cronológico que
+    `summarize_by_ticker()` (no un promedio estático de todo lo comprado)."""
     ticker_purchases = purchases[purchases["ticker"] == ticker]
-    shares_purchased = int(ticker_purchases["shares"].sum())
-    total_invested_cop = float(
-        (ticker_purchases["shares"] * ticker_purchases["price_cop"] + ticker_purchases["commission_cop"]).sum()
-    )
-    current_avg_price_cop = total_invested_cop / shares_purchased if shares_purchased else None
-
-    shares_sold = int(sales[sales["ticker"] == ticker]["shares"].sum()) if not sales.empty else 0
-    current_shares = shares_purchased - shares_sold
+    ticker_sales = sales[sales["ticker"] == ticker] if not sales.empty else sales
+    ledger = _chronological_ledger(ticker_purchases, ticker_sales)
+    if ledger:
+        current_avg_price_cop = ledger[-1]["avg_cost_cop"]
+        current_shares = ledger[-1]["shares_held_after"]
+    else:
+        current_avg_price_cop = None
+        current_shares = 0
     current_invested_cop = current_avg_price_cop * current_shares if current_avg_price_cop else 0.0
 
     extra_invested_cop = extra_shares * extra_price_cop + extra_commission_cop
