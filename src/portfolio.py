@@ -183,13 +183,23 @@ def realized_gains_summary(purchases: pd.DataFrame, sales: pd.DataFrame) -> pd.D
     compra (no FIFO por lotes — mismo criterio que `avg_price_cop` en `summarize_by_ticker`) como
     base de costo, y el precio de venta NETO de la comisión de venta como ingreso — misma lógica
     simétrica que ya usa el lado de compra (`invested_cop` ya suma la comisión al costo), así que
-    la comisión de venta reduce la ganancia acá en vez de quedar afuera del cálculo."""
+    la comisión de venta reduce la ganancia acá en vez de quedar afuera del cálculo.
+
+    El costo promedio solo considera compras con fecha <= la venta más reciente de ese ticker en
+    este grupo — nunca compras posteriores. Sin este corte, una compra cargada DESPUÉS de una
+    venta ya registrada corría el costo promedio hacia adelante y cambiaba retroactivamente la
+    ganancia ya realizada de esa venta (bug real, detectado 2026-08-11: agregar una compra de
+    METACO 8 días después de una venta ya hecha le bajó la ganancia realizada reportada de esa
+    venta de $224.284 a $104.344 COP) — viola la regla explícita de que esta sección es de solo
+    lectura y no debería cambiar salvo por una venta nueva (ver CLAUDE.md /
+    financial-advisor-portfolio skill)."""
     if sales.empty:
         return pd.DataFrame()
 
     rows = []
     for ticker, sale_group in sales.groupby("ticker"):
-        ticker_purchases = purchases[purchases["ticker"] == ticker]
+        cutoff_date = sale_group["date"].max()
+        ticker_purchases = purchases[(purchases["ticker"] == ticker) & (purchases["date"] <= cutoff_date)]
         shares_purchased = int(ticker_purchases["shares"].sum())
         invested_cop = float(
             (ticker_purchases["shares"] * ticker_purchases["price_cop"] + ticker_purchases["commission_cop"]).sum()

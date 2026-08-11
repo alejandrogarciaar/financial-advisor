@@ -360,7 +360,7 @@ def _render_cartera_and_total(purchases: pd.DataFrame, sales: pd.DataFrame) -> N
             {
                 "Ticker": summary["ticker"],
                 "Acciones": summary["shares"],
-                "Precio prom. compra (COP)": summary["avg_price_cop"],
+                "Costo prom. compra (COP)": summary["avg_price_cop"],
                 "Precio actual (COP)": summary["current_price_cop"],
                 "Invertido (COP)": summary["invested_cop"],
                 "Valor actual (COP)": summary["current_value_cop"],
@@ -382,7 +382,7 @@ def _render_cartera_and_total(purchases: pd.DataFrame, sales: pd.DataFrame) -> N
 
         styled = display.style.format(
             {
-                "Precio prom. compra (COP)": "${:,.0f}",
+                "Costo prom. compra (COP)": "${:,.0f}",
                 "Precio actual (COP)": lambda v: f"${v:,.0f}" if pd.notna(v) else "No disponible",
                 "Invertido (COP)": "${:,.0f}",
                 "Valor actual (COP)": lambda v: f"${v:,.0f}" if pd.notna(v) else "—",
@@ -904,7 +904,7 @@ def render_capital():
             column_config={
                 "ticker": st.column_config.TextColumn("Ticker"),
                 "shares": st.column_config.NumberColumn("Acciones", format="%d"),
-                "avg_buy_price_cop": st.column_config.NumberColumn("Precio prom. compra (COP)", format="$%.0f"),
+                "avg_buy_price_cop": st.column_config.NumberColumn("Costo prom. compra (COP)", format="$%.0f"),
                 "price_cop": st.column_config.NumberColumn("Precio de venta (COP)", format="$%.0f"),
                 "commission_cop": st.column_config.NumberColumn("Comisión de venta (COP)", format="$%.0f"),
                 "date": st.column_config.DateColumn("Fecha de venta", format="DD/MM/YYYY"),
