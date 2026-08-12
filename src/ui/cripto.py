@@ -5,7 +5,8 @@ Zone Engine (`src/support_resistance.py`) — motor multi-metodología de zonas 
 resistencia rediseñado para priorizar calidad de reacción por sobre cantidad de touches.
 Extraído de app.py (que llegó a 2821 líneas) para modularizar — ver `financial-advisor-cripto` skill
 para el diseño completo, los bugs reales encontrados construyendo el motor, y el estado de la
-validación fuera de muestra (pendiente de re-correr tras el rediseño)."""
+validación fuera de muestra (re-corrida en dos rondas tras el rediseño del score; `SR_VALIDATED_TICKERS`
+sigue vacío — ver el comentario junto a esa constante más abajo)."""
 
 from datetime import datetime, timedelta
 
@@ -428,12 +429,16 @@ def render_crypto():
             validated_kinds = SR_VALIDATED_TICKERS.get(ticker, set())
             if not validated_kinds:
                 st.caption(
-                    "No hay evidencia validada fuera de muestra para este ticker todavía (se probó "
-                    "BTC, ETH, SOL, AAPL y TSLA con el mismo split cronológico 60/40 que el resto de "
-                    "las señales de esta app; solo BTC —soporte— y TSLA —soporte y resistencia— "
-                    "mostraron el mismo signo de efecto en los 4 horizontes probados). Esto no es "
-                    "evidencia de que NO haya señal para este ticker — solo que todavía no se "
-                    "confirmó, y el resto de esta tabla se queda puramente descriptivo."
+                    "No hay evidencia validada fuera de muestra para ningún ticker con la versión "
+                    "actual del score (Market Reaction Zone Engine, con ajuste estadístico de "
+                    "Wilson). Se probó BTC, ETH y SOL con el mismo split cronológico 60/40 y los "
+                    "mismos 4 horizontes que el resto de las señales de esta app: hubo una primera "
+                    "ronda donde el soporte validó en las 3 monedas, pero se rompió al agregar un "
+                    "ajuste estadístico que evita que niveles con pocos touches pesen igual que uno "
+                    "con muchos — resultado más honesto, no un error de cálculo. Esto no es "
+                    "evidencia de que NO haya señal — solo que todavía no se confirmó bajo el "
+                    "criterio estadístico correcto, y el resto de esta tabla se queda puramente "
+                    "descriptivo."
                 )
             else:
                 any_hit = False
