@@ -6,6 +6,12 @@ load_dotenv()
 FMP_API_KEY = os.environ.get("FMP_API_KEY")
 FMP_BASE_URL = "https://financialmodelingprep.com/stable"
 
+# `.get()`, no acceso con corchetes — mismo criterio que FMP_API_KEY arriba, por el mismo motivo
+# real (ver "Known data caveats" en CLAUDE.md): un deploy sin esta key seteada no debe romper la
+# app al importar este módulo, solo al efectivamente intentar usar src/data/sosovalue_client.py.
+SOSOVALUE_API_KEY = os.environ.get("SOSOVALUE_API_KEY")
+SOSOVALUE_BASE_URL = "https://openapi.sosovalue.com/openapi/v1"
+
 # Excluidos del universo:
 # - CSPXCO (iShares Core S&P 500 ETF): es un ETF, no una empresa individual,
 #   y no tiene estados financieros propios sobre los que calcular un DCF.
