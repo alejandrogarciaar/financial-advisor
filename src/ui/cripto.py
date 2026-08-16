@@ -18,8 +18,10 @@ from src.config import CRYPTO_BINANCE_SYMBOLS
 from src.data import binance_client
 from src.data.errors import DataError
 from src.speculation import (
+    VWAP_WINDOWS_DAYS,
     classify_wyckoff_spring_series,
     compute_wyckoff_spring_reactions,
+    rolling_vwap_series,
 )
 from src.support_resistance import (
     SRConfig,
@@ -135,6 +137,187 @@ def render_wyckoff_spring(ticker: str, historical_prices: list[dict], closes: li
         )
     else:
         st.caption("Sin observaciones suficientes todavía.")
+
+
+# Identidad de cada ventana en el gráfico. Las 3 ventanas tienen un orden natural (corta →
+# larga), así que además del color va un `dash` distinto por ventana: identidad por color, orden
+# por trazo — la línea más "sólida" es el ancla más larga. El precio se queda con el mismo azul
+# que usa en render_advanced_levels_chart(), para que "azul = precio" siga siendo cierto en toda
+# la pestaña. Los 3 hex son los mismos de FAMILY_COLOR en stocks.py (paleta categórica ya usada
+# en el proyecto) + el violeta de SR_KIND_RGB, no una paleta nueva; validados con el script de la
+# skill dataviz (separación CVD OK sobre fondo claro), y el valor exacto de cada línea queda
+# igual visible como texto en las métricas y en la tabla de abajo, no solo por color.
+VWAP_PRICE_COLOR = "#2a78d6"
+VWAP_COLOR = {7: "#eb6834", 30: "#1baf7a", 365: "#8a2be2"}
+VWAP_DASH = {7: "dot", 30: "dash", 365: "solid"}
+VWAP_WINDOW_LABEL = {7: "7 días", 30: "30 días", 365: "1 año"}
+VWAP_CHART_WINDOW_DAYS = 365
+
+
+def render_vwap(ticker: str, historical_prices: list[dict], closes: list[float], current_price: float) -> None:
+    """Sección PROPIA de esta pestaña, no dentro de `render_speculation_indicators()` — mismo
+    criterio que Wyckoff Spring y Golden Cross: nunca se probó nada de esto para acciones, así que
+    no debe aparecer solo en Especulación por compartir el cuerpo de indicadores.
+
+    El VWAP ya existía en el proyecto pero era invisible y no hacía nada: `_rolling_vwap()` se
+    calculaba dentro del Market Reaction Zone Engine solo como un booleano ("¿pasa algún VWAP a
+    menos de 0.5 ATR de este nivel?"), ese componente (`vwap_confluence`) pesa 0 en
+    `DEFAULT_WEIGHTS` desde el rediseño del score, y `component_scores` no se renderiza en ningún
+    lado — o sea que prender/apagar "Confluencia con VWAP" en las metodologías activas no cambiaba
+    nada observable. Esta sección lo saca a la superficie como lo que es: un indicador clásico,
+    DESCRIPTIVO, no validado fuera de muestra por este proyecto (ver el caption del final).
+    """
+    st.divider()
+    st.subheader("🎯 VWAP — precio promedio ponderado por volumen")
+    st.caption(
+        "El VWAP es el precio promedio al que realmente se operó en una ventana, ponderado por "
+        "volumen — no un promedio de cierres como una media móvil. Pensalo como el **costo "
+        "promedio del mercado**: si el precio de hoy está por encima del VWAP de 30 días, el "
+        "comprador promedio del último mes está en ganancia; si está por debajo, está en pérdida. "
+        "Por eso se lo suele mirar como referencia de \"caro/barato respecto de lo que pagó el "
+        "resto\", y no como una señal de dirección."
+    )
+
+    dates = [p["date"] for p in historical_prices]
+    highs = [p.get("high") for p in historical_prices]
+    lows = [p.get("low") for p in historical_prices]
+    volumes = [p.get("volume") for p in historical_prices]
+    if len(dates) != len(closes) or any(h is None or l is None for h, l in zip(highs, lows)):
+        st.caption("No hay suficiente historial (o datos de máximos/mínimos) para calcular el VWAP.")
+        return
+
+    # Solo se muestra una ventana si el historial la cubre de verdad: con 3 días de datos, el
+    # "VWAP de 1 año" da exactamente el mismo número que el de 7 días (misma ventana efectiva) y
+    # la etiqueta pasa a mentir. Para BTC/ETH/SOL en Binance esto nunca se activa (hay años de
+    # historia); es la misma defensa que el resto de los indicadores hacen con `period`.
+    history_days = (
+        datetime.strptime(dates[-1][:10], "%Y-%m-%d") - datetime.strptime(dates[0][:10], "%Y-%m-%d")
+    ).days
+    windows = [w for w in VWAP_WINDOWS_DAYS if history_days >= w]
+    if not windows:
+        st.caption(
+            f"No hay suficiente historial para calcular el VWAP: hacen falta al menos "
+            f"{min(VWAP_WINDOWS_DAYS)} días y hay {history_days}."
+        )
+        return
+
+    series_by_window = {w: rolling_vwap_series(dates, highs, lows, closes, volumes, w) for w in windows}
+    latest = {w: s[-1] for w, s in series_by_window.items() if s and s[-1] is not None}
+    if not latest:
+        st.caption("No hay datos de volumen suficientes para calcular el VWAP de este ticker.")
+        return
+
+    cols = st.columns(len(windows))
+    for col, window in zip(cols, windows):
+        value = latest.get(window)
+        if value is None:
+            col.metric(f"VWAP {VWAP_WINDOW_LABEL[window]}", "—")
+        else:
+            col.metric(f"VWAP {VWAP_WINDOW_LABEL[window]}", f"${value:,.2f}", f"{current_price / value - 1:+.1%}")
+
+    # Lectura de 3 vías (arriba de todos / abajo de todos / mixto), mismo patrón que
+    # classify_trend_state() para las 3 medias móviles — no inventa un umbral propio: la pregunta
+    # es simplemente de qué lado del costo promedio está el precio en cada horizonte.
+    above = [w for w, v in latest.items() if current_price > v]
+    below = [w for w, v in latest.items() if current_price < v]
+    if len(above) == len(latest):
+        st.info(
+            "🟢 El precio está **por encima del VWAP en todas las ventanas**: el comprador "
+            "promedio de la última semana, del último mes y del último año está en ganancia. "
+            "Clásicamente se lee como fortaleza — el VWAP largo suele oficiar de referencia de "
+            "soporte mientras el precio se mantenga arriba —, aunque cuanto más estirado quede "
+            "sobre su propio costo promedio, más caro está pagando el que entra hoy."
+        )
+    elif len(below) == len(latest):
+        st.info(
+            "🔴 El precio está **por debajo del VWAP en todas las ventanas**: el comprador "
+            "promedio de la última semana, del último mes y del último año está en pérdida. "
+            "Clásicamente se lee como debilidad — el VWAP largo suele oficiar de referencia de "
+            "resistencia mientras el precio siga abajo —, aunque también es la situación en la "
+            "que estás comprando por debajo de lo que pagó el mercado en ese período."
+        )
+    else:
+
+        def _enumerar(ventanas: list[int]) -> str:
+            """"7 días y 30 días", no "7 días, 30 días" — la enumeración con "y" al final es lo
+            único que hace legible la frase cuando caen 2 o 3 ventanas del mismo lado."""
+            etiquetas = [VWAP_WINDOW_LABEL[w] for w in sorted(ventanas)]
+            if len(etiquetas) <= 1:
+                return "".join(etiquetas)
+            return f"{', '.join(etiquetas[:-1])} y {etiquetas[-1]}"
+
+        st.info(
+            f"➖ Lectura mixta: el precio está por encima del VWAP de {_enumerar(above)} y por "
+            f"debajo del de {_enumerar(below)}. No hay una sola referencia de costo promedio "
+            "mandando — según el horizonte que mires, el comprador promedio está en ganancia o "
+            "en pérdida."
+        )
+
+    window_start = (datetime.strptime(dates[-1][:10], "%Y-%m-%d") - timedelta(days=VWAP_CHART_WINDOW_DAYS)).strftime("%Y-%m-%d")
+    # El VWAP se calcula sobre TODO el historial y recién después se recorta la vista: si se
+    # calculara solo sobre la ventana visible, el de 1 año arrancaría "desde cero" en el borde
+    # izquierdo del gráfico y mostraría un valor que nunca existió.
+    visible = [i for i, d in enumerate(dates) if d[:10] >= window_start]
+    if len(visible) >= 2:
+        x = [dates[i] for i in visible]
+        fig = go.Figure()
+        fig.add_trace(
+            go.Scatter(
+                x=x, y=[closes[i] for i in visible], mode="lines", name=f"Precio ({ticker})",
+                line=dict(color=VWAP_PRICE_COLOR, width=3),
+                hovertemplate="Precio: $%{y:,.2f}<extra></extra>",
+            )
+        )
+        for window in windows:
+            serie = series_by_window[window]
+            label = f"VWAP {VWAP_WINDOW_LABEL[window]}"
+            fig.add_trace(
+                go.Scatter(
+                    x=x, y=[serie[i] for i in visible], mode="lines", name=label,
+                    line=dict(color=VWAP_COLOR[window], width=2, dash=VWAP_DASH[window]),
+                    hovertemplate=f"{label}: $%{{y:,.2f}}<extra></extra>",
+                )
+            )
+        fig.update_layout(
+            plot_bgcolor="rgba(0,0,0,0)",
+            paper_bgcolor="rgba(0,0,0,0)",
+            font=dict(color="#898781"),
+            legend=dict(orientation="h", yanchor="bottom", y=1.02, xanchor="left", x=0),
+            margin=dict(l=10, r=10, t=10, b=10),
+            hovermode="x unified",
+            height=400,
+            xaxis=dict(showgrid=False),
+            yaxis=dict(gridcolor="rgba(128,128,128,0.2)", tickprefix="$"),
+        )
+        st.plotly_chart(fig, use_container_width=True)
+
+        # Tabla de lo mismo que muestra el gráfico (más reciente primero) — el gráfico distingue
+        # las 3 ventanas por color, así que la versión en texto no es opcional (mismo criterio que
+        # el gráfico de veredictos en Validación y el de familias en Acciones).
+        with st.expander("Ver los datos del gráfico en tabla"):
+            table = pd.DataFrame(
+                {
+                    "Fecha": x,
+                    "Precio": [closes[i] for i in visible],
+                    **{
+                        f"VWAP {VWAP_WINDOW_LABEL[w]}": [series_by_window[w][i] for i in visible]
+                        for w in windows
+                    },
+                }
+            ).iloc[::-1]
+            st.dataframe(table, use_container_width=True, hide_index=True)
+
+    st.caption(
+        "**Descriptivo, no validado por este proyecto.** El VWAP es un indicador clásico y se "
+        "muestra acá como tal — igual que el MACD, las Bandas de Bollinger, el ADX o el Índice de "
+        "Miedo y Codicia —, pero todavía NO se probó fuera de muestra si la distancia al VWAP "
+        "anticipa algo del retorno futuro de BTC/ETH/SOL (split cronológico 60/40 y 4 horizontes, "
+        "el mismo criterio con el que se validaron el régimen del Plan de DCA y el Wyckoff "
+        "Spring). Hasta que esa prueba se corra y pase, esto no ajusta ninguna recomendación de "
+        "la app. Dentro del Market Reaction Zone Engine el VWAP también aparece como componente "
+        "de confluencia, pero pesa 0 en el score desde el rediseño — no está inflando el puntaje "
+        "de ninguna zona."
+    )
 
 
 @st.cache_data(ttl=900, show_spinner=False)
@@ -490,4 +673,5 @@ def render_crypto():
     render_speculation_indicators(
         "crypto", ticker, historical_prices, closes, current_price, is_crypto=True, render_zone_engine=_render_zone_engine
     )
+    render_vwap(ticker, historical_prices, closes, current_price)
     render_wyckoff_spring(ticker, historical_prices, closes)

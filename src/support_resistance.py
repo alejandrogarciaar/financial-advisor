@@ -56,7 +56,6 @@ from __future__ import annotations
 import bisect
 from concurrent.futures import ThreadPoolExecutor
 from dataclasses import dataclass, field
-from datetime import datetime, timedelta
 
 import numpy as np
 import pandas as pd
@@ -65,6 +64,8 @@ from scipy.signal import argrelextrema
 from scipy.stats import gaussian_kde
 from sklearn.cluster import DBSCAN
 from sklearn.linear_model import HuberRegressor, LinearRegression, RANSACRegressor, TheilSenRegressor
+
+from src.speculation import rolling_vwap_series
 
 ALL_METHODS = {
     "dbscan",
@@ -513,25 +514,17 @@ def _volume_profile(prices: list[float], volumes: list[float], num_bins: int) ->
 
 
 def _rolling_vwap(dates: list[str], highs: list[float], lows: list[float], closes: list[float], volumes: list[float], window_days: int) -> float | None:
-    """Punto 9: VWAP "ancla móvil" sobre los últimos `window_days` días de calendario, usando
-    precio típico (H+L+C)/3 por barra en vez de trades reales (que esta app nunca fetchea) —
-    mismo patrón de ventana por días de `_extreme_since` en speculation.py, no buckets calendario
-    (semana ISO, etc.). `dates[i][:10]` toma solo la parte "YYYY-MM-DD" — la serie de referencia
-    puede traer hora ("YYYY-MM-DD HH:MM:SS", ej. la de 4h) o no (diaria), y a esta función solo le
-    importa el día calendario, no la hora exacta."""
-    if not dates:
-        return None
-    last_date = datetime.strptime(dates[-1][:10], "%Y-%m-%d")
-    cutoff = last_date - timedelta(days=window_days)
-    typical, vols = [], []
-    for d, h, l, c, v in zip(dates, highs, lows, closes, volumes):
-        if datetime.strptime(d[:10], "%Y-%m-%d") >= cutoff and v is not None:
-            typical.append((h + l + c) / 3)
-            vols.append(v)
-    total_vol = sum(vols)
-    if total_vol <= 0:
-        return None
-    return sum(t * v for t, v in zip(typical, vols)) / total_vol
+    """Punto 9: VWAP "ancla móvil" sobre los últimos `window_days` días de calendario — el valor
+    de HOY, que es lo único que necesita el chequeo de confluencia de `_score_level()` (¿pasa un
+    VWAP lo bastante cerca de este nivel ahora mismo?).
+
+    El cálculo en sí vive en `rolling_vwap_series()` (`src/speculation.py`), que devuelve la serie
+    completa: la pestaña "🪙 Cripto" la grafica, y este motor se queda con el último punto. Antes
+    había acá una implementación propia, escalar — se unificaron cuando el VWAP pasó a mostrarse
+    en la UI, para no tener dos definiciones del mismo indicador que puedan divergir (ese archivo
+    no importa nada de este, así que la dependencia va en una sola dirección, sin ciclo)."""
+    series = rolling_vwap_series(dates, highs, lows, closes, volumes, window_days)
+    return series[-1] if series else None
 
 
 def _classify_candle(o: float, h: float, l: float, c: float, prev_o: float | None, prev_c: float | None) -> str | None:

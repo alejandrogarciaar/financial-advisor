@@ -111,6 +111,24 @@ config + tab wiring). This tab's code lives in `src/ui/cripto.py`:
   `{"BTC": {"support"}, "ETH": {"support"}, "SOL": {"support"}}` (or the even older
   `{"BTC": {"support"}, "TSLA": {"support", "resistance"}}`) values without re-running the
   validation fresh.
+- `render_vwap()` + `VWAP_PRICE_COLOR`/`VWAP_COLOR`/`VWAP_DASH`/`VWAP_WINDOW_LABEL`/
+  `VWAP_CHART_WINDOW_DAYS` — the "🎯 VWAP" section, called from `render_crypto()` between
+  `render_speculation_indicators()` and `render_wyckoff_spring()`. Its OWN section, not inside the
+  shared indicator stack — same reasoning as Wyckoff Spring/Golden Cross (nothing about VWAP was
+  ever tested for stocks, so it must not appear silently in Especulación). Renders: 3 metrics
+  (price vs. VWAP at 7/30/365 days, from `rolling_vwap_series()` in `src/speculation.py` over the
+  daily Binance series already in hand — no extra fetch), a 3-way reading (above all windows /
+  below all / mixed, same shape as `classify_trend_state()`'s three-medias logic), a price+VWAP
+  chart over the last `VWAP_CHART_WINDOW_DAYS` (365), the same data as a table in an expander, and
+  a closing caption disclosing that this is descriptive and **not** OOS-validated. Two details
+  worth not "simplifying" away: (a) the VWAP series is computed over the FULL history and only
+  then sliced to the visible window — computing it on the window alone would make the 365-day line
+  restart from scratch at the chart's left edge and show a value that never existed; (b) a window
+  is dropped entirely when the history doesn't span it (`history_days >= w`), so a ticker with 20
+  days of data shows only the 7-day VWAP instead of three identical numbers labelled 7d/30d/1y.
+  Colors are the existing `FAMILY_COLOR` trio + `SR_KIND_RGB`'s purple (not a new palette), with
+  `dash` carrying the short→long ordering as secondary encoding, and every line's value also
+  readable as text in the metrics/table (the dataviz skill's "never color-alone" requirement).
 
 ## `src/support_resistance.py` — "Market Reaction Zone Engine"
 
@@ -181,9 +199,13 @@ drawdown-buckets.
     primary criterion")
   - `volume_profile`/`candle_confirmation`/`proximity`/`vwap_confluence` are NOT in this dict
     anymore — `_score_level()` sums via `config.weights.get(k, 0.0)` (not direct indexing), so
-    these 4 still compute and appear in `component_scores` (still toggleable via
-    `enabled_methods`, still shown for inspection) but contribute zero points. They were dropped
-    from scoring, not from the engine, per an explicit user choice — see Design history.
+    these 4 still compute and land in `component_scores` (still toggleable via `enabled_methods`)
+    but contribute zero points. They were dropped from scoring, not from the engine, per an
+    explicit user choice — see Design history. Note `component_scores` is not rendered anywhere
+    in the UI, so "still shown for inspection" means available on the `SRLevel` object, not
+    visible to the user: toggling any of these 4 in the methods multiselect changes nothing the
+    user can observe. VWAP is the one that got a real UI presence, but as its own descriptive
+    section (`render_vwap()`), not through this component — see `src/ui/cripto.py` above.
 - **Statistical-consistency adjustment (added same day as the redesign, see Design history)**:
   `respect_rate` and `volume_during_rebounds` no longer use the raw ratio (rebounds/touches,
   volume_confirmations/rebound_count) — they use `_wilson_lower_bound(successes, n,
@@ -331,3 +353,9 @@ or changing which tickers/tab this content lives in.
   name and Binance-only wiring are a deliberate scope decision, not an incidental gap.
 - Re-adding crypto to Especulación's ticker selector — same reasoning in reverse; crypto's
   speculation indicators live here now, not there.
+- Turning the "🎯 VWAP" section into anything actionable — a `st.success`, a threshold, an input
+  to the DCA box, or a weight for `vwap_confluence`. The section shipped display-only by explicit
+  user choice (2026-08-16) with the OOS study deferred, so today there is literally no evidence
+  behind it. Run the study first (see Design history for the exact shape agreed on), then decide.
+- Adding VWAP to `render_speculation_indicators()` so Especulación gets it "for free" — never
+  tested for the 8 stock `TICKERS`, same rule as Wyckoff Spring and Golden Cross.

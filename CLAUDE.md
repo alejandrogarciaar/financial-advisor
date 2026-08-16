@@ -386,6 +386,28 @@ verified via `AppTest` that exactly one such section exists app-wide). See
 (ETH's spring-day return is negative in absolute terms both train and test; BTC's is only
 below-average, not reliably negative outright).
 
+**VWAP (`rolling_vwap_series()` in `src/speculation.py`, `render_vwap()` in `src/ui/cripto.py`,
+own section between the shared indicator stack and Wyckoff Spring)**: VWAP already existed in
+this repo but was inert and invisible — `_rolling_vwap()` was computed only inside the Zone
+Engine as a BOOLEAN `vwap_confluence` component ("does any VWAP pass within 0.5 ATR of this
+level?"), that component has weighed 0 since the score redesign, and `component_scores` is never
+rendered anywhere, so toggling "Confluencia con VWAP" in the methods multiselect changed nothing
+observable (`SRConfig.vwap_confluence_bonus` is likewise defined and never read — still dead,
+left alone deliberately). `rolling_vwap_series()` is now the single implementation (windows
+7/30/365 **calendar** days over the daily Binance series, typical price (H+L+C)/3, sliding-window
+sums); `_rolling_vwap()` is a thin "last element" wrapper over it, verified numerically identical
+to the old scalar code across 48 shape/window combinations (daily and 4h-style timestamps, `None`
+volumes, n=1..900) so the engine's behavior didn't move. The UI section is **descriptive only**,
+same standing as ADX/OBV/Fear & Greed and disclosed as such in its own caption: price vs. VWAP at
+3 horizons, a 3-way reading (above all / below all / mixed, same shape as `classify_trend_state()`),
+and a chart+table. **No OOS validation has been run for VWAP** — the user chose the display-only
+scope first (2026-08-16) and the study (distance-to-VWAP normalized by ATR → forward returns,
+60/40 split, 4 horizons, via `scripts/oos_validate.py`) is the agreed next step, to be run
+locally since Binance is unreachable from the remote sessions. Don't promote this to an actionable
+message, and don't give `vwap_confluence` a weight, until that study actually passes. Windows
+whose span the history doesn't cover are dropped rather than shown (a "VWAP de 1 año" computed
+over 3 days is a mislabeled number, not a value).
+
 **"📊 Validación" tab (`render_validation()` in `src/ui/validation.py`)**: not a price signal like the other 4
 tabs — it's a check on how well the *existing* signals have performed, added after the user
 asked "what else could we add" and picked this + a rejected support/resistance idea (see above)
