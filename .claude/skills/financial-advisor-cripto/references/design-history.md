@@ -36,9 +36,38 @@ backtest a number that only exists "as of today".
 
 Deliberately NOT done: any actionable claim. The section's closing caption states outright that
 no OOS test has been run for VWAP in this project, names the test that would have to pass (the
-same 60/40 chronological split and 5/10/20/30-day horizons as every other signal here, via
-`scripts/oos_validate.py`), and discloses that the engine's VWAP component weighs 0 — so nobody
-reads the score as being partly VWAP-driven.
+same 60/40 chronological split and 5/10/20/30-day horizons as every other signal here), and
+discloses that the engine's VWAP component weighs 0 — so nobody reads the score as being partly
+VWAP-driven.
+
+**The study itself (`scripts/vwap_oos_validate.py`), written immediately after, still unrun.**
+The user asked for it right away ("ya mismo"), so it exists — but it has never seen real data:
+Binance is unreachable from this repo's remote sessions, so it has to be run locally, and until
+then nothing about the section's display-only status changes. What it tests: the signal is
+`(close - vwap) / atr` — distance normalized by ATR(14), so it means the same thing across coins
+and volatility regimes, the same normalization the Zone Engine applies to all its tolerances.
+The sweep is 3 VWAP windows (7/30/365) × 2 sides (price above / below) × 3 thresholds
+(0.5/1.0/1.5 ATR) × 4 horizons. Deliberately agnostic about direction: mean-reversion ("far below
+the average cost comes back") and momentum ("far below keeps falling") are both plausible, and
+the sign decides — exactly how the Fear & Greed check ended up finding momentum rather than the
+classic contrarian story.
+
+Three bars to clear, and the third is the one that usually kills things here: every horizon holds
+its sign train-vs-test; all three thresholds agree with each other AND share one sign (a lone
+threshold passing between failing neighbours prints as `FRAGIL`, not as a pass); and then stage 2,
+redundancy — "regime + VWAP condition" is compared against "regime alone", not against all days.
+Price above its VWAP and price above its moving averages are close relatives, so a VWAP signal
+that adds nothing inside `classify_regime_series`'s regimes is the regime restated, not new
+information. That stage needed a baseline narrower than "every day in the slice", which
+`run_oos_validation` couldn't express — hence the new `baseline_condition` param there (default
+`None` keeps the old unconditional behavior; the RSI-overbought refinement and the Fear & Greed
+redundancy check had both hand-rolled this same comparison before).
+
+Verified without market data, on synthetic series: an AR(1) mean-reverting process is detected
+(`VALIDADO`, with the direction reported as reversion, both sides), and a pure random walk yields
+nothing — its two near-misses come out as `FRAGIL` rather than passes, which is the threshold
+sweep doing exactly the job it exists for. A validator that can only ever say no would be useless,
+so both halves of that check matter.
 
 **Walking touches against the 4h reference series instead of daily.** Follow-up to
 the statistical-consistency fix (below): with only ~1825 daily bars in 5 years, BTC/ETH/SOL

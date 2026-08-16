@@ -355,7 +355,11 @@ or changing which tickers/tab this content lives in.
   speculation indicators live here now, not there.
 - Turning the "🎯 VWAP" section into anything actionable — a `st.success`, a threshold, an input
   to the DCA box, or a weight for `vwap_confluence`. The section shipped display-only by explicit
-  user choice (2026-08-16) with the OOS study deferred, so today there is literally no evidence
-  behind it. Run the study first (see Design history for the exact shape agreed on), then decide.
+  user choice (2026-08-16), so today there is literally no evidence behind it. The study exists
+  (`scripts/vwap_oos_validate.py`) but has never been run on real data, because Binance is
+  unreachable from remote Claude sessions — run it locally, and only then decide. Its own output
+  prints the paste-ready `VWAP_VALIDATED_COMBOS` dict; a combo that passes the threshold sweep but
+  fails stage 2 (redundancy vs. the trend regime) is NOT a signal — it's the regime restated, the
+  same conclusion the Fear & Greed check reached.
 - Adding VWAP to `render_speculation_indicators()` so Especulación gets it "for free" — never
   tested for the 8 stock `TICKERS`, same rule as Wyckoff Spring and Golden Cross.

@@ -135,7 +135,8 @@ mapa es solo para ubicarse rápido, no para reemplazar esa lectura.
 
 | Archivo | Rol |
 |---|---|
-| `oos_validate.py` | Validador fuera de muestra reusable (split cronológico 60/40, consistencia de signo, barrido de umbrales/temporalidades) — reemplaza re-derivar esta metodología a mano en cada investigación. |
+| `oos_validate.py` | Validador fuera de muestra reusable (split cronológico 60/40, consistencia de signo, barrido de umbrales/temporalidades, baseline acotable a un subconjunto para chequeos de redundancia) — reemplaza re-derivar esta metodología a mano en cada investigación. |
+| `vwap_oos_validate.py` | Investigación: ¿la distancia del precio al VWAP (normalizada por ATR) anticipa el retorno futuro de BTC/ETH/SOL? Barre 3 ventanas × 2 lados × 3 umbrales y chequea redundancia contra el régimen de tendencia. Correr local (Binance bloquea los entornos remotos). |
 | `verify_app.py` | Smoke test de las 6 pestañas vía `AppTest`, sin navegador. |
 | `run_app.sh` / `stop_app.sh` | Arrancar/parar el servidor Streamlit local (puerto libre, health check, kill confiable por línea de comando). |
 | `add_sale.py` | Agrega una venta a `portfolio_data/sales.json` desde la terminal, validada igual que la tabla "Tus ventas" de la UI — para registrar una venta dictada por chat sin abrir el navegador. |

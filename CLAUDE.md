@@ -400,11 +400,18 @@ to the old scalar code across 48 shape/window combinations (daily and 4h-style t
 volumes, n=1..900) so the engine's behavior didn't move. The UI section is **descriptive only**,
 same standing as ADX/OBV/Fear & Greed and disclosed as such in its own caption: price vs. VWAP at
 3 horizons, a 3-way reading (above all / below all / mixed, same shape as `classify_trend_state()`),
-and a chart+table. **No OOS validation has been run for VWAP** — the user chose the display-only
-scope first (2026-08-16) and the study (distance-to-VWAP normalized by ATR → forward returns,
-60/40 split, 4 horizons, via `scripts/oos_validate.py`) is the agreed next step, to be run
-locally since Binance is unreachable from the remote sessions. Don't promote this to an actionable
-message, and don't give `vwap_confluence` a weight, until that study actually passes. Windows
+and a chart+table. **No OOS validation has been run for VWAP yet** — the user chose the
+display-only scope first (2026-08-16), and the study is now written but NOT yet run:
+`scripts/vwap_oos_validate.py` (distance-to-VWAP normalized by ATR(14) → forward returns at
+5/10/20/30 days, 60/40 chronological split, sweeping 3 VWAP windows × both sides × 3 ATR
+thresholds, then a stage-2 redundancy check against `classify_regime_series` using
+`run_oos_validation`'s new `baseline_condition` param). It must be run **locally** — Binance
+answers 403/451 to the remote sessions' proxy and yfinance is blocked there too, so no market data
+is reachable from a Claude session in this repo's remote environment. Its logic was verified on
+synthetic series instead: a mean-reverting one is detected with the correct direction, a pure
+random walk yields nothing (its two near-misses are correctly labelled FRAGIL, not passes). Don't
+promote this to an actionable message, and don't give `vwap_confluence` a weight, until that study
+actually runs and passes on real data. Windows
 whose span the history doesn't cover are dropped rather than shown (a "VWAP de 1 año" computed
 over 3 days is a mislabeled number, not a value).
 
