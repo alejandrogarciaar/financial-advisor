@@ -1,16 +1,24 @@
-"""Cliente de la API oficial de SoSoValue (openapi.sosovalue.com) — ETFs spot de Solana listados
-en EE. UU.: lista de fondos, historia diaria de flujos/AUM (últimos ~30 días, límite de la API,
-no de este cliente) y snapshot de hoy (AUM, flujo neto, prima/descuento vs. NAV, expense ratio).
+"""Cliente de la API oficial de SoSoValue (openapi.sosovalue.com) — ETFs spot cripto listados en
+EE. UU. (BTC, ETH, SOL — cualquier `symbol` que SoSoValue soporte, no hardcodeado a una sola
+moneda): lista de fondos, historia diaria de flujos/AUM (últimos ~30 días, límite de la API, no
+de este cliente) y snapshot de hoy (AUM, flujo neto, prima/descuento vs. NAV, expense ratio).
 
-Reemplaza a un scraper exploratorio de solanafloor.com/etf-tracker (2026-08-16): esa página no
-tiene API pública — lo que exponía era el JSON interno que Next.js renderiza en el servidor
-(un `self.__next_f.push([...])` RSC, sin versionar, sin ToS de reuso claro). SoSoValue expone la
-misma información (y algo más: prima/descuento, expense ratio) bajo una API REST documentada, con
-tier gratuito (20 req/min, 100.000 req/mes por key — sosovalue.com/developer). Cross-validado
-contra el scraper de solanafloor el mismo día: mismo universo de 9 tickers, mismo AUM total
-(~$900M) y la misma anomalía real en TSOL (flujo acumulado muy negativo pese a AUM chico,
-probablemente un fondo que heredó/convirtió de otro vehículo) — dos fuentes independientes
-coincidiendo hace más creíble que sea un dato real y no un glitch de una sola fuente.
+Empezó acotado a Solana (2026-08-16, primera versión de este archivo) porque la exploración que
+lo motivó arrancó ahí, pero el endpoint `/etfs` de SoSoValue es genérico por `symbol` — confirmado
+llamándolo con `"BTC"`/`"ETH"` además de `"SOL"`, los 3 devuelven datos reales — así que
+`get_etf_list()` quedó parametrizado por símbolo desde el principio en vez de encerrarse en
+Solana con un nombre que después habría que romper.
+
+Reemplaza a un scraper exploratorio de solanafloor.com/etf-tracker (2026-08-16, Solana-only):
+esa página no tiene API pública — lo que exponía era el JSON interno que Next.js renderiza en el
+servidor (un `self.__next_f.push([...])` RSC, sin versionar, sin ToS de reuso claro). SoSoValue
+expone la misma información (y algo más: prima/descuento, expense ratio) bajo una API REST
+documentada, con tier gratuito (20 req/min, 100.000 req/mes por key — sosovalue.com/developer).
+Cross-validado contra ese scraper el mismo día, solo para Solana (el scraper nunca cubrió BTC/
+ETH): mismo universo de 9 tickers, mismo AUM total (~$900M) y la misma anomalía real en TSOL
+(flujo acumulado muy negativo pese a AUM chico, probablemente un fondo que heredó/convirtió de
+otro vehículo) — dos fuentes independientes coincidiendo hace más creíble que sea un dato real y
+no un glitch de una sola fuente. BTC/ETH no tienen ese cruce porque nunca hubo un scraper de esos.
 
 Todavía NO está conectado a ningún tab de la app — es solo el cliente de datos, mismo alcance
 que se acordó explícitamente ("provider real" == este archivo + la key en `.env`), no una
@@ -80,13 +88,14 @@ def _get(path: str, **params) -> tuple[dict | list, dict]:
     return data, {"from_cache": False, "fetched_at": fetched_at, "error": None}
 
 
-def get_solana_etf_list(country_code: str = "US") -> tuple[list[dict], dict]:
-    """Lista de ETFs spot de Solana listados en `country_code` — cada entrada trae
-    ticker/name/exchange. Es la fuente de verdad del universo de tickers para este proveedor: a
-    diferencia de `TICKERS`/`CRYPTO_BINANCE_SYMBOLS` en `config.py`, acá SÍ tiene sentido
-    reflejar en vivo si SoSoValue suma o saca un fondo — este universo se mueve solo (nuevos
-    ETFs de Solana se están aprobando activamente), y hardcodearlo lo dejaría desactualizado."""
-    return _get("/etfs", symbol="SOL", country_code=country_code)
+def get_etf_list(symbol: str, country_code: str = "US") -> tuple[list[dict], dict]:
+    """Lista de ETFs spot de `symbol` (`"BTC"`/`"ETH"`/`"SOL"`, lo que SoSoValue soporte)
+    listados en `country_code` — cada entrada trae ticker/name/exchange. Es la fuente de verdad
+    del universo de tickers para este proveedor: a diferencia de `TICKERS`/
+    `CRYPTO_BINANCE_SYMBOLS` en `config.py`, acá SÍ tiene sentido reflejar en vivo si SoSoValue
+    suma o saca un fondo — este universo se mueve solo (se siguen aprobando ETFs cripto nuevos),
+    y hardcodearlo lo dejaría desactualizado."""
+    return _get("/etfs", symbol=symbol, country_code=country_code)
 
 
 def get_etf_history(ticker: str) -> tuple[list[dict], dict]:

@@ -83,7 +83,7 @@ mapa es solo para ubicarse rápido, no para reemplazar esa lectura.
 | `yfinance_client.py` | Mismas 7 funciones que `fmp_client.py` (misma forma de dict, para que `fair_value.py` sea agnóstico al proveedor activo); sin API key, sin límite de años de estados financieros. |
 | `binance_client.py` | Klines públicas de Binance (sin API key) — única fuente de datos de BTC/ETH/SOL (diario, 4h y 1h nativos, + cualquier otro intervalo nativo vía `get_historical_prices_multi_timeframe()`). |
 | `fear_greed_client.py` | Índice de Miedo y Codicia cripto (alternative.me, sin API key) — un solo valor para todo el mercado, no por ticker. |
-| `sosovalue_client.py` | ETFs spot de Solana (openapi.sosovalue.com, requiere `SOSOVALUE_API_KEY`) — lista, historia diaria (~1 mes) y snapshot de hoy (AUM, flujos, prima/descuento, expense ratio) por fondo. Reemplaza un scraper exploratorio de solanafloor.com; todavía no está conectado a ningún tab. |
+| `sosovalue_client.py` | ETFs spot cripto (BTC/ETH/SOL, `openapi.sosovalue.com`, requiere `SOSOVALUE_API_KEY`) — lista por símbolo, historia diaria (~1 mes) y snapshot de hoy (AUM, flujos, prima/descuento, expense ratio) por fondo. Empezó Solana-only (reemplazando un scraper exploratorio de solanafloor.com) y se generalizó por símbolo el mismo día; todavía no está conectado a ningún tab. |
 | `cache.py` | Caché en disco compartida entre proveedores (`.cache/`) — última respuesta buena por llamada, sin TTL propio (el TTL vive en `@st.cache_data` del lado de `src/ui/shared.py`). |
 | `errors.py` | `DataError` — excepción común a todos los proveedores. |
 | `fx.py` | TRM USD/COP vía yfinance — existe pero no está en uso hoy (los CDIs de Portafolio ya cotizan en COP). |
