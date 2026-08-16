@@ -207,6 +207,23 @@ def rolling_vwap_series(
     return out
 
 
+def atr_series(highs: list[float], lows: list[float], closes: list[float], period: int) -> pd.Series:
+    """ATR (Average True Range) de Wilder — mismo suavizado (alpha=1/period) que `compute_adx`
+    ya usa internamente para su propio ATR, pero expuesto acá como serie completa (no solo el
+    último valor) porque otros consumidores la necesitan día por día: el Market Reaction Zone
+    Engine (`src/support_resistance.py`, que importa esta función en vez de mantener su propia
+    copia) y la validación fuera de muestra del VWAP (`scripts/vwap_oos_validate.py`,
+    `distance_to_vwap_atr` más abajo)."""
+    high = pd.Series(highs, dtype=float)
+    low = pd.Series(lows, dtype=float)
+    close = pd.Series(closes, dtype=float)
+    prev_close = close.shift(1)
+    true_range = pd.concat(
+        [high - low, (high - prev_close).abs(), (low - prev_close).abs()], axis=1
+    ).max(axis=1)
+    return true_range.ewm(alpha=1 / period, adjust=False, min_periods=period).mean()
+
+
 ADX_PERIOD = 14
 
 
@@ -587,4 +604,85 @@ def compute_wyckoff_spring_reactions(
         reactions.append(
             WyckoffSpringReaction(horizon, n_obs, float(vals.mean()), float((vals > 0).mean()))
         )
+    return reactions
+
+
+VWAP_REACTION_HORIZONS_DAYS = REGIME_REACTION_HORIZONS_DAYS
+VWAP_REACTION_MIN_OBSERVATIONS = REGIME_MIN_OBSERVATIONS
+# Umbral del medio de los 3 barridos (0.5/1.0/1.5 ATR) en la validación fuera de muestra
+# (`scripts/vwap_oos_validate.py`) — los combos que validaron lo hicieron en los 3, así que 1.0
+# es un punto medio representativo para la lectura "en vivo" de la UI, no un valor elegido para
+# forzar el resultado.
+VWAP_REACTION_ATR_THRESHOLD = 1.0
+
+
+def distance_to_vwap_atr(
+    dates: list[str],
+    highs: list[float],
+    lows: list[float],
+    closes: list[float],
+    volumes: list[float | None],
+    window_days: int,
+    atr_period: int = 14,
+) -> list[float | None]:
+    """`(close - vwap) / atr` por día — la misma normalización por ATR que usa el Market
+    Reaction Zone Engine para todas sus tolerancias, lo que hace la distancia comparable entre
+    monedas y entre regímenes de volatilidad. `None` donde falta el VWAP (sin volumen en la
+    ventana) o el ATR (los primeros `atr_period` días, que no tienen suficiente historia).
+
+    Es la MISMA función que usa `scripts/vwap_oos_validate.py` para la validación fuera de
+    muestra, no una reimplementación — así lo que se validó y lo que se muestra en la UI son
+    literalmente el mismo cálculo, no dos versiones que puedan divergir con el tiempo."""
+    vwap = rolling_vwap_series(dates, highs, lows, closes, volumes, window_days)
+    atr = atr_series(highs, lows, closes, atr_period)
+    out: list[float | None] = []
+    for i, close in enumerate(closes):
+        atr_i = atr.iloc[i]
+        if vwap[i] is None or atr_i is None or atr_i != atr_i or atr_i <= 0:  # atr_i != atr_i => NaN
+            out.append(None)
+        else:
+            out.append((close - vwap[i]) / float(atr_i))
+    return out
+
+
+@dataclass
+class VwapReaction:
+    horizon_days: int
+    observations: int
+    mean_return: float | None
+    win_rate: float | None
+
+
+def compute_vwap_reactions(
+    dates: list[str],
+    highs: list[float],
+    lows: list[float],
+    closes: list[float],
+    volumes: list[float | None],
+    window_days: int,
+    side: str,
+    atr_threshold: float = VWAP_REACTION_ATR_THRESHOLD,
+) -> list[VwapReaction]:
+    """`side`: `"arriba"` (precio a `>= atr_threshold` ATR por encima del VWAP de `window_days`)
+    o `"abajo"` (por debajo). Retorno futuro promedio de los días que cumplieron esa condición —
+    mismo patrón que `compute_wyckoff_spring_reactions`/`compute_regime_reactions`: junta todos
+    los días históricos que la cumplieron y mide el retorno a `horizon_days` después."""
+    distances = distance_to_vwap_atr(dates, highs, lows, closes, volumes, window_days)
+    if side == "arriba":
+        condition = [d is not None and d >= atr_threshold for d in distances]
+    else:
+        condition = [d is not None and d <= -atr_threshold for d in distances]
+
+    closes_series = pd.Series(closes, dtype=float)
+    condition_series = pd.Series(condition)
+    reactions = []
+    for horizon in VWAP_REACTION_HORIZONS_DAYS:
+        forward_return = (closes_series.shift(-horizon) - closes_series) / closes_series
+        mask = forward_return.notna() & condition_series
+        n_obs = int(mask.sum())
+        if n_obs < VWAP_REACTION_MIN_OBSERVATIONS:
+            reactions.append(VwapReaction(horizon, n_obs, None, None))
+            continue
+        vals = forward_return[mask]
+        reactions.append(VwapReaction(horizon, n_obs, float(vals.mean()), float((vals > 0).mean())))
     return reactions

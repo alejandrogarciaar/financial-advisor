@@ -5,7 +5,68 @@ validation results. Moved out of `SKILL.md` (where it used to live inline under 
 history") so the skill's file-map loads fast on every invocation — read this before adding a new
 methodology, touching the scoring weights, or changing which tickers/tab this content lives in.
 
-**Surfacing VWAP as its own descriptive section (most recent, 2026-08-16).** Started as a review
+**Running the VWAP OOS study and wiring the result in (most recent, 2026-08-16, same day as the
+section shipped).** `scripts/vwap_oos_validate.py` was run locally against real Binance data
+(2021-08-18 to 2026-08-16, ~1825 daily bars per ticker). Real, non-forced result:
+
+- **BTC, VWAP 365 days, both sides**: `VALIDADO` — all 3 thresholds agree in sign across all 4
+  horizons, train and test, AND stage 2 (redundancy vs. `classify_regime_series`) found real
+  incremental information in both the "fuerte" and "debil" regimes for the "arriba" side (the
+  "abajo" side only had enough intersected days to test "debil", which passed).
+- **SOL, VWAP 30 days, price below**: `VALIDADO`, same bar, stage 2 passed on "debil" (too few
+  days to test "fuerte").
+- **SOL, VWAP 365 days, price above**: passed stage 1 (the threshold sweep) but **failed stage 2
+  in both regimes** — the script's own printed `VWAP_VALIDATED_COMBOS` dict includes this combo
+  anyway, because `run_for_ticker()` adds a combo to `validated` right after stage-1's verdict,
+  regardless of what `check_redundancy()` (stage 2) found — the script's docstring says to paste
+  "SOLO los combos que además pasaron la etapa 2", leaving that filter to be applied by hand
+  rather than doing it in code. This combo was deliberately left OUT of what got wired into the
+  app for exactly that reason: it's the trend regime restated under a different name, not new
+  information — same conclusion the Fear & Greed redundancy check reached.
+- **ETH**: nothing validated, in any window or side — same outcome as Fibonacci/ADX/OBV/both
+  rounds of the Zone Engine score.
+
+A real bug surfaced re-running the script after refactoring (see below) and produced byte-
+identical raw output to the first run — confirms the ATR relocation was a pure move, not a
+behavior change.
+
+Code changes that followed from this result:
+
+- **`atr_series()` moved from `support_resistance._atr_series` (private) to `src/speculation.py`
+  (public)**, forced by a real circular-import constraint: `support_resistance.py` already
+  imports `rolling_vwap_series` FROM `speculation.py` (see the VWAP-unification entry below), so
+  `speculation.py` cannot import anything back from `support_resistance.py` without a cycle. Since
+  the new `compute_vwap_reactions()` (below) needed the exact same Wilder ATR the Zone Engine uses
+  — and needed to live in `speculation.py` next to `rolling_vwap_series()`, matching where every
+  other "reaction to a signal" function in this project lives (`compute_regime_reactions`,
+  `compute_wyckoff_spring_reactions`) — moving ATR upstream (one direction, no cycle) was the only
+  option that didn't mean a second, drifting copy of Wilder ATR. `support_resistance.py` now does
+  `from src.speculation import atr_series as _atr_series` and calls it exactly like before (3 call
+  sites, unchanged) — zero behavior change, verified both by the re-run above and by
+  `scripts/verify_app.py` (0 exceptions across all 6 tabs).
+- **`distance_to_vwap_atr()` and `compute_vwap_reactions()` / `VwapReaction`** added to
+  `src/speculation.py`, mirroring `compute_wyckoff_spring_reactions()`'s shape exactly. Critically,
+  `scripts/vwap_oos_validate.py` was rewired to import `distance_to_vwap_atr` from
+  `src/speculation.py` instead of keeping its own local copy of that calculation — so what the
+  script validated and what `render_vwap()` shows the user are the literal same function call, not
+  two implementations that could quietly diverge later.
+- **`VWAP_VALIDATED_COMBOS` (`src/ui/cripto.py`)**, same shape as `WYCKOFF_SPRING_VALIDATED_TICKERS`
+  but keyed by `(window_days, side)` pairs per ticker, holding exactly the 3 combos above (SOL's
+  365/arriba deliberately excluded, with the reasoning in a comment right next to the constant so
+  it can't be "helpfully" pasted back in from the script's raw output later without re-reading
+  why). `render_vwap()` now shows an `st.success` box per window whose (window, today's side) pair
+  is validated AND whose live distance today actually crosses `VWAP_REACTION_ATR_THRESHOLD` (1.0
+  ATR, the middle of the 3 swept thresholds) — being on the correct side of the VWAP by a hair is
+  not the condition that was tested; being ≥1.0 ATR away is. The box quotes a live-recomputed
+  win rate/mean return at `VWAP_REACTION_HEADLINE_HORIZON = 20` days (single horizon, no table —
+  same pattern as `WYCKOFF_SPRING_HEADLINE_HORIZON`), freshening as history accumulates, same as
+  every other validated-ticker quote in this tab. The closing caption and the function's docstring
+  were both rewritten — they used to unconditionally say "not validated"; that's no longer true
+  for the 3 combos above, and the caption now says so explicitly while making clear ETH and every
+  other combo stays purely descriptive.
+
+**Surfacing VWAP as its own descriptive section (2026-08-16, earlier the same day as the entry
+above).** Started as a review
 question ("¿tenemos VWAP en cripto y cómo lo usamos a favor?"), and the review's answer was that
 we had it in name only: `_rolling_vwap()` existed but fed exactly one consumer — the boolean
 `vwap_confluence` component — which has weighed 0 since the score redesign, and whose output
@@ -40,10 +101,9 @@ same 60/40 chronological split and 5/10/20/30-day horizons as every other signal
 discloses that the engine's VWAP component weighs 0 — so nobody reads the score as being partly
 VWAP-driven.
 
-**The study itself (`scripts/vwap_oos_validate.py`), written immediately after, still unrun.**
-The user asked for it right away ("ya mismo"), so it exists — but it has never seen real data:
-Binance is unreachable from this repo's remote sessions, so it has to be run locally, and until
-then nothing about the section's display-only status changes. What it tests: the signal is
+**The study itself (`scripts/vwap_oos_validate.py`), written immediately after.** The user asked
+for it right away ("ya mismo"), so it exists; it was run locally the same day (see the entry
+above for the real result and what got wired in). What it tests: the signal is
 `(close - vwap) / atr` — distance normalized by ATR(14), so it means the same thing across coins
 and volatility regimes, the same normalization the Zone Engine applies to all its tolerances.
 The sweep is 3 VWAP windows (7/30/365) × 2 sides (price above / below) × 3 thresholds

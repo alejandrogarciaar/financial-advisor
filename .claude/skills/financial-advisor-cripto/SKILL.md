@@ -117,18 +117,33 @@ config + tab wiring). This tab's code lives in `src/ui/cripto.py`:
   shared indicator stack — same reasoning as Wyckoff Spring/Golden Cross (nothing about VWAP was
   ever tested for stocks, so it must not appear silently in Especulación). Renders: 3 metrics
   (price vs. VWAP at 7/30/365 days, from `rolling_vwap_series()` in `src/speculation.py` over the
-  daily Binance series already in hand — no extra fetch), a 3-way reading (above all windows /
-  below all / mixed, same shape as `classify_trend_state()`'s three-medias logic), a price+VWAP
-  chart over the last `VWAP_CHART_WINDOW_DAYS` (365), the same data as a table in an expander, and
-  a closing caption disclosing that this is descriptive and **not** OOS-validated. Two details
-  worth not "simplifying" away: (a) the VWAP series is computed over the FULL history and only
-  then sliced to the visible window — computing it on the window alone would make the 365-day line
-  restart from scratch at the chart's left edge and show a value that never existed; (b) a window
-  is dropped entirely when the history doesn't span it (`history_days >= w`), so a ticker with 20
-  days of data shows only the 7-day VWAP instead of three identical numbers labelled 7d/30d/1y.
-  Colors are the existing `FAMILY_COLOR` trio + `SR_KIND_RGB`'s purple (not a new palette), with
-  `dash` carrying the short→long ordering as secondary encoding, and every line's value also
-  readable as text in the metrics/table (the dataviz skill's "never color-alone" requirement).
+  daily Binance series already in hand — no extra fetch), then a validated-status block (see
+  `VWAP_VALIDATED_COMBOS` below — an `st.success` per window whose (window, today's side) pair
+  actually validated OOS AND crosses the live 1.0-ATR threshold today, otherwise nothing renders
+  there), then the same 3-way descriptive reading it always had (above all windows / below all /
+  mixed, same shape as `classify_trend_state()`'s three-medias logic), a price+VWAP chart over the
+  last `VWAP_CHART_WINDOW_DAYS` (365), the same data as a table in an expander, and a closing
+  caption disclosing exactly which combos are validated and that everything else (ETH, any other
+  window/side) stays descriptive-only. Two details worth not "simplifying" away: (a) the VWAP
+  series is computed over the FULL history and only then sliced to the visible window — computing
+  it on the window alone would make the 365-day line restart from scratch at the chart's left edge
+  and show a value that never existed; (b) a window is dropped entirely when the history doesn't
+  span it (`history_days >= w`), so a ticker with 20 days of data shows only the 7-day VWAP
+  instead of three identical numbers labelled 7d/30d/1y. Colors are the existing `FAMILY_COLOR`
+  trio + `SR_KIND_RGB`'s purple (not a new palette), with `dash` carrying the short→long ordering
+  as secondary encoding, and every line's value also readable as text in the metrics/table (the
+  dataviz skill's "never color-alone" requirement).
+- `VWAP_VALIDATED_COMBOS` (`src/ui/cripto.py`) — same pattern as `WYCKOFF_SPRING_VALIDATED_TICKERS`
+  but keyed by `(window_days, side)` per ticker: `{"BTC": {(365, "abajo"), (365, "arriba")}, "ETH":
+  set(), "SOL": {(30, "abajo")}}`, from `scripts/vwap_oos_validate.py` run locally 2026-08-16 —
+  see Design history for the full numbers and, importantly, for why `SOL: (365, "arriba")` is
+  deliberately NOT in this set even though the script's own raw printout includes it (passed the
+  threshold sweep, failed the stage-2 redundancy check against the trend regime). `distance_to_
+  vwap_atr()` and `compute_vwap_reactions()`/`VwapReaction` (`src/speculation.py`) back both this
+  gate and the OOS script itself — literally the same function call in both places, not two
+  implementations that could drift. `VWAP_REACTION_ATR_THRESHOLD = 1.0` and
+  `VWAP_REACTION_HEADLINE_HORIZON = 20` (single horizon quoted live in the `st.success`, same
+  pattern as `WYCKOFF_SPRING_HEADLINE_HORIZON` — no table).
 
 ## `src/support_resistance.py` — "Market Reaction Zone Engine"
 
@@ -353,13 +368,20 @@ or changing which tickers/tab this content lives in.
   name and Binance-only wiring are a deliberate scope decision, not an incidental gap.
 - Re-adding crypto to Especulación's ticker selector — same reasoning in reverse; crypto's
   speculation indicators live here now, not there.
-- Turning the "🎯 VWAP" section into anything actionable — a `st.success`, a threshold, an input
-  to the DCA box, or a weight for `vwap_confluence`. The section shipped display-only by explicit
-  user choice (2026-08-16), so today there is literally no evidence behind it. The study exists
-  (`scripts/vwap_oos_validate.py`) but has never been run on real data, because Binance is
-  unreachable from remote Claude sessions — run it locally, and only then decide. Its own output
-  prints the paste-ready `VWAP_VALIDATED_COMBOS` dict; a combo that passes the threshold sweep but
-  fails stage 2 (redundancy vs. the trend regime) is NOT a signal — it's the regime restated, the
-  same conclusion the Fear & Greed check reached.
+- Giving `vwap_confluence` a real weight inside the Zone Engine's `DEFAULT_WEIGHTS`, or feeding
+  the VWAP section's validated status into the DCA box — the OOS study (below) only validated a
+  standalone "distance to VWAP" reading, shown in its own section; it says nothing about the
+  Zone Engine's confluence check or the DCA plan, and folding it in there would be claiming
+  evidence that doesn't exist for that specific use.
+- Restoring the section to fully display-only, or pasting the script's raw
+  `VWAP_VALIDATED_COMBOS` output verbatim (including `SOL: (365, "arriba")`) without re-deriving
+  it — the OOS study (`scripts/vwap_oos_validate.py`) WAS run locally 2026-08-16 on real Binance
+  data and DID validate 3 combos (BTC both sides on the 365-day VWAP, SOL on the 30-day VWAP
+  below), now wired into `VWAP_VALIDATED_COMBOS` in `src/ui/cripto.py` — see Design history for
+  the full numbers. `SOL: (365, "arriba")` passed the threshold sweep but failed the stage-2
+  redundancy check against the trend regime and was deliberately left out — it's the regime
+  restated, not a signal, the same conclusion the Fear & Greed check reached. Re-running the
+  script later as more history accumulates is fine; loosening `VWAP_REACTION_ATR_THRESHOLD` or
+  re-including the failed combo to make something "feel more complete" is not.
 - Adding VWAP to `render_speculation_indicators()` so Especulación gets it "for free" — never
   tested for the 8 stock `TICKERS`, same rule as Wyckoff Spring and Golden Cross.

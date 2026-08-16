@@ -48,12 +48,7 @@ sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 from scripts.oos_validate import OOSResult, run_oos_validation, run_oos_validation_sweep
 from src.config import CRYPTO_BINANCE_SYMBOLS
 from src.data import binance_client
-from src.speculation import VWAP_WINDOWS_DAYS, classify_regime_series, rolling_vwap_series
-
-# Privado, pero es el mismo ATR de Wilder que ya usan `compute_adx` y el Zone Engine — un
-# investigación que se re-implemente el ATR "para no importar un guión bajo" estaría midiendo
-# algo distinto de lo que mide la app, que es justamente lo que hay que evitar acá.
-from src.support_resistance import _atr_series
+from src.speculation import VWAP_WINDOWS_DAYS, classify_regime_series, distance_to_vwap_atr
 
 ATR_PERIOD = 14
 DISTANCE_THRESHOLDS_ATR = (0.5, 1.0, 1.5)
@@ -63,25 +58,16 @@ SIDES = ("arriba", "abajo")
 
 
 def distance_to_vwap_in_atr(prices: list[dict], window_days: int) -> list[float | None]:
-    """`(close - vwap) / atr` por día. `None` donde falta el VWAP (sin volumen en la ventana) o
-    el ATR (los primeros `ATR_PERIOD` días, que no tienen suficiente historia)."""
+    """Fina envoltura sobre `distance_to_vwap_atr` (ahora en `src/speculation.py`, junto al resto
+    del VWAP) para no tocar el resto de este script — es la MISMA función que consume
+    `render_vwap()` en `src/ui/cripto.py`, así que lo que se valida acá y lo que se muestra en la
+    UI son literalmente el mismo cálculo."""
     dates = [p["date"] for p in prices]
     highs = [p["high"] for p in prices]
     lows = [p["low"] for p in prices]
     closes = [p["close"] for p in prices]
     volumes = [p.get("volume") for p in prices]
-
-    vwap = rolling_vwap_series(dates, highs, lows, closes, volumes, window_days)
-    atr = _atr_series(highs, lows, closes, ATR_PERIOD)
-
-    out: list[float | None] = []
-    for i, close in enumerate(closes):
-        atr_i = atr.iloc[i]
-        if vwap[i] is None or atr_i is None or atr_i != atr_i or atr_i <= 0:  # atr_i != atr_i => NaN
-            out.append(None)
-        else:
-            out.append((close - vwap[i]) / float(atr_i))
-    return out
+    return distance_to_vwap_atr(dates, highs, lows, closes, volumes, window_days, ATR_PERIOD)
 
 
 def build_condition(distances: list[float | None], side: str, threshold: float) -> list[bool]:

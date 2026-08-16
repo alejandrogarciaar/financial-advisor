@@ -18,9 +18,12 @@ from src.config import CRYPTO_BINANCE_SYMBOLS
 from src.data import binance_client
 from src.data.errors import DataError
 from src.speculation import (
+    VWAP_REACTION_ATR_THRESHOLD,
     VWAP_WINDOWS_DAYS,
     classify_wyckoff_spring_series,
+    compute_vwap_reactions,
     compute_wyckoff_spring_reactions,
+    distance_to_vwap_atr,
     rolling_vwap_series,
 )
 from src.support_resistance import (
@@ -153,6 +156,30 @@ VWAP_DASH = {7: "dot", 30: "dash", 365: "solid"}
 VWAP_WINDOW_LABEL = {7: "7 días", 30: "30 días", 365: "1 año"}
 VWAP_CHART_WINDOW_DAYS = 365
 
+# Validación fuera de muestra corrida localmente (`scripts/vwap_oos_validate.py`, Binance,
+# 2021-08-18 a 2026-08-16, ~1825 días por ticker) — mismo criterio estricto que el resto del
+# proyecto: split cronológico 60/40, los 4 horizontes (5/10/20/30 días) con el mismo signo,
+# barrido de 3 umbrales (0.5/1.0/1.5 ATR) sin fragilidad, y etapa 2 de redundancia contra el
+# régimen de tendencia que ya usa el "Plan de DCA sugerido" (`classify_regime_series`).
+#   - BTC, VWAP de 365 días, arriba Y abajo: VALIDADO, y agrega información sobre el régimen
+#     (fuerte y/o débil según el lado) — no es el régimen restado con otro nombre.
+#   - SOL, VWAP de 30 días, abajo: VALIDADO, agrega información sobre el régimen débil (el
+#     régimen fuerte no tuvo suficientes días en la intersección para decidir esa parte).
+#   - SOL, VWAP de 365 días, arriba: pasó la etapa 1 (barrido de umbrales) pero FALLÓ la etapa 2
+#     en los dos regímenes — es el régimen de tendencia restado con otro nombre, no señal nueva.
+#     El script lo incluye en su impresión final igual (su propio docstring deja el filtro de
+#     etapa 2 para hacerse a mano) — deliberadamente NO se pega acá.
+#   - ETH: nada validó, en ninguna ventana ni umbral — mismo resultado que Fibonacci/ADX/OBV.
+VWAP_VALIDATED_COMBOS: dict[str, set[tuple[int, str]]] = {
+    "BTC": {(365, "abajo"), (365, "arriba")},
+    "ETH": set(),
+    "SOL": {(30, "abajo")},
+}
+
+VWAP_REACTION_HEADLINE_HORIZON = 20  # mismo criterio que WYCKOFF_SPRING_HEADLINE_HORIZON: un solo
+# horizonte para la lectura en vivo, no una tabla — la tabla completa (4 horizontes) ya la imprime
+# scripts/vwap_oos_validate.py para quien quiera el detalle.
+
 
 def render_vwap(ticker: str, historical_prices: list[dict], closes: list[float], current_price: float) -> None:
     """Sección PROPIA de esta pestaña, no dentro de `render_speculation_indicators()` — mismo
@@ -165,8 +192,9 @@ def render_vwap(ticker: str, historical_prices: list[dict], closes: list[float],
     `DEFAULT_WEIGHTS` desde el rediseño del score, y `component_scores` no se renderiza en ningún
     lado — o sea que prender/apagar "Confluencia con VWAP" en las metodologías activas no cambiaba
     nada observable. Esta sección lo saca a la superficie como lo que es: un indicador clásico,
-    DESCRIPTIVO, no validado fuera de muestra por este proyecto (ver el caption del final).
-    """
+    descriptivo por defecto, con un estado VALIDADO fuera de muestra para combos puntuales
+    (`VWAP_VALIDATED_COMBOS` más abajo — ver el caption del final para el detalle y los combos
+    que quedaron afuera a propósito)."""
     st.divider()
     st.subheader("🎯 VWAP — precio promedio ponderado por volumen")
     st.caption(
@@ -214,6 +242,41 @@ def render_vwap(ticker: str, historical_prices: list[dict], closes: list[float],
             col.metric(f"VWAP {VWAP_WINDOW_LABEL[window]}", "—")
         else:
             col.metric(f"VWAP {VWAP_WINDOW_LABEL[window]}", f"${value:,.2f}", f"{current_price / value - 1:+.1%}")
+
+    # Estado validado (si corresponde) — mismo patrón que render_wyckoff_spring(): el combo
+    # (ventana, lado) tiene que estar en VWAP_VALIDATED_COMBOS[ticker] Y la distancia de HOY tiene
+    # que cruzar el mismo umbral (VWAP_REACTION_ATR_THRESHOLD) que se usó para validarlo — estar
+    # apenas del lado correcto del VWAP no es la condición que se probó, estar a >= 1.0 ATR sí.
+    for window in windows:
+        distances = distance_to_vwap_atr(dates, highs, lows, closes, volumes, window)
+        d_today = distances[-1] if distances else None
+        if d_today is None:
+            continue
+        if d_today >= VWAP_REACTION_ATR_THRESHOLD:
+            side = "arriba"
+        elif d_today <= -VWAP_REACTION_ATR_THRESHOLD:
+            side = "abajo"
+        else:
+            continue
+        if (window, side) not in VWAP_VALIDATED_COMBOS.get(ticker, set()):
+            continue
+        reactions = {
+            r.horizon_days: r
+            for r in compute_vwap_reactions(dates, highs, lows, closes, volumes, window, side)
+        }
+        r = reactions.get(VWAP_REACTION_HEADLINE_HORIZON)
+        if r is None or r.win_rate is None:
+            continue
+        lado_txt = "por encima" if side == "arriba" else "por debajo"
+        st.success(
+            f"✅ **{ticker} está a {abs(d_today):.1f} ATR {lado_txt} del VWAP de "
+            f"{VWAP_WINDOW_LABEL[window]}** — condición validada fuera de muestra (split "
+            f"cronológico 60/40, 4 horizontes, sin fragilidad de umbral, y sin ser redundante "
+            f"con el régimen de tendencia — ver `scripts/vwap_oos_validate.py`). Históricamente, "
+            f"en los días que cumplieron esta misma condición, {ticker} subió a los "
+            f"{VWAP_REACTION_HEADLINE_HORIZON} días el {r.win_rate:.0%} de las veces (retorno "
+            f"promedio {r.mean_return:+.1%}, n={r.observations})."
+        )
 
     # Lectura de 3 vías (arriba de todos / abajo de todos / mixto), mismo patrón que
     # classify_trend_state() para las 3 medias móviles — no inventa un umbral propio: la pregunta
@@ -308,15 +371,17 @@ def render_vwap(ticker: str, historical_prices: list[dict], closes: list[float],
             st.dataframe(table, use_container_width=True, hide_index=True)
 
     st.caption(
-        "**Descriptivo, no validado por este proyecto.** El VWAP es un indicador clásico y se "
-        "muestra acá como tal — igual que el MACD, las Bandas de Bollinger, el ADX o el Índice de "
-        "Miedo y Codicia —, pero todavía NO se probó fuera de muestra si la distancia al VWAP "
-        "anticipa algo del retorno futuro de BTC/ETH/SOL (split cronológico 60/40 y 4 horizontes, "
-        "el mismo criterio con el que se validaron el régimen del Plan de DCA y el Wyckoff "
-        "Spring). Hasta que esa prueba se corra y pase, esto no ajusta ninguna recomendación de "
-        "la app. Dentro del Market Reaction Zone Engine el VWAP también aparece como componente "
-        "de confluencia, pero pesa 0 en el score desde el rediseño — no está inflando el puntaje "
-        "de ninguna zona."
+        "El VWAP es un indicador clásico y se muestra acá como tal — igual que el MACD, las "
+        "Bandas de Bollinger, el ADX o el Índice de Miedo y Codicia. La distancia al VWAP en "
+        "múltiplos de ATR SÍ se probó fuera de muestra (split cronológico 60/40, 4 horizontes, "
+        "barrido de 3 umbrales, y un chequeo de que no sea el régimen de tendencia del Plan de "
+        "DCA restado con otro nombre — ver `scripts/vwap_oos_validate.py`): validó para BTC (VWAP "
+        "de 1 año, ambos lados) y SOL (VWAP de 30 días, por debajo) — el recuadro verde de arriba "
+        "aparece solo cuando el precio de hoy cumple exactamente esa condición para ese ticker. "
+        "Para ETH, y para cualquier otro combo de ventana/lado no listado acá, sigue siendo "
+        "puramente descriptivo — no validado. Dentro del Market Reaction Zone Engine el VWAP "
+        "también aparece como componente de confluencia, pero pesa 0 en el score desde el "
+        "rediseño — no está inflando el puntaje de ninguna zona."
     )
 
 

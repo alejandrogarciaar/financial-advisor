@@ -65,6 +65,7 @@ from scipy.stats import gaussian_kde
 from sklearn.cluster import DBSCAN
 from sklearn.linear_model import HuberRegressor, LinearRegression, RANSACRegressor, TheilSenRegressor
 
+from src.speculation import atr_series as _atr_series
 from src.speculation import rolling_vwap_series
 
 ALL_METHODS = {
@@ -322,19 +323,6 @@ def _mean_lower_confidence_bound(values: list[float], z: float) -> float:
     std = float(np.std(values, ddof=1))
     margin = z * std / (n ** 0.5)
     return max(0.0, mean - margin)
-
-
-def _atr_series(highs: list[float], lows: list[float], closes: list[float], period: int) -> pd.Series:
-    """Wilder ATR — mismo suavizado (alpha=1/period) que ya usa `compute_adx` en speculation.py,
-    factorizado acá porque este módulo lo necesita como serie completa, no solo el último valor."""
-    high = pd.Series(highs, dtype=float)
-    low = pd.Series(lows, dtype=float)
-    close = pd.Series(closes, dtype=float)
-    prev_close = close.shift(1)
-    true_range = pd.concat(
-        [high - low, (high - prev_close).abs(), (low - prev_close).abs()], axis=1
-    ).max(axis=1)
-    return true_range.ewm(alpha=1 / period, adjust=False, min_periods=period).mean()
 
 
 def _resample_ohlcv(dated_prices: list[dict], rule: str) -> list[dict]:

@@ -397,23 +397,32 @@ left alone deliberately). `rolling_vwap_series()` is now the single implementati
 7/30/365 **calendar** days over the daily Binance series, typical price (H+L+C)/3, sliding-window
 sums); `_rolling_vwap()` is a thin "last element" wrapper over it, verified numerically identical
 to the old scalar code across 48 shape/window combinations (daily and 4h-style timestamps, `None`
-volumes, n=1..900) so the engine's behavior didn't move. The UI section is **descriptive only**,
-same standing as ADX/OBV/Fear & Greed and disclosed as such in its own caption: price vs. VWAP at
-3 horizons, a 3-way reading (above all / below all / mixed, same shape as `classify_trend_state()`),
-and a chart+table. **No OOS validation has been run for VWAP yet** — the user chose the
-display-only scope first (2026-08-16), and the study is now written but NOT yet run:
-`scripts/vwap_oos_validate.py` (distance-to-VWAP normalized by ATR(14) → forward returns at
-5/10/20/30 days, 60/40 chronological split, sweeping 3 VWAP windows × both sides × 3 ATR
-thresholds, then a stage-2 redundancy check against `classify_regime_series` using
-`run_oos_validation`'s new `baseline_condition` param). It must be run **locally** — Binance
-answers 403/451 to the remote sessions' proxy and yfinance is blocked there too, so no market data
-is reachable from a Claude session in this repo's remote environment. Its logic was verified on
-synthetic series instead: a mean-reverting one is detected with the correct direction, a pure
-random walk yields nothing (its two near-misses are correctly labelled FRAGIL, not passes). Don't
-promote this to an actionable message, and don't give `vwap_confluence` a weight, until that study
-actually runs and passes on real data. Windows
-whose span the history doesn't cover are dropped rather than shown (a "VWAP de 1 año" computed
-over 3 days is a mislabeled number, not a value).
+volumes, n=1..900) so the engine's behavior didn't move. The UI section is **descriptive by
+default**, same standing as ADX/OBV/Fear & Greed: price vs. VWAP at 3 horizons, a 3-way reading
+(above all / below all / mixed, same shape as `classify_trend_state()`), and a chart+table.
+
+**The OOS study WAS run** (`scripts/vwap_oos_validate.py`, locally, 2026-08-16 — Binance answers
+403/451 to the remote sessions' proxy and yfinance is blocked there too, so it can't run from a
+Claude session in this repo's remote environment; distance-to-VWAP normalized by ATR(14) →
+forward returns at 5/10/20/30 days, 60/40 chronological split, sweeping 3 VWAP windows × both
+sides × 3 ATR thresholds, then a stage-2 redundancy check against `classify_regime_series` using
+`run_oos_validation`'s `baseline_condition` param). Real result, 3 combos validated: **BTC** (VWAP
+365 days, both sides) and **SOL** (VWAP 30 days, price below) — wired into `VWAP_VALIDATED_COMBOS`
+in `src/ui/cripto.py`, gating a live `st.success` (win rate/mean return at a 20-day headline
+horizon, `distance_to_vwap_atr()`/`compute_vwap_reactions()` in `src/speculation.py`) that only
+fires when today's price is actually ≥1.0 ATR from that VWAP on the validated side — being barely
+on the right side isn't the condition that was tested. **ETH validated nothing**, same outcome as
+Fibonacci/ADX/OBV. One combo the script's raw output lists (`SOL`, VWAP 365 days, price above)
+passed the threshold sweep but failed the stage-2 redundancy check in both trend regimes and was
+deliberately left OUT of `VWAP_VALIDATED_COMBOS` — it's the trend regime restated, not new
+information (see `scripts/vwap_oos_validate.py`'s own docstring: it prints every stage-1 pass and
+leaves the stage-2 filter to be applied by hand, not automatically). `atr_series()` (the Wilder
+ATR both the OOS script and the Zone Engine use) now lives in `src/speculation.py`, not
+`src/support_resistance.py` — moved because `support_resistance.py` already imports
+`rolling_vwap_series` FROM `speculation.py`, so the reverse import would have been a cycle;
+`support_resistance.py` now imports it back as `_atr_series`, 3 call sites unchanged, verified
+byte-identical output before/after. Windows whose span the history doesn't cover are dropped
+rather than shown (a "VWAP de 1 año" computed over 3 days is a mislabeled number, not a value).
 
 **"📊 Validación" tab (`render_validation()` in `src/ui/validation.py`)**: not a price signal like the other 4
 tabs — it's a check on how well the *existing* signals have performed, added after the user
