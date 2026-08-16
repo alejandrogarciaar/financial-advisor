@@ -5,7 +5,71 @@ validation results. Moved out of `SKILL.md` (where it used to live inline under 
 history") so the skill's file-map loads fast on every invocation — read this before adding a new
 methodology, touching the scoring weights, or changing which tickers/tab this content lives in.
 
-**Walking touches against the 4h reference series instead of daily (most recent).** Follow-up to
+**Surfacing VWAP as its own descriptive section (most recent, 2026-08-16).** Started as a review
+question ("¿tenemos VWAP en cripto y cómo lo usamos a favor?"), and the review's answer was that
+we had it in name only: `_rolling_vwap()` existed but fed exactly one consumer — the boolean
+`vwap_confluence` component — which has weighed 0 since the score redesign, and whose output
+(`component_scores`) is rendered nowhere. So the "Confluencia con VWAP" chip in the methods
+multiselect was a control over nothing observable, and `SRConfig.vwap_confluence_bonus` was (and
+still is) a config field no code reads. Left both alone rather than deleting them — the demotion
+to informational-only was an explicit user decision, and this session's scope was to make VWAP
+useful, not to relitigate the score.
+
+Four options were put to the user: (A) show it as a descriptive indicator, (B) OOS-validate a
+distance-to-VWAP signal and only then make it actionable, (C) anchored VWAP (from a cycle low /
+spring / halving) as a candidate level inside the Zone Engine, (D) give the existing boolean
+component real weight. **The user picked A alone**, with B deferred as the agreed next step and
+run locally (Binance answers 403 through the remote sessions' proxy, and yfinance is blocked too,
+so no market data is reachable from a Claude session in this repo's remote environment — the
+study cannot be run there, only written).
+
+Implementation notes worth keeping: the two VWAP implementations were unified rather than left to
+drift — `rolling_vwap_series()` (`src/speculation.py`, sliding-window sums, returns one value per
+bar) is now the only one, and `support_resistance._rolling_vwap()` is a `series[-1]` wrapper. That
+refactor was verified numerically identical to the old scalar code across 48 combinations (daily
+vs. 4h-style timestamps × with/without `None` volumes × n=1/5/40/900 × the 4 engine windows), plus
+an end-to-end `detect_levels()` run on synthetic data, precisely because the engine had a
+previously OOS-tested feature riding on it. `src/speculation.py` imports nothing from
+`support_resistance.py`, so the new dependency direction (engine → indicators) introduces no
+cycle. A series (not a scalar) is also what makes option B possible at all later — you can't
+backtest a number that only exists "as of today".
+
+Deliberately NOT done: any actionable claim. The section's closing caption states outright that
+no OOS test has been run for VWAP in this project, names the test that would have to pass (the
+same 60/40 chronological split and 5/10/20/30-day horizons as every other signal here), and
+discloses that the engine's VWAP component weighs 0 — so nobody reads the score as being partly
+VWAP-driven.
+
+**The study itself (`scripts/vwap_oos_validate.py`), written immediately after, still unrun.**
+The user asked for it right away ("ya mismo"), so it exists — but it has never seen real data:
+Binance is unreachable from this repo's remote sessions, so it has to be run locally, and until
+then nothing about the section's display-only status changes. What it tests: the signal is
+`(close - vwap) / atr` — distance normalized by ATR(14), so it means the same thing across coins
+and volatility regimes, the same normalization the Zone Engine applies to all its tolerances.
+The sweep is 3 VWAP windows (7/30/365) × 2 sides (price above / below) × 3 thresholds
+(0.5/1.0/1.5 ATR) × 4 horizons. Deliberately agnostic about direction: mean-reversion ("far below
+the average cost comes back") and momentum ("far below keeps falling") are both plausible, and
+the sign decides — exactly how the Fear & Greed check ended up finding momentum rather than the
+classic contrarian story.
+
+Three bars to clear, and the third is the one that usually kills things here: every horizon holds
+its sign train-vs-test; all three thresholds agree with each other AND share one sign (a lone
+threshold passing between failing neighbours prints as `FRAGIL`, not as a pass); and then stage 2,
+redundancy — "regime + VWAP condition" is compared against "regime alone", not against all days.
+Price above its VWAP and price above its moving averages are close relatives, so a VWAP signal
+that adds nothing inside `classify_regime_series`'s regimes is the regime restated, not new
+information. That stage needed a baseline narrower than "every day in the slice", which
+`run_oos_validation` couldn't express — hence the new `baseline_condition` param there (default
+`None` keeps the old unconditional behavior; the RSI-overbought refinement and the Fear & Greed
+redundancy check had both hand-rolled this same comparison before).
+
+Verified without market data, on synthetic series: an AR(1) mean-reverting process is detected
+(`VALIDADO`, with the direction reported as reversion, both sides), and a pure random walk yields
+nothing — its two near-misses come out as `FRAGIL` rather than passes, which is the threshold
+sweep doing exactly the job it exists for. A validator that can only ever say no would be useless,
+so both halves of that check matter.
+
+**Walking touches against the 4h reference series instead of daily.** Follow-up to
 the statistical-consistency fix (below): with only ~1825 daily bars in 5 years, BTC/ETH/SOL
 levels accumulated too few touches for the Wilson/confidence adjustments to have much to work
 with — that's what broke the previous OOS validation. The user's idea: walk against 4h candles

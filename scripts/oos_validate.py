@@ -138,6 +138,7 @@ def run_oos_validation(
     horizons_days: list[int] = (5, 10, 20, 30),
     train_frac: float = 0.6,
     min_observations: int = 15,
+    baseline_condition: list[bool] | None = None,
 ) -> OOSResult:
     """Chronological 60/40 split (or `train_frac`); for each horizon, compares the mean forward
     return on days where `condition[i]` is True against the mean over ALL days in that slice
@@ -148,11 +149,22 @@ def run_oos_validation(
     validated signal is not evidence of a negative one" principle used throughout this project's
     skills.
 
+    `baseline_condition` narrows what "the baseline" means: instead of every day in the slice,
+    only the days it marks True. That's what a REFINEMENT check needs — "does this new signal add
+    anything ON TOP of one we already trust?" — and it's the part every such investigation so far
+    (the RSI-overbought refinement of the DCA regime, the Fear & Greed redundancy check) had to
+    hand-roll because the harness only offered the unconditional mean. Pass the already-trusted
+    signal here and the intersection as `condition`: a gap near zero then means the new signal is
+    redundant, not that it's worthless on its own. `None` (default) keeps the unconditional
+    baseline.
+
     `dates`/`closes`/`condition` must be the same length, in chronological order (oldest first).
     """
     n = len(closes)
     if not (len(dates) == n == len(condition)):
         raise ValueError("dates, closes, and condition must be the same length")
+    if baseline_condition is not None and len(baseline_condition) != n:
+        raise ValueError("baseline_condition must be the same length as closes")
 
     train_slice, test_slice = chronological_split(n, train_frac)
     horizons = []
@@ -161,7 +173,7 @@ def run_oos_validation(
 
         def _cell(sl: slice, want_condition: bool) -> tuple[float | None, int]:
             mask = [
-                (condition[i] if want_condition else True)
+                (condition[i] if want_condition else (baseline_condition is None or baseline_condition[i]))
                 for i in range(sl.start, sl.stop)
             ]
             mean, cnt = _mean_and_n(fwd[sl], mask)
@@ -193,6 +205,7 @@ def run_oos_validation_sweep(
     horizons_days: list[int] = (5, 10, 20, 30),
     train_frac: float = 0.6,
     min_observations: int = 15,
+    baseline_condition: list[bool] | None = None,
 ) -> dict[str, OOSResult]:
     """Runs `run_oos_validation` once per named variant (e.g. 3 nearby score percentiles, or 3
     ADX thresholds) — the threshold-fragility check this project always applies before trusting
@@ -201,7 +214,9 @@ def run_oos_validation_sweep(
     Market Reaction Zone Engine's first re-validation round — don't report just the one variant
     that happened to pass without also checking (and disclosing) its neighbors."""
     return {
-        label: run_oos_validation(dates, closes, condition, horizons_days, train_frac, min_observations)
+        label: run_oos_validation(
+            dates, closes, condition, horizons_days, train_frac, min_observations, baseline_condition
+        )
         for label, condition in condition_variants.items()
     }
 

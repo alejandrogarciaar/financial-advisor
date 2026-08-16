@@ -116,7 +116,7 @@ mapa es solo para ubicarse rápido, no para reemplazar esa lectura.
 | `etfs.py` | Pestaña ETFs — lista + detalle. |
 | `validation.py` | Pestaña Validación — backtest en UI + historial de veredictos. |
 | `speculation.py` | Pestaña Especulación (solo acciones) + `render_speculation_indicators()` (compartida con Cripto) + sección del Market Reaction Zone Engine sobre datos diarios. |
-| `cripto.py` | Pestaña Cripto (BTC/ETH/SOL, Binance) — mismo cuerpo de indicadores + Market Reaction Zone Engine sobre 4h. |
+| `cripto.py` | Pestaña Cripto (BTC/ETH/SOL, Binance) — mismo cuerpo de indicadores + Market Reaction Zone Engine sobre 4h + VWAP y Wyckoff Spring (secciones propias, no compartidas con Especulación). |
 | `portfolio.py` | Pestaña Portafolio — alta de compras y ventas, resumen de holdings, "Ganancias realizadas", "Plan de compra escalonada", auto-refresh de precios (`st.fragment`). |
 
 ### `src/` — módulos de cómputo top-level (no UI)
@@ -124,7 +124,7 @@ mapa es solo para ubicarse rápido, no para reemplazar esa lectura.
 | Archivo | Rol |
 |---|---|
 | `portfolio.py` | Cómputo de Portafolio: `load_purchases`/`save_purchases`, `load_sales`/`save_sales`, `summarize_by_ticker` (holdings netos), `realized_gains_summary`, comisiones, `build_synthetic_portfolio_series`, `project_future_value`. |
-| `speculation.py` | RSI, MACD, Bollinger, ADX, OBV, soportes/resistencias simples, reacciones por régimen — computación técnica, separada de la valoración. |
+| `speculation.py` | RSI, MACD, Bollinger, VWAP, ADX, OBV, soportes/resistencias simples, reacciones por régimen — computación técnica, separada de la valoración. |
 | `support_resistance.py` | "Market Reaction Zone Engine" — motor multi-metodología de soporte/resistencia (DBSCAN, KDE, RANSAC/Theil-Sen/Huber, Hough, Volume Profile, VWAP), compartido por Especulación y Cripto vía `daily_reference_config()`/`SRConfig()`. |
 | `drawdown_dca.py` | Zona de acumulación por caída desde máximo de 1 año, usado en Portafolio. |
 | `backtest.py` | ¿El veredicto de hace N años habría anticipado el retorno real? Limitaciones documentadas en su propio docstring. |
@@ -135,7 +135,8 @@ mapa es solo para ubicarse rápido, no para reemplazar esa lectura.
 
 | Archivo | Rol |
 |---|---|
-| `oos_validate.py` | Validador fuera de muestra reusable (split cronológico 60/40, consistencia de signo, barrido de umbrales/temporalidades) — reemplaza re-derivar esta metodología a mano en cada investigación. |
+| `oos_validate.py` | Validador fuera de muestra reusable (split cronológico 60/40, consistencia de signo, barrido de umbrales/temporalidades, baseline acotable a un subconjunto para chequeos de redundancia) — reemplaza re-derivar esta metodología a mano en cada investigación. |
+| `vwap_oos_validate.py` | Investigación: ¿la distancia del precio al VWAP (normalizada por ATR) anticipa el retorno futuro de BTC/ETH/SOL? Barre 3 ventanas × 2 lados × 3 umbrales y chequea redundancia contra el régimen de tendencia. Correr local (Binance bloquea los entornos remotos). |
 | `verify_app.py` | Smoke test de las 6 pestañas vía `AppTest`, sin navegador. |
 | `run_app.sh` / `stop_app.sh` | Arrancar/parar el servidor Streamlit local (puerto libre, health check, kill confiable por línea de comando). |
 | `add_sale.py` | Agrega una venta a `portfolio_data/sales.json` desde la terminal, validada igual que la tabla "Tus ventas" de la UI — para registrar una venta dictada por chat sin abrir el navegador. |

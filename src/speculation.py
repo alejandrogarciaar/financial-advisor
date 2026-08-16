@@ -5,6 +5,7 @@ valoración ni con el Portafolio — es una zona aparte a propósito.
 """
 
 from dataclasses import dataclass
+from datetime import datetime, timedelta
 
 import numpy as np
 import pandas as pd
@@ -138,6 +139,72 @@ def compute_bollinger_bands(
     variance = sum((c - middle) ** 2 for c in window) / period
     std = variance**0.5
     return BollingerBands(middle=middle, upper=middle + num_std * std, lower=middle - num_std * std)
+
+
+# Ventanas del VWAP que se muestran en la UI (pestaña "🪙 Cripto"): corta / media / larga. NO son
+# las mismas que `SRConfig.vwap_windows_days` del Market Reaction Zone Engine ((3, 7, 30, 365),
+# usadas para el chequeo de confluencia con un nivel, que además hoy pesa 0 en el score) — son dos
+# consumidores distintos de la misma función de abajo, con propósitos distintos, así que cada uno
+# elige sus ventanas. 3 días se dejó afuera acá a propósito: a esa escala el VWAP se pega tanto al
+# precio que no aporta una referencia distinta de la que ya dan las Bandas de Bollinger.
+VWAP_WINDOWS_DAYS = (7, 30, 365)
+
+
+def rolling_vwap_series(
+    dates: list[str],
+    highs: list[float],
+    lows: list[float],
+    closes: list[float],
+    volumes: list[float | None],
+    window_days: int,
+) -> list[float | None]:
+    """VWAP ("volume weighted average price") de ventana móvil: para cada barra, el precio
+    promedio de los últimos `window_days` días CALENDARIO, ponderado por volumen. Es el precio
+    promedio real al que se operó en esa ventana — el "costo promedio" del mercado — no un
+    promedio de cierres como una SMA.
+
+    Usa el precio típico (H+L+C)/3 de cada barra en vez de trades reales (esta app nunca fetchea
+    trade-by-trade), que es la aproximación estándar cuando solo se tienen velas.
+
+    Devuelve una serie (un valor por barra, `None` donde no hubo volumen en la ventana), a
+    diferencia de la versión escalar que usaba antes `src/support_resistance.py` — que ahora
+    delega acá, para que exista una sola implementación del VWAP en el proyecto. Que sea una
+    serie es lo que permite graficarlo y, eventualmente, testearlo fuera de muestra; el escalar
+    "VWAP de hoy" es simplemente el último elemento.
+
+    Espera las barras en orden cronológico (más vieja primero), como el resto de este módulo y
+    como devuelven los clientes de datos. `dates[i][:10]` toma solo "YYYY-MM-DD": la serie puede
+    traer hora ("YYYY-MM-DD HH:MM:SS", ej. las velas de 4h de Binance) o no (diaria), y acá solo
+    importa el día calendario.
+    """
+    n = len(closes)
+    if not (len(dates) == len(highs) == len(lows) == n == len(volumes)):
+        raise ValueError("dates, highs, lows, closes y volumes tienen que tener el mismo largo")
+    if n == 0:
+        return []
+
+    days = [datetime.strptime(d[:10], "%Y-%m-%d") for d in dates]
+    # Precalculado para que la ventana deslizante pueda RESTAR exactamente lo que sumó al salir
+    # una barra: un volumen `None` aporta 0 en vez de romper la suma (misma tolerancia a datos
+    # faltantes que compute_obv/compute_adx).
+    weighted = [((h + l + c) / 3) * (v or 0.0) for h, l, c, v in zip(highs, lows, closes, volumes)]
+    weights = [(v or 0.0) for v in volumes]
+
+    out: list[float | None] = [None] * n
+    start = 0
+    weighted_sum = 0.0
+    weight_sum = 0.0
+    for i in range(n):
+        weighted_sum += weighted[i]
+        weight_sum += weights[i]
+        cutoff = days[i] - timedelta(days=window_days)
+        while start < i and days[start] < cutoff:
+            weighted_sum -= weighted[start]
+            weight_sum -= weights[start]
+            start += 1
+        if weight_sum > 0:
+            out[i] = weighted_sum / weight_sum
+    return out
 
 
 ADX_PERIOD = 14

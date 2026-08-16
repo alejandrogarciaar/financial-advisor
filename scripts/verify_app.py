@@ -19,7 +19,10 @@ from streamlit.testing.v1 import AppTest
 
 
 def main() -> int:
-    at = AppTest.from_file("app.py", default_timeout=90)
+    # Ruta absoluta, no "app.py": AppTest.from_file() resuelve las rutas relativas contra el
+    # archivo que la llama (o sea `scripts/`), no contra el directorio desde el que se corre —
+    # con el relativo tira FileNotFoundError buscando `scripts/app.py`.
+    at = AppTest.from_file(str(Path(__file__).resolve().parent.parent / "app.py"), default_timeout=90)
     at.run()
     if at.exception:
         print("EXCEPTIONS FOUND:")
