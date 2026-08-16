@@ -424,6 +424,29 @@ ATR both the OOS script and the Zone Engine use) now lives in `src/speculation.p
 byte-identical output before/after. Windows whose span the history doesn't cover are dropped
 rather than shown (a "VWAP de 1 año" computed over 3 days is a mislabeled number, not a value).
 
+**ETF flows (`render_etf_flows()` in `src/ui/cripto.py`, own section, last in the tab)**:
+institutional-demand context for the selected ticker's US-listed spot ETFs, via
+`src/data/sosovalue_client.py` (SoSoValue's official REST API — free tier, 20 req/min/100k
+req/month). Descriptive only, same standing as Fear & Greed, not a validated price signal.
+Started as an exploratory scraper of solanafloor.com/etf-tracker (Solana-only, no public API —
+just Next.js' internal server-rendered JSON, no version guarantee), replaced same-day by this
+real, documented API client once confirmed it covers the same data (plus premium/discount vs.
+NAV and expense ratio, which the scraper didn't have) — then generalized from Solana-only to any
+symbol SoSoValue supports (confirmed against the real API: BTC returns 13 funds, ETH 11, SOL 9)
+and wired into the Cripto tab the same day. **Button-gated**, unlike the rest of this tab's
+content — listing + snapshot + history per fund is up to ~2 calls each, and BTC's 13 funds means
+~26 sequential calls against the free tier's 20/min cap; `sosovalue_client._get()` paces every
+request to ≥3.1s apart (confirmed in testing: without pacing, a 26-call burst hits 429 after
+request #20, and reactive backoff alone is slower/less predictable than pacing from the start).
+Cached at `ttl=86400` — SoSoValue's own numbers are daily-settlement, not intraday, so shorter
+TTLs would only burn quota. A `try/except DataError` per fund means one fund's failure doesn't
+take the section down — verified end-to-end via `AppTest` clicking the button for BTC, 0
+exceptions. Three charts (AUM by fund: single sequential hue, magnitude not identity; daily net
+flow aggregated across funds: the dataviz diverging blue/red pair, genuine polarity around a real
+zero; cumulative flow by fund over time: categorical identity, capped at the first 6 slots of the
+same fixed palette order as `FAMILY_COLOR`/`VWAP_COLOR`, the rest folded into one muted "Otros"
+line rather than generating a 7th–13th hue) plus a table companion, per the dataviz skill.
+
 **"📊 Validación" tab (`render_validation()` in `src/ui/validation.py`)**: not a price signal like the other 4
 tabs — it's a check on how well the *existing* signals have performed, added after the user
 asked "what else could we add" and picked this + a rejected support/resistance idea (see above)

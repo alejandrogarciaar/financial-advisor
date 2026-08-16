@@ -144,6 +144,35 @@ config + tab wiring). This tab's code lives in `src/ui/cripto.py`:
   implementations that could drift. `VWAP_REACTION_ATR_THRESHOLD = 1.0` and
   `VWAP_REACTION_HEADLINE_HORIZON = 20` (single horizon quoted live in the `st.success`, same
   pattern as `WYCKOFF_SPRING_HEADLINE_HORIZON` — no table).
+- `render_etf_flows()` (`src/ui/cripto.py`, own section, last in `render_crypto()`) — institutional
+  ETF flow/AUM context for the selected ticker, via `src/data/sosovalue_client.py` (see that
+  file's section below). Descriptive, same standing as Fear & Greed — not a validated price
+  signal. **Button-gated**, unlike everything else that's eager-fetch-on-tab-load in this file:
+  listing + snapshotting + history for every fund of a coin is up to ~2 SoSoValue calls per fund,
+  and BTC has 13 funds listed today (~26 calls) against a 20 req/min free-tier limit —
+  `sosovalue_client._get()` now paces every request to ≥3.1s apart specifically because of this
+  section (confirmed in testing: unpaced, a 26-call burst hits 429 after request #20 and the
+  reactive backoff is slower and less predictable than pacing from the start). A per-fund
+  `try/except DataError` means one fund failing (rate limit with no cache yet, a transient error)
+  doesn't take down the rest of the section — verified via `AppTest`, clicking the button for BTC
+  end-to-end renders 0 exceptions even when some individual fund calls do get rate-limited.
+  Cached at `ttl=86400` (`_cached_etf_list`/`_cached_etf_snapshot`/`_cached_etf_history`, next to
+  the Binance cache wrappers) — SoSoValue's own data is daily-settlement, not intraday, so a
+  shorter TTL would just burn free-tier quota for no new information.
+
+  Three charts, colors chosen per the dataviz skill's job-based rule (checked against
+  `references/palette.md`, not eyeballed — this environment has no `node` to run the validator
+  script, so the choice leans on the palette doc's own pre-validated guarantee for the documented
+  fixed order rather than a fresh script run): **AUM by fund** (horizontal bar, descending,
+  single sequential hue — magnitude, not identity, so no legend needed); **daily net flow
+  aggregated across all funds** (bar, the dataviz diverging pair blue/red — inflow/outflow is
+  genuine polarity around a real zero); **cumulative flow by fund over time** (line, categorical
+  identity — capped at `ETF_FLOWS_TOP_N = 6` individually-colored funds using the first 6 slots
+  of the same fixed categorical order as `FAMILY_COLOR`/`VWAP_COLOR`, the rest folded into one
+  muted-gray "Otros" line rather than generating a 7th–13th hue, per the skill's explicit "a 9th
+  series is never a generated hue" rule — BTC alone would otherwise need 13 distinguishable
+  hues). A `st.dataframe` table underneath is the color-carries-meaning companion, same pattern
+  as every other chart in this tab.
 
 ## `src/support_resistance.py` — "Market Reaction Zone Engine"
 

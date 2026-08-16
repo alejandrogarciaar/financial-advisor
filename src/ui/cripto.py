@@ -14,8 +14,8 @@ import pandas as pd
 import plotly.graph_objects as go
 import streamlit as st
 
-from src.config import CRYPTO_BINANCE_SYMBOLS
-from src.data import binance_client
+from src.config import CRYPTO_BINANCE_SYMBOLS, SOSOVALUE_API_KEY
+from src.data import binance_client, sosovalue_client
 from src.data.errors import DataError
 from src.speculation import (
     VWAP_REACTION_ATR_THRESHOLD,
@@ -140,6 +140,218 @@ def render_wyckoff_spring(ticker: str, historical_prices: list[dict], closes: li
         )
     else:
         st.caption("Sin observaciones suficientes todavía.")
+
+
+# Primeros 6 slots de la paleta categórica validada por la skill dataviz (mismos hex que
+# FAMILY_COLOR en stocks.py: azul/naranja/aqua/amarillo/magenta/verde, en el mismo orden fijo,
+# nunca ciclada) — hasta 6 fondos llevan color propio; el resto se agrupa en "Otros" con tinta
+# muted en vez de generar un 7mo/8vo/9no hue (BTC tiene 13 fondos listados hoy: distinguir todos
+# por color violaría la regla de la skill de nunca generar una hue de más).
+ETF_FLOWS_TOP_N = 6
+ETF_FLOWS_CATEGORICAL = ["#2a78d6", "#eb6834", "#1baf7a", "#eda100", "#e87ba4", "#008300"]
+ETF_FLOWS_OTHER_COLOR = "#898781"  # tinta "muted" ya usada en el resto de la app, no un 7mo hue
+ETF_FLOWS_AUM_COLOR = "#2a78d6"  # magnitud (ranking de AUM) -> un solo hue secuencial, no identidad
+ETF_FLOWS_POSITIVE_COLOR = "#2a78d6"  # par divergente azul/rojo de la skill dataviz: entra plata
+ETF_FLOWS_NEGATIVE_COLOR = "#e34948"  # sale plata
+
+
+def render_etf_flows(ticker: str) -> None:
+    """Sección PROPIA, al final de la pestaña — flujos institucionales de los ETFs spot de
+    `ticker` vía `src/data/sosovalue_client.py`. Descriptivo, mismo criterio que el Índice de
+    Miedo y Codicia: no es una señal de precio validada por este proyecto, solo contexto sobre
+    cuánto dinero institucional entra/sale por este canal y cómo se reparte entre emisores.
+
+    Button-gated (mismo patrón que el Zone Engine y el backtest de Validación), a propósito NO
+    eager-fetch: listar + snapshot + historial de cada fondo son hasta ~2 llamadas por fondo, y
+    BTC tiene 13 fondos listados hoy — más llamadas de las que el tier gratuito de SoSoValue
+    permite en una ráfaga (20/min). `sosovalue_client._get()` espacia cada request a >=3.1s de la
+    anterior para no depender de reaccionar recién después de un 429 (ver ese módulo) — igual
+    puede tardar más de un minuto para BTC (~26 llamadas pausadas), por eso el `st.spinner` de
+    abajo. Cacheado con TTL de 24h (`_cached_etf_*` más abajo) — la propia API solo actualiza
+    estos datos una vez por día (el snapshot trae la fecha de la última sesión liquidada, no
+    "ahora mismo"), así que pedirlo más seguido no trae nada nuevo ni evita la espera la próxima
+    vez dentro de esas 24h."""
+    st.divider()
+    st.subheader("🏦 ETFs spot — flujos institucionales")
+    st.caption(
+        f"De dónde entra y sale la plata institucional en {ticker} a través de sus ETFs spot "
+        "listados en EE. UU. (SoSoValue) — AUM y flujo neto por emisor, últimos ~30 días. "
+        "Descriptivo, mismo criterio que el Índice de Miedo y Codicia: no es una señal de precio "
+        "validada por este proyecto."
+    )
+
+    if not SOSOVALUE_API_KEY:
+        st.caption("Sección no disponible: falta configurar `SOSOVALUE_API_KEY` (ver `.env.example`).")
+        return
+
+    if not st.button(f"Consultar ETFs de {ticker}", key="etf_flows_button"):
+        st.caption(
+            "No se pide automáticamente: son hasta ~2 llamadas por fondo listado (AUM + "
+            "historial) espaciadas para respetar el límite gratuito de SoSoValue (20/min) — "
+            "para BTC (13 fondos) puede tardar más de un minuto en cargar."
+        )
+        return
+
+    try:
+        fund_list, _ = _cached_etf_list(ticker)
+    except DataError as exc:
+        st.error(f"No pudimos consultar los ETFs de {ticker} ahora mismo.")
+        st.caption(f"Detalle: {exc}")
+        return
+
+    if not fund_list:
+        st.caption(f"SoSoValue no tiene ETFs spot listados para {ticker} todavía.")
+        return
+
+    rows = []
+    with st.spinner(f"Consultando {len(fund_list)} fondos en SoSoValue..."):
+        for fund in fund_list:
+            fund_ticker = fund.get("ticker")
+            if not fund_ticker:
+                continue
+            try:
+                snapshot, _ = _cached_etf_snapshot(fund_ticker)
+                history, _ = _cached_etf_history(fund_ticker)
+            except DataError:
+                continue  # un fondo puntual que falla no tira abajo el resto de la sección
+            rows.append(
+                {
+                    "ticker": fund_ticker,
+                    "name": fund.get("name", fund_ticker),
+                    "aum": snapshot.get("net_assets") or 0.0,
+                    "history": history,
+                }
+            )
+
+    if not rows:
+        st.caption("No se pudo traer información de ningún fondo ahora mismo.")
+        return
+
+    rows.sort(key=lambda r: r["aum"], reverse=True)
+    total_aum = sum(r["aum"] for r in rows)
+    st.metric(f"AUM total — ETFs de {ticker}", f"${total_aum / 1e6:,.1f}M", f"{len(rows)} fondos")
+
+    # --- AUM por fondo: magnitud -> un solo hue secuencial, sin necesidad de identidad ---
+    st.markdown("**AUM por fondo**")
+    fig_aum = go.Figure(
+        go.Bar(
+            x=[r["aum"] / 1e6 for r in rows],
+            y=[r["ticker"] for r in rows],
+            orientation="h",
+            marker=dict(color=ETF_FLOWS_AUM_COLOR),
+            text=[f"${r['aum'] / 1e6:,.0f}M" for r in rows],
+            textposition="outside",
+            hovertemplate="%{y}: $%{x:,.1f}M<extra></extra>",
+        )
+    )
+    fig_aum.update_layout(
+        plot_bgcolor="rgba(0,0,0,0)",
+        paper_bgcolor="rgba(0,0,0,0)",
+        font=dict(color="#898781"),
+        margin=dict(l=10, r=10, t=10, b=10),
+        height=max(220, 32 * len(rows)),
+        xaxis=dict(gridcolor="rgba(128,128,128,0.2)", tickprefix="$", ticksuffix="M"),
+        yaxis=dict(autorange="reversed", showgrid=False),
+        showlegend=False,
+    )
+    st.plotly_chart(fig_aum, use_container_width=True)
+
+    all_dates = sorted({h["date"] for r in rows for h in r["history"]})
+
+    # --- Flujo neto diario agregado: polaridad -> par divergente azul (entra)/rojo (sale) ---
+    if all_dates:
+        st.markdown(f"**Flujo neto diario agregado — {ticker}** (todos los emisores)")
+        daily_total = {
+            d: sum((h.get("net_inflow") or 0.0) for r in rows for h in r["history"] if h["date"] == d)
+            for d in all_dates
+        }
+        values = [daily_total[d] / 1e6 for d in all_dates]
+        colors = [ETF_FLOWS_POSITIVE_COLOR if v >= 0 else ETF_FLOWS_NEGATIVE_COLOR for v in values]
+        fig_flow = go.Figure(
+            go.Bar(
+                x=all_dates, y=values, marker=dict(color=colors),
+                hovertemplate="%{x}: $%{y:,.1f}M<extra></extra>",
+            )
+        )
+        fig_flow.update_layout(
+            plot_bgcolor="rgba(0,0,0,0)",
+            paper_bgcolor="rgba(0,0,0,0)",
+            font=dict(color="#898781"),
+            margin=dict(l=10, r=10, t=10, b=10),
+            height=320,
+            xaxis=dict(showgrid=False),
+            yaxis=dict(
+                gridcolor="rgba(128,128,128,0.2)", tickprefix="$", ticksuffix="M", zerolinecolor="#c3c2b7"
+            ),
+            showlegend=False,
+        )
+        st.plotly_chart(fig_flow, use_container_width=True)
+
+    # --- Flujo acumulado por fondo: identidad -> categórico fijo, top N + "Otros" agrupado ---
+    top_rows = rows[:ETF_FLOWS_TOP_N]
+    other_rows = rows[ETF_FLOWS_TOP_N:]
+    if all_dates:
+        titulo = f"**Flujo acumulado por fondo** (top {len(top_rows)} por AUM"
+        titulo += f" + Otros [{len(other_rows)}])" if other_rows else ")"
+        st.markdown(titulo)
+        fig_cum = go.Figure()
+        for idx, r in enumerate(top_rows):
+            by_date = {h["date"]: h.get("net_inflow") or 0.0 for h in r["history"]}
+            running, ys = 0.0, []
+            for d in all_dates:
+                running += by_date.get(d, 0.0)
+                ys.append(running / 1e6)
+            fig_cum.add_trace(
+                go.Scatter(
+                    x=all_dates, y=ys, mode="lines", name=r["ticker"],
+                    line=dict(color=ETF_FLOWS_CATEGORICAL[idx % len(ETF_FLOWS_CATEGORICAL)], width=2),
+                    hovertemplate=f"{r['ticker']}: $%{{y:,.1f}}M<extra></extra>",
+                )
+            )
+        if other_rows:
+            running, ys = 0.0, []
+            for d in all_dates:
+                running += sum(
+                    (h.get("net_inflow") or 0.0) for r in other_rows for h in r["history"] if h["date"] == d
+                )
+                ys.append(running / 1e6)
+            fig_cum.add_trace(
+                go.Scatter(
+                    x=all_dates, y=ys, mode="lines", name=f"Otros ({len(other_rows)})",
+                    line=dict(color=ETF_FLOWS_OTHER_COLOR, width=2, dash="dot"),
+                    hovertemplate="Otros: $%{y:,.1f}M<extra></extra>",
+                )
+            )
+        fig_cum.update_layout(
+            plot_bgcolor="rgba(0,0,0,0)",
+            paper_bgcolor="rgba(0,0,0,0)",
+            font=dict(color="#898781"),
+            legend=dict(orientation="h", yanchor="bottom", y=1.02, xanchor="left", x=0),
+            margin=dict(l=10, r=10, t=10, b=10),
+            hovermode="x unified",
+            height=380,
+            xaxis=dict(showgrid=False),
+            yaxis=dict(
+                gridcolor="rgba(128,128,128,0.2)", tickprefix="$", ticksuffix="M", zerolinecolor="#c3c2b7"
+            ),
+        )
+        st.plotly_chart(fig_cum, use_container_width=True)
+
+    # Tabla — companion de los 3 gráficos de arriba (la skill dataviz pide una vista de tabla
+    # siempre que el color cargue significado, mismo patrón que el resto de esta pestaña).
+    with st.expander("Ver los fondos en tabla"):
+        table = pd.DataFrame(
+            [
+                {
+                    "Ticker": r["ticker"],
+                    "Nombre": r["name"],
+                    "AUM (USD)": r["aum"],
+                    "Flujo histórico API (~30d, USD)": sum(h.get("net_inflow") or 0.0 for h in r["history"]),
+                }
+                for r in rows
+            ]
+        )
+        st.dataframe(table, use_container_width=True, hide_index=True)
 
 
 # Identidad de cada ventana en el gráfico. Las 3 ventanas tienen un orden natural (corta →
@@ -404,6 +616,25 @@ def _cached_binance_historical_prices_4h(binance_symbol: str):
 @st.cache_data(ttl=900, show_spinner=False)
 def _cached_binance_historical_prices_1h(binance_symbol: str):
     return binance_client.get_historical_prices_intraday_1h(binance_symbol)
+
+
+# TTL de 24h, no 900s como el precio: SoSoValue solo actualiza AUM/flujos una vez por día (el
+# snapshot trae la fecha de la última sesión liquidada), y un TTL corto solo gastaría cuota del
+# free tier (20 req/min, 100k/mes) sin traer nada distinto. Mismo criterio que el TTL de 86400s
+# de _cached_backtest_ticker en Validación.
+@st.cache_data(ttl=86400, show_spinner=False)
+def _cached_etf_list(symbol: str):
+    return sosovalue_client.get_etf_list(symbol)
+
+
+@st.cache_data(ttl=86400, show_spinner=False)
+def _cached_etf_snapshot(fund_ticker: str):
+    return sosovalue_client.get_etf_market_snapshot(fund_ticker)
+
+
+@st.cache_data(ttl=86400, show_spinner=False)
+def _cached_etf_history(fund_ticker: str):
+    return sosovalue_client.get_etf_history(fund_ticker)
 
 
 # TTL largo (6h) a propósito, a diferencia de _cached_evaluation (900s, sigue el precio en
@@ -740,3 +971,4 @@ def render_crypto():
     )
     render_vwap(ticker, historical_prices, closes, current_price)
     render_wyckoff_spring(ticker, historical_prices, closes)
+    render_etf_flows(ticker)

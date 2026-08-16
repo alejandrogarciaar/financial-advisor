@@ -20,10 +20,10 @@ ETH): mismo universo de 9 tickers, mismo AUM total (~$900M) y la misma anomalía
 otro vehículo) — dos fuentes independientes coincidiendo hace más creíble que sea un dato real y
 no un glitch de una sola fuente. BTC/ETH no tienen ese cruce porque nunca hubo un scraper de esos.
 
-Todavía NO está conectado a ningún tab de la app — es solo el cliente de datos, mismo alcance
-que se acordó explícitamente ("provider real" == este archivo + la key en `.env`), no una
-sección nueva en Cripto/Portafolio. Ver `.claude/skills/financial-advisor-cripto/references/
-design-history.md` si en algún momento se decide surfacearlo en la UI.
+Conectado a la pestaña Cripto el mismo día (`render_etf_flows()` en `src/ui/cripto.py`, sección
+propia al final de la pestaña, button-gated por el límite de rate) — ver el mapa de archivos de
+la skill `financial-advisor-cripto` para el detalle de esa sección y de los 3 gráficos que
+consume de acá.
 
 Mismo patrón de caché en disco que fmp_client.py/binance_client.py: la última respuesta buena se
 guarda en `.cache/` (vía `src.data.cache`) y se usa como fallback si una llamada en vivo falla —
@@ -42,13 +42,27 @@ from src.data.errors import DataError
 _session = requests.Session()
 _NAMESPACE = "sosovalue"
 
-# La API respeta 20 req/min por key, pero un lote de llamadas seguidas (lista + historia +
-# snapshot por cada uno de los 9 tickers) puede pegarle igual al límite cerca del borde de la
-# ventana de un minuto — confirmado en la exploración previa. Un reintento corto con backoff
-# evita que eso rompa una corrida entera; no es una garantía de nunca ver 429, solo tolerancia
-# a que pase una vez.
+# La API respeta 20 req/min por key. Un lote de llamadas para un ticker con muchos fondos (BTC
+# tiene 13 hoy: hasta 2 llamadas por fondo = ~26) supera ese cupo en una sola ráfaga sin
+# importar qué tan rápido responda la red. Probado en la práctica: sin espaciar las llamadas,
+# la ráfaga entera pega contra el límite después de la request #20 y cada 429 subsiguiente come
+# un backoff de 10-30s -- mucho más lento e impredecible que simplemente no mandar más rápido de
+# lo que el límite permite desde el principio. `_throttle()` espacia cada request a >=3.1s desde
+# la anterior (60s/20 + margen) para no depender del backoff reactivo como primera línea de
+# defensa; `_MAX_RETRIES`/`_RETRY_BACKOFF_SECONDS` se quedan como red de seguridad para el caso
+# de que otra cosa (otra key, otro proceso) esté consumiendo la misma cuota al mismo tiempo.
+_MIN_REQUEST_INTERVAL_SECONDS = 3.1
+_last_request_at = 0.0
 _MAX_RETRIES = 3
 _RETRY_BACKOFF_SECONDS = 10
+
+
+def _throttle() -> None:
+    global _last_request_at
+    elapsed = time.monotonic() - _last_request_at
+    if elapsed < _MIN_REQUEST_INTERVAL_SECONDS:
+        time.sleep(_MIN_REQUEST_INTERVAL_SECONDS - elapsed)
+    _last_request_at = time.monotonic()
 
 
 def _get(path: str, **params) -> tuple[dict | list, dict]:
@@ -60,6 +74,7 @@ def _get(path: str, **params) -> tuple[dict | list, dict]:
     try:
         body = None
         for attempt in range(_MAX_RETRIES):
+            _throttle()
             resp = _session.get(
                 f"{SOSOVALUE_BASE_URL}{path}",
                 params=params,
