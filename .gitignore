@@ -11,3 +11,4 @@ streamlit.port
 .claude/settings.local.json
 *.zip
 /zips/
+.portfolio_repo/

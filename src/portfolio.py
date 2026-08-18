@@ -1,423 +1,92 @@
-"""Gestión de capital: persistencia de las compras y ventas reales del usuario y cálculo de
-rentabilidad (no realizada, sobre lo que todavía se tiene, y realizada, sobre lo que se vendió).
+"""Gestión de capital: persistencia de las compras y ventas reales del usuario. El cálculo
+(costo promedio cronológico, ganancias realizadas, comisiones, proyecciones, etc.) vive ahora en
+el paquete privado `portfolio` (github.com/alejandrogarciaar/portfolio, extraído de este mismo
+archivo el 2026-08-16, instalado en modo editable desde `.portfolio_repo/` — ver
+`financial-advisor-portfolio`'s design history) — este módulo quedó como un wrapper delgado:
+sigue siendo el único dueño de `portfolio_data/` (la fuente de verdad real, nunca el snapshot
+embebido en el paquete) y reexporta el cálculo tal cual.
+
 A diferencia de `.cache/` (respuestas de APIs, reconstruibles y por eso gitignoreadas),
 `portfolio_data/` guarda datos que el usuario ingresó a mano y que no se pueden reconstruir si
 se borran, así que vive en su propio archivo fuera de la caché.
+
+Cada `save_purchases()`/`save_sales()` además sincroniza el archivo guardado hacia
+`.portfolio_repo/` (una copia local del repo `portfolio`, gitignored acá) con commit+push
+automático — así el snapshot que ese paquete embebe nunca queda desactualizado respecto a lo que
+el usuario acaba de cargar. Un fallo de sync (red caída, remoto rechazado) no debe tirar abajo el
+guardado real, que ya ocurrió en `portfolio_data/`; solo se avisa por consola.
 """
 
-import json
+import subprocess
 from pathlib import Path
 
 import pandas as pd
+import portfolio as _lib
 
 DATA_DIR = Path(__file__).resolve().parent.parent / "portfolio_data"
-STORAGE_FILE = DATA_DIR / "purchases.json"
-SALES_STORAGE_FILE = DATA_DIR / "sales.json"
 
-COLUMNS = ["ticker", "shares", "price_cop", "commission_cop", "date"]
+_SYNC_REPO_DIR = Path(__file__).resolve().parent.parent / ".portfolio_repo"
+_SYNC_DATA_DIR = _SYNC_REPO_DIR / "portfolio" / "portfolio_data"
 
-# Comisión fija por operación que cobra el bróker (compra o venta) — no es un valor de mercado
-# que haya que recalcular, así que sirve como default fijo en filas nuevas, editable operación a
-# operación (nunca retroactivo sobre lo ya guardado).
-DEFAULT_COMMISSION_COP = 7438.0
+COLUMNS = _lib.COLUMNS
+DEFAULT_COMMISSION_COP = _lib.DEFAULT_COMMISSION_COP
 
-
-def _load_movements(storage_file: Path) -> pd.DataFrame:
-    if not storage_file.exists():
-        return pd.DataFrame(columns=COLUMNS)
-    records = json.loads(storage_file.read_text(encoding="utf-8"))
-    for record in records:
-        record.setdefault("commission_cop", DEFAULT_COMMISSION_COP)
-    df = pd.DataFrame(records, columns=COLUMNS)
-    if not df.empty:
-        df["date"] = pd.to_datetime(df["date"]).dt.date
-        df["shares"] = df["shares"].astype(int)
-        df["price_cop"] = df["price_cop"].astype(float)
-        df["commission_cop"] = df["commission_cop"].astype(float)
-    return df
-
-
-def _save_movements(storage_file: Path, df: pd.DataFrame) -> None:
-    storage_file.parent.mkdir(exist_ok=True)
-    records = [
-        {
-            "ticker": row.ticker,
-            "shares": int(row.shares),
-            "price_cop": float(row.price_cop),
-            "commission_cop": float(row.commission_cop),
-            "date": row.date.isoformat() if hasattr(row.date, "isoformat") else str(row.date),
-        }
-        for row in df.itertuples(index=False)
-    ]
-    storage_file.write_text(json.dumps(records, indent=2), encoding="utf-8")
+validate_purchases = _lib.validate_purchases
+validate_sales = _lib.validate_sales
+sale_cost_basis_by_row = _lib.sale_cost_basis_by_row
+summarize_by_ticker = _lib.summarize_by_ticker
+realized_gains_summary = _lib.realized_gains_summary
+simulate_additional_purchase = _lib.simulate_additional_purchase
+build_synthetic_portfolio_series = _lib.build_synthetic_portfolio_series
+project_future_value = _lib.project_future_value
+commission_summary = _lib.commission_summary
 
 
 def load_purchases() -> pd.DataFrame:
-    return _load_movements(STORAGE_FILE)
-
-
-def save_purchases(df: pd.DataFrame) -> None:
-    _save_movements(STORAGE_FILE, df)
+    return _lib.load_purchases(DATA_DIR)
 
 
 def load_sales() -> pd.DataFrame:
-    return _load_movements(SALES_STORAGE_FILE)
+    return _lib.load_sales(DATA_DIR)
+
+
+def save_purchases(df: pd.DataFrame) -> None:
+    _lib.save_purchases(df, DATA_DIR)
+    _sync_to_portfolio_repo("purchases.json")
 
 
 def save_sales(df: pd.DataFrame) -> None:
-    _save_movements(SALES_STORAGE_FILE, df)
+    _lib.save_sales(df, DATA_DIR)
+    _sync_to_portfolio_repo("sales.json")
 
 
-def _validate_movement_fields(df: pd.DataFrame, valid_tickers: list[str], price_label: str) -> list[str]:
-    """Reglas de negocio que el column_config del data_editor no puede garantizar por sí
-    solo (p.ej. un paste puede colar un número fraccionario pese al step=1 de la UI). Compartida
-    entre compras y ventas — misma forma de fila (ticker/shares/price_cop/commission_cop/date)."""
-    errors = []
-    for i, row in df.reset_index(drop=True).iterrows():
-        label = f"Fila {i + 1}"
-        ticker = row.get("ticker")
-        if pd.isna(ticker) or ticker not in valid_tickers:
-            errors.append(f"{label}: elegí un ticker válido.")
-        shares = row.get("shares")
-        if pd.isna(shares) or float(shares) != int(shares) or int(shares) < 1:
-            errors.append(f"{label}: las acciones deben ser un número entero mayor a 0 (no se aceptan fracciones).")
-        price = row.get("price_cop")
-        if pd.isna(price) or price <= 0:
-            errors.append(f"{label}: el precio de {price_label} (en pesos) debe ser mayor a 0.")
-        commission = row.get("commission_cop")
-        if pd.isna(commission) or commission < 0:
-            errors.append(f"{label}: la comisión (en pesos) no puede ser negativa.")
-        if pd.isna(row.get("date")):
-            errors.append(f"{label}: falta la fecha.")
-    return errors
-
-
-def validate_purchases(df: pd.DataFrame, valid_tickers: list[str]) -> list[str]:
-    return _validate_movement_fields(df, valid_tickers, "compra")
-
-
-def validate_sales(df: pd.DataFrame, valid_tickers: list[str], purchases: pd.DataFrame) -> list[str]:
-    """Además de los mismos chequeos de campo que las compras, no deja vender más acciones de
-    las que efectivamente se compraron para ese ticker — la validación es agregada (no por lote:
-    mismo criterio de costo promedio que el resto del módulo), así que dos filas de venta que en
-    conjunto superan lo comprado se marcan juntas."""
-    errors = _validate_movement_fields(df, valid_tickers, "venta")
-    if errors or df.empty:
-        return errors
-    purchased_by_ticker = purchases.groupby("ticker")["shares"].sum() if not purchases.empty else pd.Series(dtype=int)
-    sold_by_ticker = df.groupby("ticker")["shares"].sum()
-    for ticker, sold in sold_by_ticker.items():
-        purchased = int(purchased_by_ticker.get(ticker, 0))
-        if int(sold) > purchased:
-            errors.append(
-                f"{ticker}: estás vendiendo {int(sold)} acción(es) pero solo compraste {purchased} en total."
-            )
-    return errors
-
-
-def _chronological_ledger(ticker_purchases: pd.DataFrame, ticker_sales: pd.DataFrame) -> list[dict]:
-    """Recorre las compras y ventas de UN ticker en orden cronológico manteniendo un costo
-    promedio ponderado corriente (el método estándar de "costo promedio", no FIFO por lotes): una
-    compra mezcla su propio costo con el promedio que ya venía corriendo; una venta reduce las
-    acciones en cartera SIN tocar el promedio de lo que queda — ese promedio, en el momento de la
-    venta, es exactamente la base de costo que le corresponde a esa venta. Un empate de fecha
-    compra/venta procesa la compra primero (evita que `shares_held` quede transitoriamente
-    negativo, aunque en la práctica este proyecto no suele tener ambas el mismo día).
-
-    Reemplaza un atajo que este proyecto usaba antes: un único promedio calculado sobre TODAS las
-    compras de un ticker sin mirar fechas, aplicado por igual a las acciones que quedan en
-    cartera Y a cada venta pasada. Ese atajo tenía dos fallas reales, ambas confirmadas con datos
-    del portafolio el 2026-08-11:
-    1. Una compra cargada DESPUÉS de una venta corría el promedio hacia adelante y cambiaba
-       retroactivamente la ganancia YA REPORTADA de esa venta (METACO: una compra 8 días después
-       de una venta le bajó la ganancia realizada de esa venta de $224.284 a $104.344 COP).
-    2. Simétricamente, un lote YA VENDIDO seguía mezclado en el costo promedio de las acciones
-       compradas y retenidas después de esa venta (METACO otra vez: la acción que efectivamente
-       se tiene hoy —comprada después de vender la anterior— mostraba una ganancia en vivo de
-       +5.3% cuando su costo real implicaba una pérdida cercana a -1.3%, coincidiendo con lo que
-       mostraba una plataforma externa, -1.05%).
-    Ambas violan la regla de que "Ganancias realizadas" es de solo lectura y no debería cambiar
-    salvo por una venta nueva (ver CLAUDE.md / financial-advisor-portfolio skill)."""
-    events = [
-        {
-            "index": r.Index,
-            "date": r.date,
-            "type": "buy",
-            "shares": int(r.shares),
-            "price_cop": float(r.price_cop),
-            "commission_cop": float(r.commission_cop),
-        }
-        for r in ticker_purchases.itertuples()
-    ] + [
-        {
-            "index": r.Index,
-            "date": r.date,
-            "type": "sell",
-            "shares": int(r.shares),
-            "price_cop": float(r.price_cop),
-            "commission_cop": float(r.commission_cop),
-        }
-        for r in ticker_sales.itertuples()
-    ]
-    events.sort(key=lambda e: (e["date"], 0 if e["type"] == "buy" else 1))
-
-    shares_held = 0
-    avg_cost_cop = 0.0
-    ledger = []
-    for e in events:
-        if e["type"] == "buy":
-            total_cost_before = shares_held * avg_cost_cop
-            new_cost = e["shares"] * e["price_cop"] + e["commission_cop"]
-            shares_held += e["shares"]
-            avg_cost_cop = (total_cost_before + new_cost) / shares_held if shares_held else 0.0
-        else:
-            shares_held -= e["shares"]
-        ledger.append({**e, "avg_cost_cop": avg_cost_cop, "shares_held_after": shares_held})
-    return ledger
-
-
-def sale_cost_basis_by_row(purchases: pd.DataFrame, sales: pd.DataFrame) -> pd.Series:
-    """Costo promedio de compra CRONOLÓGICO (vía `_chronological_ledger`) vigente en el momento
-    de cada venta puntual — un valor por FILA de `sales`, no uno solo por ticker (dos ventas del
-    mismo ticker en fechas distintas pueden tener bases de costo distintas si hubo una compra en
-    el medio). Reemplaza a la vieja `average_buy_price_by_ticker` (un único valor por ticker,
-    ignorando fechas); usado por "Tus ventas" para mostrar, junto a cada venta, la misma base de
-    costo que `realized_gains_summary()` usa internamente para calcular su ganancia."""
-    if sales.empty:
-        return pd.Series(dtype=float)
-    result = pd.Series(index=sales.index, dtype=float)
-    for ticker, sale_group in sales.groupby("ticker"):
-        ticker_purchases = purchases[purchases["ticker"] == ticker] if not purchases.empty else purchases
-        for e in _chronological_ledger(ticker_purchases, sale_group):
-            if e["type"] == "sell":
-                result.loc[e["index"]] = e["avg_cost_cop"]
-    return result
-
-
-def summarize_by_ticker(
-    purchases: pd.DataFrame, sales: pd.DataFrame, current_prices_cop: dict
-) -> pd.DataFrame:
-    """Una fila por ticker TODAVÍA EN CARTERA (acciones compradas menos vendidas > 0) — un
-    ticker completamente vendido desaparece de acá, su resultado vive en
-    `realized_gains_summary()` en cambio. `avg_price_cop` es el costo promedio CRONOLÓGICO (vía
-    `_chronological_ledger` — no un promedio estático de todas las compras sin mirar fechas), y
-    `invested_cop` es ese costo promedio aplicado solo a las acciones que quedan en cartera.
-
-    `return_pct` responde "si vendiera hoy, ¿cuánto gané/perdí realmente?" — no solo la variación
-    de precio de mercado. `invested_cop` YA incluye la comisión de compra (ver `avg_price_cop`
-    arriba), y acá además se resta de `current_value_cop` una comisión de venta hipotética
-    (`DEFAULT_COMMISSION_COP`, la misma que usa el formulario de "Registrar una venta nueva" por
-    defecto) para llegar a `net_current_value_cop` — así `return_pct` queda simétrico con
-    `realized_gains_summary()`, que sí resta la comisión de venta real una vez que la venta
-    ocurre de verdad. `current_value_cop` (sin neteo) se conserva aparte porque "Valor actual" en
-    la UI debe seguir siendo el valor de mercado literal, no un valor ya neto de una operación
-    que todavía no pasó."""
-    if purchases.empty:
-        return pd.DataFrame()
-
-    sold_by_ticker = sales.groupby("ticker")["shares"].sum() if not sales.empty else pd.Series(dtype=int)
-
-    rows = []
-    for ticker, group in purchases.groupby("ticker"):
-        ticker_sales = sales[sales["ticker"] == ticker] if not sales.empty else sales
-        ledger = _chronological_ledger(group, ticker_sales)
-        avg_price_cop, shares = (ledger[-1]["avg_cost_cop"], ledger[-1]["shares_held_after"]) if ledger else (0.0, 0)
-
-        if shares <= 0:
-            continue
-        invested_cop = avg_price_cop * shares
-
-        current_price_cop = current_prices_cop.get(ticker)
-        current_value_cop = shares * current_price_cop if current_price_cop is not None else None
-        net_current_value_cop = (
-            current_value_cop - DEFAULT_COMMISSION_COP if current_value_cop is not None else None
+def _sync_to_portfolio_repo(filename: str) -> None:
+    if not _SYNC_REPO_DIR.exists():
+        return
+    try:
+        _SYNC_DATA_DIR.mkdir(parents=True, exist_ok=True)
+        (_SYNC_DATA_DIR / filename).write_text(
+            (DATA_DIR / filename).read_text(encoding="utf-8"), encoding="utf-8"
         )
-        return_pct = (
-            (net_current_value_cop - invested_cop) / invested_cop
-            if net_current_value_cop is not None and invested_cop
-            else None
+        subprocess.run(
+            ["git", "add", f"portfolio/portfolio_data/{filename}"],
+            cwd=_SYNC_REPO_DIR,
+            check=True,
+            capture_output=True,
         )
-        rows.append(
-            {
-                "ticker": ticker,
-                "shares": shares,
-                "avg_price_cop": avg_price_cop,
-                "invested_cop": invested_cop,
-                "current_price_cop": current_price_cop,
-                "current_value_cop": current_value_cop,
-                "net_current_value_cop": net_current_value_cop,
-                "return_pct": return_pct,
-            }
+        staged = subprocess.run(
+            ["git", "diff", "--cached", "--quiet"], cwd=_SYNC_REPO_DIR
         )
-    return pd.DataFrame(rows)
-
-
-def realized_gains_summary(purchases: pd.DataFrame, sales: pd.DataFrame) -> pd.DataFrame:
-    """Una fila por ticker con al menos una venta: ganancia realizada usando costo promedio
-    CRONOLÓGICO (vía `_chronological_ledger` — la base de costo vigente en el momento de CADA
-    venta, no un promedio estático recalculado sobre todas las compras) como base de costo, y el
-    precio de venta NETO de la comisión de venta como ingreso — misma lógica simétrica que ya usa
-    el lado de compra (`invested_cop` ya suma la comisión al costo), así que la comisión de venta
-    reduce la ganancia acá en vez de quedar afuera del cálculo. Con varias ventas del mismo ticker
-    en fechas distintas, cada una usa SU PROPIA base de costo (pueden diferir si hubo una compra
-    entre medio) y esta función suma sus resultados en una sola fila por ticker."""
-    if sales.empty:
-        return pd.DataFrame()
-
-    rows = []
-    for ticker, sale_group in sales.groupby("ticker"):
-        ticker_purchases = purchases[purchases["ticker"] == ticker]
-        sell_events = [e for e in _chronological_ledger(ticker_purchases, sale_group) if e["type"] == "sell"]
-
-        shares_sold = sum(e["shares"] for e in sell_events)
-        gross_proceeds_cop = float(sum(e["shares"] * e["price_cop"] for e in sell_events))
-        sale_commission_cop = float(sum(e["commission_cop"] for e in sell_events))
-        cost_basis_cop = float(sum(e["shares"] * e["avg_cost_cop"] for e in sell_events))
-        net_proceeds_cop = gross_proceeds_cop - sale_commission_cop
-        realized_gain_cop = net_proceeds_cop - cost_basis_cop
-        realized_gain_pct = realized_gain_cop / cost_basis_cop if cost_basis_cop else None
-        avg_buy_price_cop = cost_basis_cop / shares_sold if shares_sold else 0.0
-
-        rows.append(
-            {
-                "ticker": ticker,
-                "shares_sold": shares_sold,
-                "avg_buy_price_cop": avg_buy_price_cop,
-                "net_sale_price_cop": net_proceeds_cop / shares_sold if shares_sold else None,
-                "gross_proceeds_cop": gross_proceeds_cop,
-                "sale_commission_cop": sale_commission_cop,
-                "cost_basis_cop": cost_basis_cop,
-                "net_proceeds_cop": net_proceeds_cop,
-                "realized_gain_cop": realized_gain_cop,
-                "realized_gain_pct": realized_gain_pct,
-            }
+        if staged.returncode == 0:
+            return
+        subprocess.run(
+            ["git", "commit", "-m", f"Sync {filename} from financial-advisor (auto)"],
+            cwd=_SYNC_REPO_DIR,
+            check=True,
+            capture_output=True,
         )
-    return pd.DataFrame(rows)
-
-
-def simulate_additional_purchase(
-    purchases: pd.DataFrame,
-    sales: pd.DataFrame,
-    ticker: str,
-    extra_shares: int,
-    extra_price_cop: float,
-    extra_commission_cop: float,
-) -> dict:
-    """Cuánto cambiaría el precio promedio de `ticker` si se sumara una compra hipotética —
-    puro cálculo, no persiste nada. Sirve para planificar antes de cargarla de verdad.
-    `current_avg_price_cop`/`current_shares` salen del mismo ledger cronológico que
-    `summarize_by_ticker()` (no un promedio estático de todo lo comprado)."""
-    ticker_purchases = purchases[purchases["ticker"] == ticker]
-    ticker_sales = sales[sales["ticker"] == ticker] if not sales.empty else sales
-    ledger = _chronological_ledger(ticker_purchases, ticker_sales)
-    if ledger:
-        current_avg_price_cop = ledger[-1]["avg_cost_cop"]
-        current_shares = ledger[-1]["shares_held_after"]
-    else:
-        current_avg_price_cop = None
-        current_shares = 0
-    current_invested_cop = current_avg_price_cop * current_shares if current_avg_price_cop else 0.0
-
-    extra_invested_cop = extra_shares * extra_price_cop + extra_commission_cop
-    new_shares = current_shares + extra_shares
-    new_invested_cop = current_invested_cop + extra_invested_cop
-    new_avg_price_cop = new_invested_cop / new_shares if new_shares else None
-
-    return {
-        "current_shares": current_shares,
-        "current_avg_price_cop": current_avg_price_cop,
-        "current_invested_cop": current_invested_cop,
-        "new_shares": new_shares,
-        "new_avg_price_cop": new_avg_price_cop,
-        "new_invested_cop": new_invested_cop,
-    }
-
-
-def build_synthetic_portfolio_series(
-    holdings_prices: dict[str, list[dict]], weights: dict[str, float]
-) -> list[dict]:
-    """Combina el historial de precios (del subyacente, en USD) de cada holding en un único
-    índice sintético {date, close} ponderado por el peso ACTUAL de cada posición — asume que
-    esa asignación se mantuvo constante durante todo el período, no reconstruye cuándo se
-    compró cada cosa realmente (misma simplificación, documentada, que ya usa `backtest.py`
-    para otra cosa). El resultado está listo para pasarle directo a
-    `evaluate_risk_return()` — no hace falta ninguna matemática de riesgo nueva.
-
-    `weights` no necesita sumar 1: se normaliza acá, así el caller puede pasar valores en COP
-    tal cual sin calcular el total primero. Tickers ausentes de `weights` (peso 0) se ignoran."""
-    tickers = [t for t in holdings_prices if weights.get(t, 0) > 0]
-    if not tickers:
-        return []
-    total_weight = sum(weights[t] for t in tickers)
-    normalized_weights = {t: weights[t] / total_weight for t in tickers}
-
-    # Intersección de fechas: alguna posición puede cotizar en otra plaza (ej. CSPX en
-    # Londres) y no calzar 1:1 con el resto día a día.
-    common_dates = None
-    for t in tickers:
-        dates = {p["date"] for p in holdings_prices[t]}
-        common_dates = dates if common_dates is None else common_dates & dates
-    if not common_dates or len(common_dates) < 2:
-        return []
-    sorted_dates = sorted(common_dates)
-
-    closes_by_ticker = {t: {p["date"]: p["close"] for p in holdings_prices[t]} for t in tickers}
-
-    index_value = 100.0
-    series = [{"date": sorted_dates[0], "close": index_value}]
-    for i in range(1, len(sorted_dates)):
-        prev_date, date = sorted_dates[i - 1], sorted_dates[i]
-        weighted_return = sum(
-            normalized_weights[t] * (closes_by_ticker[t][date] / closes_by_ticker[t][prev_date] - 1)
-            for t in tickers
+        subprocess.run(
+            ["git", "push"], cwd=_SYNC_REPO_DIR, check=True, capture_output=True
         )
-        index_value *= 1 + weighted_return
-        series.append({"date": date, "close": index_value})
-    return series
-
-
-def project_future_value(
-    current_value: float, monthly_contribution: float, annual_rate: float, years: float
-) -> float:
-    """Valor futuro de un capital inicial + aportes mensuales, a una tasa anual compuesta
-    mensualmente (fórmula estándar de capital inicial + anualidad ordinaria) — matemática
-    determinística, no un modelo que haya que validar fuera de muestra. Qué tasa pasar (y si
-    es razonable asumirla hacia adelante) es responsabilidad de quien llama a esta función."""
-    months = round(years * 12)
-    if months <= 0:
-        return current_value
-    monthly_rate = (1 + annual_rate) ** (1 / 12) - 1
-    if monthly_rate == 0:
-        return current_value + monthly_contribution * months
-    future_value_lump = current_value * (1 + monthly_rate) ** months
-    future_value_contributions = monthly_contribution * (((1 + monthly_rate) ** months - 1) / monthly_rate)
-    return future_value_lump + future_value_contributions
-
-
-def commission_summary(purchases: pd.DataFrame, sales: pd.DataFrame) -> dict:
-    """Cuánto se pagó en comisiones en total (compra + venta) y qué proporción representa del
-    capital invertido — costo real que reduce la rentabilidad, no una proyección de nada.
-    `total_invested_cop` sigue siendo solo el lado de compra (lo que efectivamente se puso), así
-    que `pct_of_invested` mide comisión total contra ese capital, no contra el volumen bruto
-    operado (compra + venta)."""
-    total_buy_commission_cop = float(purchases["commission_cop"].sum()) if not purchases.empty else 0.0
-    total_sale_commission_cop = float(sales["commission_cop"].sum()) if not sales.empty else 0.0
-    total_commission_cop = total_buy_commission_cop + total_sale_commission_cop
-    total_invested_cop = (
-        float((purchases["shares"] * purchases["price_cop"] + purchases["commission_cop"]).sum())
-        if not purchases.empty
-        else 0.0
-    )
-    num_purchases = len(purchases)
-    num_sales = len(sales)
-    num_movements = num_purchases + num_sales
-    return {
-        "num_purchases": num_purchases,
-        "num_sales": num_sales,
-        "total_commission_cop": total_commission_cop,
-        "total_buy_commission_cop": total_buy_commission_cop,
-        "total_sale_commission_cop": total_sale_commission_cop,
-        "total_invested_cop": total_invested_cop,
-        "pct_of_invested": total_commission_cop / total_invested_cop if total_invested_cop else None,
-        "avg_commission_cop": total_commission_cop / num_movements if num_movements else None,
-    }
+    except Exception as exc:
+        print(f"[portfolio sync] No se pudo sincronizar {filename} con el repo portfolio: {exc}")

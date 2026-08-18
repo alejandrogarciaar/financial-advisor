@@ -179,13 +179,46 @@ explicit user request so the public Streamlit Cloud deploy shows real purchase/s
 of starting empty (see "Deploying" above) — the user was told this means the actual COP amounts
 and dates are in git history permanently, publicly, and chose to proceed anyway. Concretely:
 `purchases.json`/`sales.json` need a manual `git add`/commit/push after every local edit (via
-the UI forms or `scripts/add_sale.py`) for the public deploy to reflect it — there's no
-auto-sync. Full design history — the COP
+the UI forms or `scripts/add_sale.py`) for **this repo's own public deploy** to reflect it —
+still no auto-sync for that specific hop. Full design history — the COP
 commission model, the drawdown-bucket accumulation zone (`DRAWDOWN_VALIDATED_BUCKETS`), and the
 diversification/aggregate-risk-return/goal-projection sections — moved to
 `.claude/skills/financial-advisor-portfolio/SKILL.md`'s "Design history" section. Invoke that skill
 before touching Portfolio code; it's not repeated here because it's only relevant when work is
 actually scoped to this tab, unlike this file which loads on every conversation.
+
+**Cost-basis/gains logic now lives in an external private package, `portfolio`
+(github.com/alejandrogarciaar/portfolio), consumed by this repo (2026-08-18).** That repo is a
+2026-08-16 extraction of the exact same chronological-average-cost logic that used to live
+entirely in `src/portfolio.py` (`_chronological_ledger`, `summarize_by_ticker`,
+`realized_gains_summary`, `simulate_additional_purchase`, `build_synthetic_portfolio_series`,
+`project_future_value`, `commission_summary`, `validate_purchases`/`validate_sales`) — no
+Streamlit, no UI, `pandas`-only. `src/portfolio.py` is now a thin wrapper: it re-exports all of
+those from the installed `portfolio` package instead of computing them itself, and remains the
+sole owner of `portfolio_data/` (still the real source of truth — `load_purchases()`/
+`load_sales()` always pass this repo's local `DATA_DIR` explicitly, **never** the package's own
+bundled/embedded snapshot, which is only a fallback for other, unrelated consumers of that
+package).
+
+**Installed locally only, in editable mode from `.portfolio_repo/`** (a full local clone of that
+repo, gitignored here) — **not** added to `requirements.txt`, by explicit user choice
+(2026-08-18), because the repo is private and Streamlit Community Cloud has no SSH key or GitHub
+PAT configured to install a private git dependency; adding it to `requirements.txt` today would
+break the public deploy at import time. Revisit only if the user sets up a PAT as a Streamlit
+secret and asks for it — don't add it to `requirements.txt` unprompted.
+
+**Every `save_purchases()`/`save_sales()` call auto-syncs to that repo**, by explicit user
+request: `src/portfolio.py`'s `_sync_to_portfolio_repo()` copies the just-saved
+`purchases.json`/`sales.json` into `.portfolio_repo/portfolio/portfolio_data/` and runs `git
+add`/`commit`/`push` there (SSH remote — the same key verified working for the initial clone).
+Skips the commit entirely when the copied file is byte-identical to what's already staged (via
+`git diff --cached --quiet`), so a re-save with no real change doesn't create empty commits. A
+sync failure (network down, remote rejects the push) is caught and only printed to console — it
+must never fail the actual save, which already succeeded in `portfolio_data/` (the real source of
+truth) before sync is attempted. This closes the gap the `portfolio` package's own README calls
+out under "Keeping this in sync" (previously a fully manual copy+commit); the gap that
+**remains** manual is the separate one above — this repo's own `portfolio_data/` still needs a
+human `git add`/commit/push for the public financial-advisor deploy to show it.
 
 **Zone thresholds**: `ZONE_THRESHOLDS` in `fair_value.py` classify each margin
 `(fair_value - price) / price` into "Acumulación fuerte" / "Acumulación" / "Precio justo" /
