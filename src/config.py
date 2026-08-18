@@ -54,6 +54,7 @@ PORTFOLIO_CDI_TICKERS = {
     "AAPLCO": "AAPLCO.CL",
     "MSFTCO": "MSFTCO.CL",
     "METACO": "METACO.CL",
+    "NUCO": "NUCO.CL",
 }
 
 # Para el Portafolio: qué evaluación de la pestaña Acciones/ETFs reusar como contexto de cada
@@ -66,6 +67,10 @@ PORTFOLIO_CDI_UNDERLYING = {
     "MSFTCO": ("stock", "MSFT"),
     "CSPXCO": ("etf", "CSPXCO"),
     "METACO": ("stock", "META"),
+    # "NU" no está en TICKERS (bloqueado en FMP, ver el comentario arriba) pero eso no importa
+    # acá: este mapeo solo alimenta _cached_historical_prices(symbol) para precio histórico
+    # (yfinance, sin estados financieros), no la evaluación de 6 fórmulas de Acciones.
+    "NUCO": ("stock", "NU"),
 }
 
 # Clasificación GICS aproximada de cada subyacente, para la sección de diversificación del
@@ -81,6 +86,7 @@ PORTFOLIO_CDI_SECTOR = {
     "MSFTCO": "Tecnología",
     "CSPXCO": "Diversificado (ETF S&P 500)",
     "METACO": "Comunicación",
+    "NUCO": "Financiero",  # Nubank: banco digital (GICS Financials)
 }
 
 # Cripto para la pestaña "🪙 Cripto" (no participa en Acciones/Portafolio: no tiene estados
