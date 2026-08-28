@@ -614,3 +614,56 @@ temporalidad the app itself ever fetches for these signals), and this sweep didn
 strong enough to extend any of them to a new temporalidad or ticker. `git status` confirmed after
 the sweep that no project file changed. Ran as a throwaway scratchpad script (not committed),
 same as every other investigation in this file.
+
+## "📐 Niveles Crecetrader" — inner tab (2026-08-28)
+
+User delivered `crecetrader.py` fully written (their own reverse-engineering of a YouTube
+channel's level algorithm) and asked for it as an inner tab per crypto. What was decided while
+wiring it:
+
+- **The delivered file is kept verbatim.** The first pass appended an `infer_inputs()` section to
+  it and added two names to its `__all__`; the user asked, mid-turn, whether the file had been
+  kept as sent. It was split back out into `src/crecetrader_inputs.py` on the spot, restoring
+  `src/crecetrader.py` to exactly what arrived. Keep it that way — the module is meant to stay
+  copy-pasteable and dependency-free, and it is not this project's code to redesign. Anything the
+  app needs on top goes in the companion module.
+- **Nested `st.tabs()` inside `render_crypto()`**, not another top-level tab and not another
+  section appended to the existing stack: the user asked for an inner tab explicitly, and it also
+  keeps a non-validated reconstruction from sitting between sections that DID pass an OOS study.
+  The sticky price and Fear & Greed stay above the split (Fear & Greed is static/ticker-independent
+  by design; the sticky price has to cover both inner tabs).
+- **Where the first impulse ends is the whole difficulty.** The channel draws it by eye. Tried, in
+  order, against real Binance data: (a) retrace 38.2% of the advance measured on daily LOWS with a
+  5%-minimum advance — BTC's impulse closed on 2026-07-02, one day after the anchor, on the same
+  candle's wick (base_range $4.4k vs the ~$18.3k the channel's own chart implies); (b) the same on
+  daily CLOSES — better, but SOL still closed 2 days after its anchor with a 13% impulse, making
+  its entire daily grid fall below today's price; (c) **two simultaneous conditions — retrace
+  `impulse_retracement_pct` (50%) of the advance AND close `min_reversal_pct` (15%) below the
+  running high, both on closes.** That's what shipped: BTC's impulse stays open (base $23.7k, top
+  = today's high), ETH cuts on 2026-06-25 (+22.8%), SOL stays open (+83.9%). None of these
+  reproduces the channel's own $18,294 base range for BTC — their anchor ($57,670 vs Binance's
+  $57,800) and their impulse top don't match any obvious swing in Binance's daily series, which is
+  exactly why the UI exposes both thresholds as sliders AND a manual override for all 4 inputs.
+  The macro layer, by contrast, reproduces almost exactly: cycle high $126,200 vs their implied
+  $126,207, macro range $68,399 vs their $68,537 (~0.2%).
+- **No validation was attempted, and none should be faked.** The section carries the tab's
+  strongest `st.warning`: a 31-level grid hits touches by construction. If someone wants this to
+  graduate past descriptive, it needs the same 60/40 chronological split + 4 horizons + threshold
+  sweep + stage-2 redundancy check every other signal here went through (and the obvious
+  redundancy risk to check first is against the Market Reaction Zone Engine's own levels).
+- Verified via `streamlit.testing.v1.AppTest`: 0 exceptions across all 6 tabs for BTC/ETH/SOL,
+  with the manual-override checkbox on and off, a zeroed input, and the display filter narrowed to
+  where nothing qualifies (empty-state caption, no fallback to "show everything").
+- **Second pass, same day: the section was re-skinned to a custom dark HTML panel.** The user
+  sent a complete React implementation of the UI they wanted (`RejillaCrecetrader`) and asked for
+  it, with one explicit constraint: "todo debe ejecutarse en la maquina que lo invoque". The React
+  original got its market data by POSTing to `api.anthropic.com` with a web-search tool and
+  parsing JSON out of the model's answer — that whole path was dropped and replaced by the daily
+  Binance series `render_crypto()` already has in hand. Kept from the design: the three-layer
+  segmented selector, the parameter/near-level cards, the price-proportional rail next to
+  fixed-height rows, the role chips, the palette (their hex values, unchanged), and the footer's
+  wording about ZONA COMPRA/VENTA being the method's own labels rather than recommendations.
+  Dropped from the first pass: the display-distance slider (unnecessary once each layer is shown
+  on its own) and the always-visible Plotly chart + table, both moved into an expander. `Role`
+  comes straight from `src/crecetrader.py`, not re-derived in the UI — the React's `levelRole()`
+  logic and the module's own `Role` assignment already agreed.

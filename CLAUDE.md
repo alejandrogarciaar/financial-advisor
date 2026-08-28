@@ -480,6 +480,27 @@ zero; cumulative flow by fund over time: categorical identity, capped at the fir
 same fixed palette order as `FAMILY_COLOR`/`VWAP_COLOR`, the rest folded into one muted "Otros"
 line rather than generating a 7th–13th hue) plus a table companion, per the dataviz skill.
 
+**"📐 Niveles Crecetrader" (`src/crecetrader.py` + `src/crecetrader_inputs.py`,
+`render_crecetrader()` in `src/ui/cripto.py`)**: as of 2026-08-28 `render_crypto()` splits each
+ticker's body into two **nested** `st.tabs()` — "📊 Análisis" (everything that was already there)
+and "📐 Niveles Crecetrader" — at the user's explicit request; the sticky price and the static
+Fear & Greed block stay above the split. `src/crecetrader.py` was delivered whole by the user (a
+reverse-engineered reconstruction of a YouTube channel's level algorithm: session envelope around
+the daily open, a 25%-step grid off the yearly low, 1/8 fractions of the cycle drawdown) and is
+**kept byte-for-byte as it arrived** — pure, I/O-free, no external deps; the bridge from a Binance
+daily series to its 5 inputs lives in a separate `src/crecetrader_inputs.py` precisely so that
+file stays untouched. **Descriptive and NOT validated out of sample** — no OOS study was even
+attempted, and a dense 31-level grid hits touches by construction, which the UI says in an
+`st.warning`; don't add a `*_VALIDATED_*` constant, an `st.success`, or wire these levels into the
+DCA box or the Zone Engine without running this project's usual 60/40 study first. The section is
+also **the one custom dark HTML panel in the app** (its own fixed palette, `CRECE_*` in
+`src/ui/cripto.py`): the user sent a finished React design and asked for it replicated, hex values
+included — a deliberate exception, not a new house style, and everything still computes locally
+off the Binance series (the React original fetched its data from an LLM API with web search; that
+was dropped). Full design history (the three impulse-detection attempts, why the channel's own
+base range can't be reproduced from Binance data, and what was kept/dropped from the React
+design) lives in `financial-advisor-cripto`'s design-history.
+
 **"📊 Validación" tab (`render_validation()` in `src/ui/validation.py`)**: not a price signal like the other 4
 tabs — it's a check on how well the *existing* signals have performed, added after the user
 asked "what else could we add" and picked this + a rejected support/resistance idea (see above)

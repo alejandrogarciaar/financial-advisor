@@ -174,6 +174,58 @@ config + tab wiring). This tab's code lives in `src/ui/cripto.py`:
   hues). A `st.dataframe` table underneath is the color-carries-meaning companion, same pattern
   as every other chart in this tab.
 
+- `render_crecetrader()` (`src/ui/cripto.py`, own section) + `CRECETRADER_LAYER_COLOR`/
+  `CRECETRADER_LAYER_LABEL`/`CRECETRADER_ROLE_LABEL`/`CRECETRADER_PRICE_COLOR`/
+  `CRECETRADER_CHART_WINDOW_DAYS` — the "📐 Niveles Crecetrader" **inner tab**. As of this change
+  `render_crypto()` splits the per-ticker body into two nested `st.tabs()`: "📊 Análisis"
+  (everything that was already there — `render_speculation_indicators()`, `render_vwap()`,
+  `render_wyckoff_spring()`, `render_etf_flows()`) and "📐 Niveles Crecetrader". The sticky price
+  and the Fear & Greed block stay OUTSIDE both, above the split. Nested tabs are the user's
+  explicit ask ("que sea una pestaña interna en cada criptocurrency"); no eager network fetch was
+  added — this section computes locally off the daily Binance series `render_crypto()` already
+  holds.
+  The engine itself is `src/crecetrader.py`, delivered verbatim by the user (reverse-engineered
+  reconstruction of the Crecetrader channel's level algorithm: session envelope around the daily
+  open, 25%-steps daily grid off the yearly low, 1/8 macro fractions of the cycle drawdown). That
+  file is **kept byte-for-byte as it arrived** — pure, I/O-free, zero external deps. The bridge
+  from a Binance daily series to its 5 inputs lives in a SEPARATE module,
+  `src/crecetrader_inputs.py` (`infer_inputs()`/`InferredInputs`), precisely so the delivered file
+  stays untouched; don't fold it back in.
+  **Descriptive, NOT validated out-of-sample** — the strongest disclaimer in this tab: a dense
+  grid hits touches by construction, and the UI says so in an `st.warning`. Same standing as ADX/
+  OBV/Fear & Greed but weaker, since no OOS study was even attempted. Do NOT add a validated-
+  looking `st.success`, a `*_VALIDATED_*` constant, or feed these levels into the DCA box or the
+  Zone Engine's confluence check without running the project's usual 60/40 chronological study
+  first.
+  The one judgement call is where the "first impulse" ends (`base_range`) — the part the original
+  method draws by eye. `infer_inputs()` cuts on a daily CLOSE that both retraces
+  `impulse_retracement_pct` (default 50%) of the advance AND sits `min_reversal_pct` (default 15%)
+  below the running high; both are UI sliders, and a "Ajustar las entradas a mano" checkbox exposes
+  4 `st.number_input`s (deliberately WITHOUT `key=`, so they re-seed from the inferred values when
+  the sliders move — the opposite case from the ticker-filter bug in CLAUDE.md, where a changing
+  `default=` was the problem). Both conditions are needed: with only the % -of-advance rule, BTC's
+  impulse closed two days after the anchor on an intraday wick.
+  **The section is a custom dark HTML panel, not native Streamlit widgets** (`CRECE_C`,
+  `CRECE_CSS`, `_crece_ladder_html()`, `_crece_level_color()`, `_crece_is_key()`,
+  `_crece_role_chip()`) — the user sent a finished React design and asked for it replicated, hex
+  values included, so this is the one place in the app with its own fixed dark palette; it is a
+  deliberate exception, not a new house style, and the surrounding captions/warnings stay native
+  so they follow the user's Streamlit theme. Layout: one layer at a time via
+  `st.segmented_control` ("Intradía H1" = envelope, with an extra `st.radio` to center it on the
+  daily open or the live price; "Diario" = `engine.grid()`; "Semanal" = `engine.macro()`), two
+  parameter cards, resistance/support cards, then the "ladder": a 74px rail with each level drawn
+  at its true price-proportional height next to fixed-height rows (`CRECE_ROW_HEIGHT_PX = 44`, the
+  rail's height is `44 × len(levels)` so the two line up). Rows carry label + price + role chip +
+  note as TEXT, so color is never the only carrier. The user's one hard constraint: **everything
+  computes on the machine running the app** — the React original fetched its numbers from an LLM
+  API with web search; that was replaced by the `binance_client` series this tab already holds.
+  Behind an expander: the same layer plotted over the price (Plotly, `CRECETRADER_LAYER_COLOR`,
+  direct labels only on the two levels bracketing today's price) plus a `st.dataframe` companion;
+  confluences live in a second expander. The Plotly palette was checked with
+  `node scripts/validate_palette.js` (node IS available here): all PASS in light mode, dark mode
+  FAILs the lightness band on the orange — the same trade-off the whole app already carries with
+  this hue set.
+
 ## `src/support_resistance.py` — "Market Reaction Zone Engine"
 
 Renamed from an informal "support/resistance engine" after a user-driven redesign (see Design

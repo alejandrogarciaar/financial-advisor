@@ -117,7 +117,7 @@ mapa es solo para ubicarse rápido, no para reemplazar esa lectura.
 | `etfs.py` | Pestaña ETFs — lista + detalle. |
 | `validation.py` | Pestaña Validación — backtest en UI + historial de veredictos. |
 | `speculation.py` | Pestaña Especulación (solo acciones) + `render_speculation_indicators()` (compartida con Cripto) + sección del Market Reaction Zone Engine sobre datos diarios. |
-| `cripto.py` | Pestaña Cripto (BTC/ETH/SOL, Binance) — mismo cuerpo de indicadores + Market Reaction Zone Engine sobre 4h + VWAP, Wyckoff Spring y flujos de ETFs spot vía SoSoValue (secciones propias, no compartidas con Especulación). |
+| `cripto.py` | Pestaña Cripto (BTC/ETH/SOL, Binance) — mismo cuerpo de indicadores + Market Reaction Zone Engine sobre 4h + VWAP, Wyckoff Spring y flujos de ETFs spot vía SoSoValue (secciones propias, no compartidas con Especulación), más la pestaña interna "Niveles Crecetrader" (`render_crecetrader()`). |
 | `portfolio.py` | Pestaña Portafolio — alta de compras y ventas, resumen de holdings, "Ganancias realizadas", "Plan de compra escalonada", auto-refresh de precios (`st.fragment`). |
 
 ### `src/` — módulos de cómputo top-level (no UI)
@@ -128,6 +128,8 @@ mapa es solo para ubicarse rápido, no para reemplazar esa lectura.
 | `speculation.py` | RSI, MACD, Bollinger, VWAP, ADX, OBV, soportes/resistencias simples, reacciones por régimen — computación técnica, separada de la valoración. |
 | `support_resistance.py` | "Market Reaction Zone Engine" — motor multi-metodología de soporte/resistencia (DBSCAN, KDE, RANSAC/Theil-Sen/Huber, Hough, Volume Profile, VWAP), compartido por Especulación y Cripto vía `daily_reference_config()`/`SRConfig()`. |
 | `drawdown_dca.py` | Zona de acumulación por caída desde máximo de 1 año, usado en Portafolio. |
+| `crecetrader.py` | Reconstrucción del método de niveles de Crecetrader (envolvente de sesión, rejilla diaria, fracciones macro) — algoritmo puro, sin I/O ni dependencias externas. |
+| `crecetrader_inputs.py` | Deriva las 5 entradas de `crecetrader.LevelEngine` desde una serie de velas diarias (mínimo anual, primer impulso, caída macro). |
 | `backtest.py` | ¿El veredicto de hace N años habría anticipado el retorno real? Limitaciones documentadas en su propio docstring. |
 | `preferences.py` | Persiste el filtro de tickers de Acciones entre reinicios (`app_data/preferences.json`). |
 | `verdict_history.py` | Historial diario de veredictos por ticker (`app_data/verdict_history.json`). |
