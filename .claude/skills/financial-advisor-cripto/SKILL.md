@@ -174,7 +174,10 @@ config + tab wiring). This tab's code lives in `src/ui/cripto.py`:
   hues). A `st.dataframe` table underneath is the color-carries-meaning companion, same pattern
   as every other chart in this tab.
 
-- `render_crecetrader()` (`src/ui/cripto.py`, own section) + `CRECETRADER_LAYER_COLOR`/
+- `render_crecetrader()` (**`src/ui/shared.py`** — moved there once Especulación became a second
+  caller, same path `render_advanced_levels_chart()` took; called from here as
+  `render_crecetrader("crypto", ticker, historical_prices, current_price, is_crypto=True)`) +
+  `CRECETRADER_LAYER_COLOR`/
   `CRECETRADER_LAYER_LABEL`/`CRECETRADER_ROLE_LABEL`/`CRECETRADER_PRICE_COLOR`/
   `CRECETRADER_CHART_WINDOW_DAYS` — the "📐 Niveles Crecetrader" **inner tab**. As of this change
   `render_crypto()` splits the per-ticker body into two nested `st.tabs()`: "📊 Análisis"
@@ -183,7 +186,9 @@ config + tab wiring). This tab's code lives in `src/ui/cripto.py`:
   and the Fear & Greed block stay OUTSIDE both, above the split. Nested tabs are the user's
   explicit ask ("que sea una pestaña interna en cada criptocurrency"); no eager network fetch was
   added — this section computes locally off the daily Binance series `render_crypto()` already
-  holds.
+  holds. Especulación (stocks) now renders the SAME section from the same function — see
+  `financial-advisor-speculation`; `key_prefix` keeps the widget keys apart and `is_crypto` gates
+  only the extra caveat stocks need.
   The engine itself is `src/crecetrader.py`, delivered verbatim by the user (reverse-engineered
   reconstruction of the Crecetrader channel's level algorithm: session envelope around the daily
   open, 25%-steps daily grid off the yearly low, 1/8 macro fractions of the cycle drawdown). That

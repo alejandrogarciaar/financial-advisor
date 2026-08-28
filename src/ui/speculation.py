@@ -40,6 +40,7 @@ from src.ui.shared import (
     _cached_historical_prices,
     classify_trend_state,
     render_advanced_levels_chart,
+    render_crecetrader,
     render_sticky_price,
 )
 from src.valuation.trend import evaluate_trend
@@ -709,47 +710,60 @@ def render_speculation():
                     )
 
     render_sticky_price("speculation", f"Precio actual — {ticker}", current_price, ticker)
-    render_speculation_indicators(
-        "speculation", ticker, historical_prices, closes, current_price, is_crypto=False, render_zone_engine=_render_zone_engine
-    )
 
-    st.divider()
-    st.subheader("📐 Golden Cross / Death Cross (SMA50 vs SMA200)")
-    st.caption(
-        "Régimen validado fuera de muestra (2026-08-08) solo para AAPL, TSLA y UBER — el resto "
-        "de los tickers no mostró un patrón consistente. El signo NO es el mismo para todos: "
-        "para AAPL y TSLA, estar en 'golden cross' (SMA50 por encima de SMA200) rindió, en "
-        "promedio, PEOR que estar en 'death cross' — un resultado real, no un error, coherente "
-        "con que el cruce es un indicador rezagado (para cuando confirma, ya pasó buena parte "
-        "del rebote). Por eso cada ticker muestra su propio número medido, nunca una etiqueta "
-        "genérica de 'alcista'/'bajista'."
-    )
-    if ticker not in GOLDEN_CROSS_VALIDATED_TICKERS:
-        st.caption(f"Sin evidencia validada fuera de muestra para {ticker} todavía.")
-    else:
-        golden_states = classify_golden_cross_series(closes)
-        golden_current_state = golden_states[-1] if golden_states else None
-        if golden_current_state is None:
-            st.caption("No hay suficiente historial todavía para calcular esto.")
+    # Pestañas INTERNAS del ticker elegido, mismo patrón (y mismo pedido del usuario) que la
+    # pestaña Cripto: el análisis de siempre por un lado y el método Crecetrader por el otro,
+    # para que una reconstrucción descriptiva y no validada fuera de muestra no quede intercalada
+    # entre las secciones que sí pasaron ese filtro. `render_crecetrader()` vive en
+    # `src/ui/shared.py` justamente porque ahora tiene dos llamadores — mismo camino que siguió
+    # `render_advanced_levels_chart()` cuando esta pestaña necesitó el gráfico de la otra.
+    tab_analisis, tab_crecetrader = st.tabs(["📊 Análisis", "📐 Niveles Crecetrader"])
+
+    with tab_analisis:
+        render_speculation_indicators(
+            "speculation", ticker, historical_prices, closes, current_price, is_crypto=False, render_zone_engine=_render_zone_engine
+        )
+
+        st.divider()
+        st.subheader("📐 Golden Cross / Death Cross (SMA50 vs SMA200)")
+        st.caption(
+            "Régimen validado fuera de muestra (2026-08-08) solo para AAPL, TSLA y UBER — el resto "
+            "de los tickers no mostró un patrón consistente. El signo NO es el mismo para todos: "
+            "para AAPL y TSLA, estar en 'golden cross' (SMA50 por encima de SMA200) rindió, en "
+            "promedio, PEOR que estar en 'death cross' — un resultado real, no un error, coherente "
+            "con que el cruce es un indicador rezagado (para cuando confirma, ya pasó buena parte "
+            "del rebote). Por eso cada ticker muestra su propio número medido, nunca una etiqueta "
+            "genérica de 'alcista'/'bajista'."
+        )
+        if ticker not in GOLDEN_CROSS_VALIDATED_TICKERS:
+            st.caption(f"Sin evidencia validada fuera de muestra para {ticker} todavía.")
         else:
-            golden_state_label = (
-                "🟢 Golden cross (SMA50 > SMA200)" if golden_current_state else "🔴 Death cross (SMA50 ≤ SMA200)"
-            )
-            st.markdown(f"**{ticker} está hoy en:** {golden_state_label}")
-            golden_reactions = [
-                r for r in compute_golden_cross_reactions(closes)
-                if r.in_golden_cross == golden_current_state and r.mean_return is not None
-            ]
-            if not golden_reactions:
-                st.caption("Sin suficientes observaciones recientes para este estado.")
+            golden_states = classify_golden_cross_series(closes)
+            golden_current_state = golden_states[-1] if golden_states else None
+            if golden_current_state is None:
+                st.caption("No hay suficiente historial todavía para calcular esto.")
             else:
-                golden_phrases = " · ".join(
-                    f"{r.mean_return:+.1%} a {r.horizon_days} días (win rate {r.win_rate:.0%}, {r.observations} casos)"
-                    for r in golden_reactions
+                golden_state_label = (
+                    "🟢 Golden cross (SMA50 > SMA200)" if golden_current_state else "🔴 Death cross (SMA50 ≤ SMA200)"
                 )
-                # Color según el signo real medido, no una expectativa de "golden cross = bueno"
-                # — mismo criterio que el mensaje de venta confirmada de Portafolio.
-                if golden_reactions[0].mean_return >= 0:
-                    st.success(golden_phrases)
+                st.markdown(f"**{ticker} está hoy en:** {golden_state_label}")
+                golden_reactions = [
+                    r for r in compute_golden_cross_reactions(closes)
+                    if r.in_golden_cross == golden_current_state and r.mean_return is not None
+                ]
+                if not golden_reactions:
+                    st.caption("Sin suficientes observaciones recientes para este estado.")
                 else:
-                    st.error(golden_phrases)
+                    golden_phrases = " · ".join(
+                        f"{r.mean_return:+.1%} a {r.horizon_days} días (win rate {r.win_rate:.0%}, {r.observations} casos)"
+                        for r in golden_reactions
+                    )
+                    # Color según el signo real medido, no una expectativa de "golden cross = bueno"
+                    # — mismo criterio que el mensaje de venta confirmada de Portafolio.
+                    if golden_reactions[0].mean_return >= 0:
+                        st.success(golden_phrases)
+                    else:
+                        st.error(golden_phrases)
+
+    with tab_crecetrader:
+        render_crecetrader("speculation", ticker, historical_prices, current_price, is_crypto=False)

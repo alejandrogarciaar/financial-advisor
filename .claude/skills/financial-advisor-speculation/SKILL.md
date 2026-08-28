@@ -96,10 +96,36 @@ config + tab wiring). This tab's code — AND the indicator stack shared with Cr
   recomputed number" pattern as `current_bucket_reaction()`/`compute_regime_reactions()`), and
   picks `st.success`/`st.error` by the actual sign of that number, not by which state it is.
 
+- **"📐 Niveles Crecetrader" — an inner `st.tabs()` inside `render_speculation()`** (2026-08-28).
+  `render_speculation()` now splits each ticker's body into "📊 Análisis" (everything that was
+  already there — the indicator stack AND the Golden Cross section) and "📐 Niveles Crecetrader",
+  with the sticky price above the split. The section itself is `render_crecetrader()` in
+  `src/ui/shared.py` (see below) — the Cripto tab got it first and this tab reuses the exact same
+  function, called with `key_prefix="speculation"`, `is_crypto=False`. Read
+  `financial-advisor-cripto`'s design-history for what it is; what matters here:
+  - **Descriptive, NOT validated out of sample** — no study was run for stocks OR for crypto. It
+    is a reconstruction of how a YouTube channel draws its levels, and a dense grid hits touches
+    by construction. Do not add a `*_VALIDATED_*` constant for it, and do not wire it into the
+    Zone Engine, the DCA box, or the Golden Cross section.
+  - **`is_crypto=False` adds a caveat that must not be deleted**: the ±0.382/1/1.5/2% envelope
+    rings were calibrated on BTC/ETH intraday volatility, and a stock's "daily open" follows a
+    17-hour overnight gap — the same formula runs, but it means something different here.
+  - The macro layer degenerates for a stock sitting at its 5-year high (cycle high == first-impulse
+    top, e.g. AAPL): the UI says so rather than showing a rescaled copy of the daily grid as if it
+    were independent.
+
 ## `src/ui/shared.py`
 
 - `render_sticky_price()` — shared helper (also used by Acciones' `render_detail()`, ETFs, and
   Cripto) for the floating price card; don't fork a speculation-only copy.
+- `render_crecetrader(key_prefix, ticker, historical_prices, current_price, *, is_crypto)` — the
+  Crecetrader levels panel described above, shared with Cripto. Lives here (not in either tab's
+  file) because it has two callers, the same reason `render_advanced_levels_chart()` moved. It is
+  a custom dark HTML panel with its own fixed palette — a user-supplied React design replicated on
+  request, a deliberate exception rather than a new house style. Everything computes locally off
+  the daily series the caller already fetched (`_cached_historical_prices()` here, Binance there);
+  the original design pulled its numbers from an LLM API with web search and that path was
+  dropped.
 
 ## `app.py`
 

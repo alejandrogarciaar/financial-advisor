@@ -667,3 +667,10 @@ wiring it:
   on its own) and the always-visible Plotly chart + table, both moved into an expander. `Role`
   comes straight from `src/crecetrader.py`, not re-derived in the UI — the React's `levelRole()`
   logic and the module's own `Role` assignment already agreed.
+- **Third pass, same day: extended to stocks and moved to `src/ui/shared.py`.** The user asked
+  whether it could be replicated for the 8 stock `TICKERS` — evaluated as viable (yfinance's
+  daily series already carries open/high/low/close/volume over 5 years, which is everything
+  `infer_inputs()` needs) and implemented. One real bug surfaced by the port: `infer_inputs()`'s
+  yearly window counted CANDLES, so for a stock (~252 trading days/year) "365" meant ~1.45 years.
+  It now walks calendar dates (`_year_window_start()`); crypto is unaffected (1 candle = 1 day),
+  verified by re-running all three coins before and after — identical anchors/ranges.

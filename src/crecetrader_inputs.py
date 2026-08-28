@@ -14,11 +14,47 @@ Sin dependencias externas tampoco aca, igual que el modulo que acompana.
 from __future__ import annotations
 
 from dataclasses import dataclass
-from typing import Sequence
+from datetime import date, timedelta
+from typing import Optional, Sequence
 
 from src.crecetrader import FALLBACK_BASE_RATIO, FALLBACK_MACRO_RATIO
 
 __all__ = ["InferredInputs", "infer_inputs"]
+
+
+def _parse_date(raw) -> Optional[date]:
+    """Fecha de una vela, tolerando los dos formatos que circulan en este repo.
+
+    Binance diario y yfinance devuelven "YYYY-MM-DD"; las series intradia de Binance traen
+    "YYYY-MM-DD HH:MM:SS". Los primeros 10 caracteres sirven para ambos.
+    """
+    try:
+        return date.fromisoformat(str(raw)[:10])
+    except (TypeError, ValueError):
+        return None
+
+
+def _year_window_start(candles: Sequence[dict], year_days: int) -> int:
+    """Indice de la primera vela dentro de los ultimos `year_days` DIAS DE CALENDARIO.
+
+    Contar velas en vez de dias seria un error silencioso en acciones: el mercado abre ~252
+    dias al ano, asi que las ultimas 365 velas son ~1.45 anos, no uno. En cripto (una vela por
+    dia, 24/7) las dos formas coinciden, de modo que este cambio no mueve nada de lo que ya
+    estaba calculado para BTC/ETH/SOL.
+
+    Si ninguna fecha se puede interpretar, cae al conteo de velas — un resultado aproximado es
+    preferible a romper el calculo entero por un formato inesperado.
+    """
+    last_date = _parse_date(candles[-1].get("date")) if candles else None
+    if last_date is None:
+        return max(0, len(candles) - year_days)
+
+    cutoff = last_date - timedelta(days=year_days)
+    for i, candle in enumerate(candles):
+        parsed = _parse_date(candle.get("date"))
+        if parsed is not None and parsed >= cutoff:
+            return i
+    return max(0, len(candles) - 1)
 
 
 @dataclass(frozen=True)
@@ -114,7 +150,7 @@ def infer_inputs(
     price = float(last["close"])
     daily_open = float(last["open"])
 
-    window = list(candles[-year_days:]) if len(candles) > year_days else list(candles)
+    window = candles[_year_window_start(candles, year_days) :]
     low_rel = min(range(len(window)), key=lambda i: float(window[i]["low"]))
     year_low = float(window[low_rel]["low"])
     if year_low <= 0:

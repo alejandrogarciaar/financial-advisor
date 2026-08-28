@@ -11,10 +11,13 @@ import bisect
 from concurrent.futures import ThreadPoolExecutor
 from datetime import datetime, timedelta
 
+import pandas as pd
 import plotly.graph_objects as go
 import streamlit as st
 
 from src.config import ETF_TICKERS, PORTFOLIO_CDI_TICKERS, RISK_FREE_RATE
+from src.crecetrader import Level, LevelEngine, Role, nearest_levels, session_envelope
+from src.crecetrader_inputs import infer_inputs
 from src.data import fear_greed_client
 from src.valuation.etf_analysis import evaluate_etf
 from src.valuation.fair_value import PROVIDERS, evaluate_ticker
@@ -471,3 +474,547 @@ def render_advanced_levels_chart(
         yaxis=dict(gridcolor="rgba(128,128,128,0.2)", tickprefix="$"),
     )
     st.plotly_chart(fig, use_container_width=True)
+
+
+# Las 3 capas del método Crecetrader son IDENTIDAD (tres cosas distintas que hay que poder
+# distinguir), no magnitud ni polaridad — color categórico, en los mismos slots de orden fijo que
+# ya usan FAMILY_COLOR/VWAP_COLOR/ETF_FLOWS_CATEGORICAL en el resto de la app, no una paleta nueva.
+# El precio reusa el mismo azul que en la sección de VWAP, por consistencia dentro de esta pestaña.
+# Validado con el script de la skill dataviz en modo claro (todos PASS; el WARN de contraste de
+# #1baf7a se cubre con etiquetas visibles + la tabla de abajo, que es exactamente el "relief" que
+# pide). En modo oscuro el naranja queda fuera de la banda de luminosidad del validador — es el
+# mismo trade-off que ya arrastra toda la app con este set de hues, no algo nuevo de esta sección;
+# cambiarlo solo acá rompería la consistencia con las otras secciones de la pestaña.
+CRECETRADER_PRICE_COLOR = "#2a78d6"
+CRECETRADER_LAYER_COLOR = {"envelope": "#eb6834", "daily": "#1baf7a", "macro": "#8a2be2"}
+CRECETRADER_LAYER_LABEL = {
+    "envelope": "Envolvente de sesión",
+    "daily": "Rejilla diaria",
+    "macro": "Fracciones macro",
+}
+CRECETRADER_ROLE_LABEL = {
+    "zona_compra": "🟢 Zona de compra",
+    "zona_venta": "🔴 Zona de venta",
+    "neutro": "⚪ Neutro",
+}
+CRECETRADER_CHART_WINDOW_DAYS = 180
+
+
+# Panel "consola" del método Crecetrader. Es la única parte de la app con su propia paleta
+# oscura fija en vez de los componentes nativos de Streamlit: fue un pedido explícito del usuario
+# (mandó el diseño completo, en React, y pidió replicarlo acá) — el resto de la pestaña sigue
+# usando los colores de siempre. Los hex son los del diseño que mandó, sin reinterpretar.
+CRECE_C = {
+    "bg": "#0C1118",
+    "panel": "#121926",
+    "panel_soft": "#171F2E",
+    "line": "#243044",
+    "text": "#E8EDF5",
+    "dim": "#8A96A8",
+    "faint": "#5A6578",
+    "btc": "#F7931A",
+    "btc_soft": "rgba(247,147,26,0.12)",
+    "green": "#3DD68C",
+    "cyan": "#39C3D6",
+    "red": "#F0616D",
+    "purple": "#B48CF2",
+}
+
+CRECE_LAYER_TABS = {
+    "Intradía H1": (
+        "envelope",
+        "Envolvente de sesión: apertura diaria (00:00 UTC) con anillos a ±0.382, 1, 1.5 y 2%. "
+        "Regla confirmada en dos jornadas (27 y 28-ago) con 15 niveles exactos a ±$1, idéntica "
+        "en H1 y 5 minutos.",
+    ),
+    "Diario": (
+        "daily",
+        "Rejilla anclada al mínimo anual con pasos de 25% del rango base. 7 niveles verificados "
+        "contra sus gráficos, incluida la predicción algebraica del 125%.",
+    ),
+    "Semanal": (
+        "macro",
+        "Fracciones de 12.5% de la caída macro (techo de ciclo → mínimo anual). El 37.5% "
+        "verificado; otros niveles semanales del canal son pivots manuales, no algoritmizables.",
+    ),
+}
+
+CRECE_ROW_HEIGHT_PX = 44
+
+CRECE_CSS = """<style>
+@import url('https://fonts.googleapis.com/css2?family=Space+Grotesk:wght@400;500;700&family=IBM+Plex+Mono:wght@400;500;600&display=swap');
+.crece-wrap{background:%(bg)s;border:1px solid %(line)s;border-radius:14px;padding:16px;font-family:'Space Grotesk',system-ui,sans-serif;color:%(text)s;}
+.crece-mono{font-family:'IBM Plex Mono',ui-monospace,monospace;}
+.crece-kicker{font-size:10px;letter-spacing:.22em;color:%(btc)s;text-transform:uppercase;margin-bottom:6px;}
+.crece-h1{font-size:24px;font-weight:700;line-height:1.15;margin:0 0 14px;}
+.crece-h1 span{color:%(btc)s;}
+.crece-cards{display:flex;gap:10px;flex-wrap:wrap;margin-bottom:14px;}
+.crece-card{flex:1;min-width:150px;background:%(panel)s;border:1px solid %(line)s;border-radius:10px;padding:10px 14px;}
+.crece-card .t{font-size:10px;letter-spacing:.14em;text-transform:uppercase;color:%(dim)s;}
+.crece-card .v{font-family:'IBM Plex Mono',ui-monospace,monospace;font-size:18px;font-weight:600;margin-top:4px;}
+.crece-card .s{font-size:11px;color:%(faint)s;margin-top:2px;}
+.crece-ladder{display:flex;background:%(panel)s;border:1px solid %(line)s;border-radius:14px;overflow:hidden;}
+.crece-rail{position:relative;width:74px;flex-shrink:0;border-right:1px solid %(line)s;background:%(panel_soft)s;}
+.crece-rail i{position:absolute;left:0;right:0;height:0;display:block;}
+.crece-mark{position:absolute;left:6px;right:6px;text-align:center;background:%(btc)s;color:#141414;font-size:9px;font-weight:600;border-radius:4px;padding:2px 0;font-family:'IBM Plex Mono',ui-monospace,monospace;}
+.crece-rows{flex:1;min-width:0;}
+.crece-row{display:flex;align-items:baseline;gap:10px;padding:0 14px;height:%(row)dpx;box-sizing:border-box;border-bottom:1px solid %(line)s;overflow:hidden;}
+.crece-row:last-child{border-bottom:none;}
+.crece-row.near{background:%(btc_soft)s;}
+.crece-lbl{font-family:'IBM Plex Mono',ui-monospace,monospace;font-size:12px;width:58px;flex-shrink:0;}
+.crece-val{font-family:'IBM Plex Mono',ui-monospace,monospace;font-size:16px;min-width:96px;}
+.crece-role{font-size:9px;font-weight:700;letter-spacing:.08em;border-radius:4px;padding:2px 6px;flex-shrink:0;opacity:.9;white-space:nowrap;}
+.crece-note{font-size:11px;color:%(faint)s;margin-left:auto;text-align:right;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;}
+.crece-foot{margin-top:14px;font-size:11px;color:%(faint)s;line-height:1.6;}
+</style>""" % {**CRECE_C, "row": CRECE_ROW_HEIGHT_PX}
+
+
+def _crece_level_color(layer: str, lv: Level) -> str:
+    """Color de cada nivel dentro de su capa — el mismo mapeo del diseño que mandó el usuario.
+
+    No es color categórico por serie (no hay series acá): distingue el papel del nivel dentro de
+    la capa, y siempre viaja junto al texto del nivel, nunca solo."""
+    if layer == "envelope":
+        return CRECE_C["purple"] if lv.label == "centro" else CRECE_C["dim"]
+    if layer == "macro":
+        return CRECE_C["cyan"] if lv.verified else CRECE_C["dim"]
+    if lv.pct in (175.0, 225.0):
+        return CRECE_C["cyan"]
+    if lv.pct >= 250.0:
+        return CRECE_C["red"]
+    if lv.pct == 125.0:
+        return CRECE_C["btc"]
+    if lv.pct <= 75.0 and (lv.verified or lv.pct == 0.0):
+        return CRECE_C["green"]
+    return CRECE_C["faint"]
+
+
+def _crece_is_key(layer: str, lv: Level) -> bool:
+    if layer == "envelope":
+        return lv.label == "centro" or abs(lv.pct) == 0.382
+    if layer == "daily":
+        return lv.verified or lv.pct == 0.0
+    return lv.verified
+
+
+def _crece_role_chip(lv: Level) -> str:
+    """`Role` ya viene resuelto por `src/crecetrader.py` (zona de compra / venta / neutro) — acá
+    solo se pinta. Es la etiqueta que el método le da a cada nivel, no una recomendación, y el
+    pie del panel lo dice explícitamente."""
+    if lv.role is Role.BUY_ZONE:
+        txt, col = "ZONA COMPRA", CRECE_C["green"]
+    elif lv.role is Role.SELL_ZONE:
+        txt, col = "ZONA VENTA", CRECE_C["red"]
+    else:
+        return ""
+    return f'<span class="crece-role" style="color:{col};border:1px solid {col};">{txt}</span>'
+
+
+def _crece_ladder_html(layer: str, levels: list, price: float, near: set) -> str:
+    """Escalera: riel con las líneas a escala real de precio + una fila por nivel.
+
+    El riel y las filas se alinean porque ambos miden `CRECE_ROW_HEIGHT_PX` × cantidad de
+    niveles: la posición de cada línea es proporcional al precio, la de su fila es secuencial —
+    a propósito, es lo que hace visible que los niveles no están equiespaciados."""
+    values = [lv.price for lv in levels] + [price]
+    top_v, bottom_v = max(values), min(values)
+    span = (top_v - bottom_v) or 1.0
+    height = CRECE_ROW_HEIGHT_PX * len(levels)
+
+    def y(v: float) -> float:
+        return (top_v - v) / span * 100.0
+
+    rail = "".join(
+        f'<i style="top:{y(lv.price):.3f}%;border-top:{"2px solid" if _crece_is_key(layer, lv) else "1px dashed"} '
+        f'{_crece_level_color(layer, lv)};opacity:{1 if _crece_is_key(layer, lv) else 0.5};"></i>'
+        for lv in levels
+    )
+    rail += f'<div class="crece-mark" style="top:calc({y(price):.3f}% - 8px);">{price:,.0f}</div>'
+
+    rows = ""
+    for lv in levels:
+        key = _crece_is_key(layer, lv)
+        rows += (
+            f'<div class="crece-row{" near" if lv in near else ""}">'
+            f'<span class="crece-lbl" style="color:{_crece_level_color(layer, lv)};'
+            f'font-weight:{600 if key else 400};">{lv.label}</span>'
+            f'<span class="crece-val" style="color:{CRECE_C["text"] if key else CRECE_C["dim"]};'
+            f'font-weight:{600 if key else 500};">{lv.price:,.2f}</span>'
+            f"{_crece_role_chip(lv)}"
+            f'<span class="crece-note">{lv.note}</span>'
+            "</div>"
+        )
+
+    return (
+        f'<div class="crece-ladder" style="min-height:{height}px;">'
+        f'<div class="crece-rail" style="height:{height}px;">{rail}</div>'
+        f'<div class="crece-rows">{rows}</div>'
+        "</div>"
+    )
+
+
+def render_crecetrader(
+    key_prefix: str,
+    ticker: str,
+    historical_prices: list[dict],
+    current_price: float,
+    *,
+    is_crypto: bool,
+) -> None:
+    """Sección "📐 Niveles Crecetrader" — pestaña interna de cada cripto Y de cada acción.
+
+    Reproduce las 3 capas de `src/crecetrader.py` (envolvente de sesión, rejilla diaria anclada
+    al mínimo anual, fracciones de 1/8 de la caída macro) sobre la serie diaria que la pestaña
+    llamadora ya tiene en mano: Binance para Cripto (`key_prefix="crypto"`), yfinance para
+    Especulación (`key_prefix="speculation"`). Las entradas del motor se derivan de esa serie con
+    `src/crecetrader_inputs.py` y se pueden sobrescribir a mano — dónde termina el "primer
+    impulso" es justamente la parte que el método original traza a ojo.
+
+    `key_prefix` existe solo para que las keys de los widgets no choquen entre las dos pestañas
+    (`st.tabs()` no es lazy: los dos cuerpos se ejecutan en cada rerun — mismo motivo y mismo
+    patrón que `render_speculation_indicators()`). `is_crypto` cambia únicamente los avisos: el
+    método fue calibrado sobre BTC/ETH, así que para acciones hay que decirlo.
+
+    El panel replica el diseño (React) que mandó el usuario: una capa por vez, riel de niveles a
+    escala de precio y filas con rol y nota. Todo se calcula acá, en la máquina que abre la app,
+    sobre la serie de Binance — el diseño original pedía los datos a una API de LLM con búsqueda
+    web; eso se reemplazó por el mismo `binance_client` que usa el resto de la pestaña.
+
+    Descriptivo, NO validado fuera de muestra: es la reconstrucción de cómo se generan esos
+    niveles, no evidencia de que predigan algo. Una rejilla densa "acierta" toques por
+    construcción — el propio módulo lo dice en su aviso y acá se repite en pantalla.
+    """
+    st.subheader("📐 Niveles calculados (método Crecetrader)")
+    st.warning(
+        "⚠️ **Es descriptivo, no una señal de trading, y no está validado fuera de muestra.** "
+        "Reproduce CÓMO se generan los niveles; no implica que tengan poder predictivo. Una "
+        "rejilla densa acierta toques por construcción: con 31 niveles repartidos en el mapa, que "
+        "el precio reaccione cerca de alguno no es evidencia de nada. A diferencia del VWAP o del "
+        "régimen del Plan de DCA, acá no se corrió ningún estudio fuera de muestra."
+    )
+    if not is_crypto:
+        st.caption(
+            "**Calibrado sobre BTC y ETH, no sobre acciones.** Las tres capas son fórmulas "
+            "genéricas y corren igual con cualquier serie diaria, pero dos cosas cambian de "
+            "significado acá: (1) los anillos de ±0.382/1/1.5/2% salen de la volatilidad "
+            "intradía de una cripto — en una acción típica ±2% cubre casi todo el rango del día, "
+            "así que la envolvente queda más ancha en términos relativos; (2) la «apertura "
+            "diaria» de una acción llega después de 17 horas de mercado cerrado (gap overnight), "
+            "mientras que en cripto es un corte arbitrario de un mercado que nunca cerró. El "
+            "canal aplica esto a cripto; replicarlo acá es una extensión, no algo que ellos "
+            "hayan verificado."
+        )
+
+    with st.expander("⚙️ Entradas del cálculo"):
+        st.caption(
+            "El motor necesita 5 entradas: precio, apertura diaria, mínimo anual (el ancla de las "
+            "capas 2 y 3), amplitud del primer impulso desde ese mínimo y caída macro (techo de "
+            "ciclo − ancla). Todas salen de la serie diaria de Binance, calculadas en esta "
+            "máquina. La única con margen de interpretación es dónde termina el primer impulso — "
+            "estos dos controles la definen, y abajo se puede sobrescribir todo a mano."
+        )
+        crece_col1, crece_col2 = st.columns(2)
+        retracement_pct = crece_col1.slider(
+            "Retroceso que cierra el impulso (% del avance)",
+            min_value=25.0,
+            max_value=75.0,
+            value=50.0,
+            step=5.0,
+            key=f"{key_prefix}_crece_retracement_pct",
+            help=(
+                "Un cierre diario que devuelve este % del avance acumulado desde el mínimo anual "
+                "da por terminado el primer impulso."
+            ),
+        )
+        min_reversal_pct = crece_col2.slider(
+            "Giro mínimo para que ese retroceso cuente (% del techo)",
+            min_value=5.0,
+            max_value=30.0,
+            value=15.0,
+            step=1.0,
+            key=f"{key_prefix}_crece_min_reversal_pct",
+            help=(
+                "Segunda condición, simultánea con la anterior: sin esto, en cripto el 50% de un "
+                "avance del 13% son 6.5% de precio y el impulso se cerraría a los dos días del "
+                "mínimo, con una amplitud que no representa la estructura del gráfico."
+            ),
+        )
+
+        try:
+            inferred = infer_inputs(
+                historical_prices,
+                impulse_retracement_pct=retracement_pct,
+                min_reversal_pct=min_reversal_pct,
+            )
+        except ValueError as exc:
+            st.caption(f"No se pudieron derivar las entradas para {ticker}: {exc}")
+            return
+
+        st.caption(
+            f"**Ancla (mínimo anual):** ${inferred.year_low:,.2f} ({inferred.year_low_date}) · "
+            f"**Techo del primer impulso:** ${inferred.base_range_top:,.2f} "
+            f"({inferred.base_range_top_date}"
+            + (", impulso todavía abierto" if inferred.impulse_open else "")
+            + f") · **Techo de ciclo:** ${inferred.cycle_high:,.2f} ({inferred.cycle_high_date}) · "
+            f"{inferred.history_days} velas diarias."
+        )
+
+        manual = st.checkbox(
+            "Ajustar las entradas a mano",
+            value=False,
+            key=f"{key_prefix}_crece_manual_inputs",
+            help=(
+                "Para replicar exactamente un gráfico del canal: pegá los valores que ves ahí. "
+                "Los campos arrancan en lo que derivó el cálculo automático y se vuelven a "
+                "sembrar si movés los controles de arriba."
+            ),
+        )
+        daily_open = inferred.daily_open
+        year_low = inferred.year_low
+        base_range = inferred.base_range
+        macro_range = inferred.macro_range
+        if manual:
+            # Sin `key=` a propósito: así el número vuelve a sembrarse desde `inferred` cuando el
+            # usuario mueve los sliders de arriba (con una key fija, Streamlit ignoraría el nuevo
+            # `value` y el campo quedaría clavado en el valor viejo, que ya no corresponde a los
+            # umbrales elegidos).
+            man_col1, man_col2 = st.columns(2)
+            daily_open = man_col1.number_input(
+                "Apertura diaria (00:00 UTC)", value=float(inferred.daily_open), min_value=0.0, format="%.2f"
+            )
+            year_low = man_col2.number_input(
+                "Mínimo anual (ancla)", value=float(inferred.year_low), min_value=0.0, format="%.2f"
+            )
+            base_range = man_col1.number_input(
+                "Rango base (primer impulso)", value=float(inferred.base_range), min_value=0.0, format="%.2f"
+            )
+            macro_range = man_col2.number_input(
+                "Caída macro (techo de ciclo − ancla)", value=float(inferred.macro_range), min_value=0.0, format="%.2f"
+            )
+
+    if year_low <= 0 or base_range <= 0 or macro_range <= 0 or daily_open <= 0:
+        st.caption(
+            "Alguna de las entradas quedó en cero o negativa — no se puede armar la rejilla con "
+            "esos valores. Revisá los campos manuales."
+        )
+        return
+
+    engine = LevelEngine(
+        price=current_price,
+        daily_open=daily_open,
+        year_low=year_low,
+        base_range=base_range,
+        macro_range=macro_range,
+    )
+
+    tab_label = st.segmented_control(
+        "Capa",
+        list(CRECE_LAYER_TABS.keys()),
+        default="Diario",
+        key=f"{key_prefix}_crece_layer",
+        label_visibility="collapsed",
+    )
+    if tab_label is None:  # segmented_control permite deseleccionar
+        tab_label = "Diario"
+    layer, layer_desc = CRECE_LAYER_TABS[tab_label]
+    st.caption(layer_desc)
+
+    if layer == "envelope":
+        center_choice = st.radio(
+            "Centro de la envolvente",
+            ["Apertura diaria (00:00 UTC)", "Precio actual"],
+            horizontal=True,
+            key=f"{key_prefix}_crece_envelope_center",
+            label_visibility="collapsed",
+        )
+        use_open = center_choice.startswith("Apertura")
+        center = daily_open if use_open else current_price
+        levels = session_envelope(center, reference=current_price)
+        params = [
+            (
+                "Centro de la envolvente",
+                f"${center:,.2f}",
+                "apertura diaria — regla confirmada" if use_open else "precio en vivo (elegido a mano)",
+                CRECE_C["purple"],
+            ),
+            ("Anillos", "± 0.382 / 1 / 1.5 / 2%", "verificados al $1 — 27 y 28-ago", CRECE_C["btc"]),
+        ]
+    elif layer == "daily":
+        levels = engine.grid()
+        params = [
+            ("Ancla (mínimo anual)", f"${year_low:,.2f}", f"onda V — {inferred.year_low_date}", CRECE_C["green"]),
+            (
+                "Rango base (Fase 1)",
+                f"${base_range:,.2f}",
+                ("impulso abierto — techo de hoy" if inferred.impulse_open else f"impulso hasta {inferred.base_range_top_date}")
+                if not manual
+                else "valor cargado a mano",
+                CRECE_C["btc"],
+            ),
+        ]
+    else:
+        levels = engine.macro()
+        # Caso real, frecuente en acciones y casi inexistente en cripto: si el techo de ciclo ES
+        # el techo del primer impulso (el activo está en máximos de la ventana de 5 años, p. ej.
+        # AAPL hoy), esta capa reproduce exactamente la rejilla diaria escalada y no aporta
+        # información nueva. Se dice, en vez de mostrar dos capas que parecen independientes.
+        if abs(macro_range - base_range) / macro_range < 0.01:
+            st.caption(
+                "⚠️ Para este activo el techo de ciclo coincide con el techo del primer impulso "
+                "(está en máximos de la historia disponible), así que esta capa es la rejilla "
+                "diaria reescalada, no una lectura independiente."
+            )
+        params = [
+            ("Ancla (mínimo anual)", f"${year_low:,.2f}", f"onda V — {inferred.year_low_date}", CRECE_C["green"]),
+            (
+                "Caída macro (rango)",
+                f"${macro_range:,.2f}",
+                f"techo de ciclo {inferred.cycle_high_date}" if not manual else "valor cargado a mano",
+                CRECE_C["cyan"],
+            ),
+        ]
+
+    below, above = nearest_levels(levels, current_price)
+    near = {lv for lv in (below, above) if lv is not None}
+
+    def _card(title: str, value: str, sub: str, color: str) -> str:
+        return (
+            f'<div class="crece-card" style="border-left:3px solid {color};">'
+            f'<div class="t">{title}</div><div class="v">{value}</div><div class="s">{sub}</div></div>'
+        )
+
+    def _near_card(title: str, lv, color: str) -> str:
+        if lv is None:
+            return _card(title, "—", "fuera de la escalera", color)
+        return _card(
+            title,
+            f"${lv.price:,.2f}",
+            f"nivel {lv.label} — {lv.distance_pct(current_price):+.2f}%",
+            color,
+        )
+
+    html = (
+        CRECE_CSS
+        + '<div class="crece-wrap">'
+        + '<div class="crece-kicker">Ingeniería inversa Crecetrader — 3 capas</div>'
+        + f'<div class="crece-h1">Niveles calculados <span>{ticker}</span> '
+        + f'<span class="crece-mono" style="font-size:20px;color:{CRECE_C["text"]};">${current_price:,.2f}</span></div>'
+        + '<div class="crece-cards">'
+        + "".join(_card(*p) for p in params)
+        + "</div>"
+        + '<div class="crece-cards">'
+        + _near_card("Resistencia próxima", above, CRECE_C["red"])
+        + _near_card("Soporte próximo", below, CRECE_C["green"])
+        + "</div>"
+        + _crece_ladder_html(layer, levels, current_price, near)
+        + '<div class="crece-foot">Tres capas reconstruidas de gráficos públicos (27/28-ago-2026): '
+        "intradía (envolvente sobre la apertura diaria, 15 niveles verificados), diaria (pasos de "
+        "25% del rango base sobre el mínimo anual, 7 verificados) y semanal (fracciones de 12.5% "
+        "de la caída macro, 1 verificado). Algunos niveles semanales del canal son pivots "
+        "discrecionales, no automatizables. Si el mínimo anual cambia, hay que recalibrar. Las "
+        "etiquetas ZONA COMPRA / ZONA VENTA describen el rol que cada nivel tiene dentro del "
+        "método replicado (refugios donde busca rebotes, objetivos donde toma beneficios); no son "
+        "señales ni recomendaciones, y no se validaron fuera de muestra. La entrada real en su "
+        "sistema es discrecional: exige confirmación de la acción del precio sobre el nivel. "
+        "Reconstrucción educativa — no es asesoramiento de inversión.</div>"
+        + "</div>"
+    )
+    st.markdown(html, unsafe_allow_html=True)
+
+    with st.expander("📈 Ver esta capa sobre el precio (y la tabla completa)"):
+        fig = go.Figure()
+        window = historical_prices[-CRECETRADER_CHART_WINDOW_DAYS:]
+        fig.add_trace(
+            go.Scatter(
+                x=[p["date"] for p in window],
+                y=[p["close"] for p in window],
+                mode="lines",
+                name="Precio",
+                line=dict(color=CRECETRADER_PRICE_COLOR, width=2),
+            )
+        )
+        x0, x1 = window[0]["date"], window[-1]["date"]
+        first = True
+        for lv in levels:
+            fig.add_trace(
+                go.Scatter(
+                    x=[x0, x1],
+                    y=[lv.price, lv.price],
+                    mode="lines",
+                    line=dict(color=CRECETRADER_LAYER_COLOR[layer], width=2, dash="dot"),
+                    name=CRECETRADER_LAYER_LABEL[layer],
+                    legendgroup=layer,
+                    showlegend=first,
+                    hovertemplate=f"{lv.label}<br>$%{{y:,.2f}}<br>{lv.note}<extra></extra>",
+                )
+            )
+            first = False
+        # Etiqueta directa SOLO sobre los dos niveles que bracketean el precio — anotar los 13 es
+        # exactamente el anti-patrón de "un número en cada punto".
+        for lv in (below, above):
+            if lv is not None:
+                fig.add_annotation(
+                    x=x1,
+                    y=lv.price,
+                    text=f"{lv.label} · ${lv.price:,.0f}",
+                    showarrow=False,
+                    xanchor="right",
+                    yanchor="bottom",
+                    font=dict(size=11, color=CRECETRADER_LAYER_COLOR[layer]),
+                )
+        fig.update_layout(
+            title=f"{ticker} — {CRECETRADER_LAYER_LABEL[layer].lower()} (últimos {CRECETRADER_CHART_WINDOW_DAYS} días)",
+            xaxis_title="Fecha",
+            yaxis_title="Precio (USD)",
+            hovermode="x unified",
+            height=420,
+            margin=dict(l=10, r=10, t=50, b=10),
+        )
+        st.plotly_chart(fig, use_container_width=True)
+        st.dataframe(
+            pd.DataFrame(
+                [
+                    {
+                        "Nivel": lv.label,
+                        "Precio": f"${lv.price:,.2f}",
+                        "Distancia": f"{lv.distance_pct(current_price):+.2f}%",
+                        "Rol": CRECETRADER_ROLE_LABEL.get(lv.role.value, lv.role.value),
+                        "Verificado": "✅" if lv.verified else "—",
+                        "Nota": lv.note,
+                    }
+                    for lv in levels
+                ]
+            ),
+            use_container_width=True,
+            hide_index=True,
+        )
+        st.caption(
+            "«Verificado» significa que ese nivel fue confirmado contra los gráficos públicos del "
+            "canal (los 8 anillos de la envolvente al dólar, y 6 pasos de la rejilla diaria, "
+            "incluida una predicción algebraica del 125%) — es una verificación de que la fórmula "
+            "reproduce sus números, NO de que el nivel funcione."
+        )
+
+    confluences = engine.confluences()
+    if confluences:
+        with st.expander(f"🔗 Confluencias entre capas ({len(confluences)})"):
+            st.caption(
+                "Precios donde dos capas distintas caen a menos de 0.15% una de otra. En el "
+                "método original eso se trata como un nivel crítico; acá se muestra por "
+                "completitud, sin evidencia de que cambie nada."
+            )
+            st.dataframe(
+                pd.DataFrame(
+                    [
+                        {
+                            "Precio": f"${a.price:,.2f}",
+                            "Distancia": f"{a.distance_pct(current_price):+.2f}%",
+                            "Capa A": f"{CRECETRADER_LAYER_LABEL[a.layer]} {a.label}",
+                            "Capa B": f"{CRECETRADER_LAYER_LABEL[b.layer]} {b.label}",
+                        }
+                        for a, b in confluences
+                    ]
+                ),
+                use_container_width=True,
+                hide_index=True,
+            )

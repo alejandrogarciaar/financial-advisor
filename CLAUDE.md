@@ -481,10 +481,17 @@ same fixed palette order as `FAMILY_COLOR`/`VWAP_COLOR`, the rest folded into on
 line rather than generating a 7th–13th hue) plus a table companion, per the dataviz skill.
 
 **"📐 Niveles Crecetrader" (`src/crecetrader.py` + `src/crecetrader_inputs.py`,
-`render_crecetrader()` in `src/ui/cripto.py`)**: as of 2026-08-28 `render_crypto()` splits each
-ticker's body into two **nested** `st.tabs()` — "📊 Análisis" (everything that was already there)
-and "📐 Niveles Crecetrader" — at the user's explicit request; the sticky price and the static
-Fear & Greed block stay above the split. `src/crecetrader.py` was delivered whole by the user (a
+`render_crecetrader()` in `src/ui/shared.py`)**: as of 2026-08-28 BOTH `render_crypto()` and
+`render_speculation()` split each ticker's body into two **nested** `st.tabs()` — "📊 Análisis"
+(everything that was already there) and "📐 Niveles Crecetrader" — at the user's explicit request;
+the sticky price (and, in Cripto, the static Fear & Greed block) stays above the split. The
+section lives in `shared.py` because it has two callers, the same path `render_advanced_levels_
+chart()` took; `key_prefix` ("crypto"/"speculation") keeps widget keys from colliding, and
+`is_crypto` gates only the extra caveat stocks need (the ±0.382/1/1.5/2% rings were calibrated on
+BTC/ETH volatility, and a stock's "daily open" arrives after a 17-hour overnight gap).
+`infer_inputs()`' yearly window is measured in **calendar days, not candles** — counting candles
+would silently mean ~1.45 years for a stock (~252 trading days/year); for crypto both are
+identical, so nothing about BTC/ETH/SOL moved. `src/crecetrader.py` was delivered whole by the user (a
 reverse-engineered reconstruction of a YouTube channel's level algorithm: session envelope around
 the daily open, a 25%-step grid off the yearly low, 1/8 fractions of the cycle drawdown) and is
 **kept byte-for-byte as it arrived** — pure, I/O-free, no external deps; the bridge from a Binance

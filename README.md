@@ -112,12 +112,12 @@ mapa es solo para ubicarse rápido, no para reemplazar esa lectura.
 
 | Archivo | Rol |
 |---|---|
-| `shared.py` | Cross-tab: caché (`_cached_evaluation`, `_get_or_fetch`, `_parallel_fetch`), badges, `render_sticky_price`, `render_advanced_levels_chart`, labels del Market Reaction Zone Engine. |
+| `shared.py` | Cross-tab: caché (`_cached_evaluation`, `_get_or_fetch`, `_parallel_fetch`), badges, `render_sticky_price`, `render_advanced_levels_chart`, `render_crecetrader` (panel de niveles Crecetrader, usado por Cripto y Especulación), labels del Market Reaction Zone Engine. |
 | `stocks.py` | Pestaña Acciones — lista + detalle de `TICKERS`. |
 | `etfs.py` | Pestaña ETFs — lista + detalle. |
 | `validation.py` | Pestaña Validación — backtest en UI + historial de veredictos. |
-| `speculation.py` | Pestaña Especulación (solo acciones) + `render_speculation_indicators()` (compartida con Cripto) + sección del Market Reaction Zone Engine sobre datos diarios. |
-| `cripto.py` | Pestaña Cripto (BTC/ETH/SOL, Binance) — mismo cuerpo de indicadores + Market Reaction Zone Engine sobre 4h + VWAP, Wyckoff Spring y flujos de ETFs spot vía SoSoValue (secciones propias, no compartidas con Especulación), más la pestaña interna "Niveles Crecetrader" (`render_crecetrader()`). |
+| `speculation.py` | Pestaña Especulación (solo acciones) + `render_speculation_indicators()` (compartida con Cripto) + sección del Market Reaction Zone Engine sobre datos diarios + pestaña interna "Niveles Crecetrader". |
+| `cripto.py` | Pestaña Cripto (BTC/ETH/SOL, Binance) — mismo cuerpo de indicadores + Market Reaction Zone Engine sobre 4h + VWAP, Wyckoff Spring y flujos de ETFs spot vía SoSoValue (secciones propias, no compartidas con Especulación), más la pestaña interna "Niveles Crecetrader" (`render_crecetrader()`, en `shared.py`). |
 | `portfolio.py` | Pestaña Portafolio — alta de compras y ventas, resumen de holdings, "Ganancias realizadas", "Plan de compra escalonada", auto-refresh de precios (`st.fragment`). |
 
 ### `src/` — módulos de cómputo top-level (no UI)
