@@ -717,7 +717,7 @@ def render_speculation():
     # entre las secciones que sí pasaron ese filtro. `render_crecetrader()` vive en
     # `src/ui/shared.py` justamente porque ahora tiene dos llamadores — mismo camino que siguió
     # `render_advanced_levels_chart()` cuando esta pestaña necesitó el gráfico de la otra.
-    tab_analisis, tab_crecetrader = st.tabs(["📊 Análisis", "📐 Niveles Crecetrader"])
+    tab_analisis, tab_crecetrader = st.tabs(["📊 Análisis", "📐 Niveles calculados"])
 
     with tab_analisis:
         render_speculation_indicators(

@@ -974,7 +974,7 @@ def render_crypto():
     # que las pestañas de arriba, st.tabs no es lazy: los dos cuerpos se ejecutan en cada rerun —
     # acá no importa, porque lo de Crecetrader es cálculo local sobre la serie diaria que esta
     # función ya tiene en mano, sin ninguna consulta de red propia.
-    tab_analisis, tab_crecetrader = st.tabs(["📊 Análisis", "📐 Niveles Crecetrader"])
+    tab_analisis, tab_crecetrader = st.tabs(["📊 Análisis", "📐 Niveles calculados"])
 
     with tab_analisis:
         render_speculation_indicators(

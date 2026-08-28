@@ -524,18 +524,19 @@ CRECE_LAYER_TABS = {
     "Intradía H1": (
         "envelope",
         "Envolvente de sesión: apertura diaria (00:00 UTC) con anillos a ±0.382, 1, 1.5 y 2%. "
-        "Regla confirmada en dos jornadas (27 y 28-ago) con 15 niveles exactos a ±$1, idéntica "
-        "en H1 y 5 minutos.",
+        "Regla confirmada en dos jornadas distintas contra los gráficos de referencia, con 15 "
+        "niveles exactos a ±$1, idéntica en H1 y en 5 minutos.",
     ),
     "Diario": (
         "daily",
         "Rejilla anclada al mínimo anual con pasos de 25% del rango base. 7 niveles verificados "
-        "contra sus gráficos, incluida la predicción algebraica del 125%.",
+        "contra los gráficos de referencia, incluida la predicción algebraica del 125%.",
     ),
     "Semanal": (
         "macro",
         "Fracciones de 12.5% de la caída macro (techo de ciclo → mínimo anual). El 37.5% "
-        "verificado; otros niveles semanales del canal son pivots manuales, no algoritmizables.",
+        "verificado; otros niveles semanales del método original son pivots trazados a mano, no "
+        "algoritmizables.",
     ),
 }
 
@@ -684,7 +685,7 @@ def render_crecetrader(
     niveles, no evidencia de que predigan algo. Una rejilla densa "acierta" toques por
     construcción — el propio módulo lo dice en su aviso y acá se repite en pantalla.
     """
-    st.subheader("📐 Niveles calculados (método Crecetrader)")
+    st.subheader("📐 Niveles calculados")
     st.warning(
         "⚠️ **Es descriptivo, no una señal de trading, y no está validado fuera de muestra.** "
         "Reproduce CÓMO se generan los niveles; no implica que tengan poder predictivo. Una "
@@ -701,15 +702,15 @@ def render_crecetrader(
             "así que la envolvente queda más ancha en términos relativos; (2) la «apertura "
             "diaria» de una acción llega después de 17 horas de mercado cerrado (gap overnight), "
             "mientras que en cripto es un corte arbitrario de un mercado que nunca cerró. El "
-            "canal aplica esto a cripto; replicarlo acá es una extensión, no algo que ellos "
-            "hayan verificado."
+            "método original se aplica a cripto; replicarlo en acciones es una extensión, no algo "
+            "que estuviera verificado."
         )
 
     with st.expander("⚙️ Entradas del cálculo"):
         st.caption(
             "El motor necesita 5 entradas: precio, apertura diaria, mínimo anual (el ancla de las "
             "capas 2 y 3), amplitud del primer impulso desde ese mínimo y caída macro (techo de "
-            "ciclo − ancla). Todas salen de la serie diaria de Binance, calculadas en esta "
+            "ciclo − ancla). Todas salen de la serie diaria del ticker, calculadas en esta "
             "máquina. La única con margen de interpretación es dónde termina el primer impulso — "
             "estos dos controles la definen, y abajo se puede sobrescribir todo a mano."
         )
@@ -764,7 +765,7 @@ def render_crecetrader(
             value=False,
             key=f"{key_prefix}_crece_manual_inputs",
             help=(
-                "Para replicar exactamente un gráfico del canal: pegá los valores que ves ahí. "
+                "Para replicar exactamente un gráfico de referencia: pegá los valores que ves ahí. "
                 "Los campos arrancan en lo que derivó el cálculo automático y se vuelven a "
                 "sembrar si movés los controles de arriba."
             ),
@@ -896,7 +897,7 @@ def render_crecetrader(
     html = (
         CRECE_CSS
         + '<div class="crece-wrap">'
-        + '<div class="crece-kicker">Ingeniería inversa Crecetrader — 3 capas</div>'
+        + '<div class="crece-kicker">Niveles calculados — 3 capas</div>'
         + f'<div class="crece-h1">Niveles calculados <span>{ticker}</span> '
         + f'<span class="crece-mono" style="font-size:20px;color:{CRECE_C["text"]};">${current_price:,.2f}</span></div>'
         + '<div class="crece-cards">'
@@ -907,15 +908,18 @@ def render_crecetrader(
         + _near_card("Soporte próximo", below, CRECE_C["green"])
         + "</div>"
         + _crece_ladder_html(layer, levels, current_price, near)
-        + '<div class="crece-foot">Tres capas reconstruidas de gráficos públicos (27/28-ago-2026): '
+        + '<div class="crece-foot">Tres capas reconstruidas por ingeniería inversa de gráficos '
+        "públicos: "
         "intradía (envolvente sobre la apertura diaria, 15 niveles verificados), diaria (pasos de "
         "25% del rango base sobre el mínimo anual, 7 verificados) y semanal (fracciones de 12.5% "
-        "de la caída macro, 1 verificado). Algunos niveles semanales del canal son pivots "
+        "de la caída macro, 1 verificado). Algunos niveles semanales del método original son pivots "
         "discrecionales, no automatizables. Si el mínimo anual cambia, hay que recalibrar. Las "
         "etiquetas ZONA COMPRA / ZONA VENTA describen el rol que cada nivel tiene dentro del "
-        "método replicado (refugios donde busca rebotes, objetivos donde toma beneficios); no son "
-        "señales ni recomendaciones, y no se validaron fuera de muestra. La entrada real en su "
-        "sistema es discrecional: exige confirmación de la acción del precio sobre el nivel. "
+        "método replicado (refugios donde el método busca rebotes, objetivos donde toma beneficios); "
+        "no son "
+        "señales ni recomendaciones, y no se validaron fuera de muestra. La entrada real en el "
+        "método original es discrecional: exige confirmación de la acción del precio sobre el "
+        "nivel. "
         "Reconstrucción educativa — no es asesoramiento de inversión.</div>"
         + "</div>"
     )
@@ -989,8 +993,8 @@ def render_crecetrader(
             hide_index=True,
         )
         st.caption(
-            "«Verificado» significa que ese nivel fue confirmado contra los gráficos públicos del "
-            "canal (los 8 anillos de la envolvente al dólar, y 6 pasos de la rejilla diaria, "
+            "«Verificado» significa que ese nivel fue confirmado contra los gráficos públicos de "
+            "referencia (los 8 anillos de la envolvente al dólar, y 6 pasos de la rejilla diaria, "
             "incluida una predicción algebraica del 125%) — es una verificación de que la fórmula "
             "reproduce sus números, NO de que el nivel funcione."
         )
