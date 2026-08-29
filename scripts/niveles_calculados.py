@@ -9,8 +9,8 @@ Calcula, desde la terminal, los mismos niveles que muestra la pestana interna
 AUTOCONTENIDO A PROPOSITO: un solo archivo, cero dependencias externas (solo
 stdlib), sin importar nada de `src/`. Se puede copiar a cualquier carpeta o
 maquina con Python 3.9+ y correr tal cual. Dentro de este repo, la fuente de
-verdad para la app sigue siendo `src/crecetrader.py` (las tres formulas) y
-`src/crecetrader_inputs.py` (la derivacion de las entradas); esto reproduce sus
+verdad para la app sigue siendo `src/niveles_calculados.py` (las tres formulas) y
+`src/niveles_calculados_inputs.py` (la derivacion de las entradas); esto reproduce sus
 numeros, verificado nivel por nivel contra los 11 tickers de la app.
 
 Uso

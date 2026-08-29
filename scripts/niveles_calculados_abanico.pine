@@ -1,0 +1,190 @@
+//@version=6
+indicator("Niveles Calculados (abanico)", shorttitle = "NC", overlay = true, max_lines_count = 500, max_labels_count = 500)
+
+grpA = "0 - Modo"
+autoLayer = input.bool(true, "Capa automatica segun temporalidad", group = grpA)
+
+grpE = "1 - Envolvente de sesion (intradia)"
+showEnv  = input.bool(true,  "Mostrar envolvente",       group = grpE)
+useDOpen = input.bool(true,  "Centro = apertura diaria", group = grpE)
+b1 = input.float(0.382, "Anillo 1 (%)", step = 0.001, minval = 0, group = grpE)
+b2 = input.float(1.0,   "Anillo 2 (%)", step = 0.1,   minval = 0, group = grpE)
+b3 = input.float(1.5,   "Anillo 3 (%)", step = 0.1,   minval = 0, group = grpE)
+b4 = input.float(2.0,   "Anillo 4 (%)", step = 0.1,   minval = 0, group = grpE)
+symMode = input.bool(true, "Abanico simetrico desde el precio actual", group = grpE)
+symCount = input.int(5, "Anillos a cada lado", minval = 1, maxval = 20, group = grpE)
+symStep  = input.float(0.5, "Paso entre anillos (%)", minval = 0.05, step = 0.05, group = grpE)
+symKeepOpen = input.bool(true, "Marcar tambien la apertura diaria", group = grpE)
+
+grpD = "2 - Rejilla diaria"
+showGrid   = input.bool(true,  "Mostrar rejilla diaria",          group = grpD)
+autoAnchor = input.bool(false, "Ancla automatica (minimo 1 ano)", group = grpD)
+manAnchor  = input.float(57670.0, "Ancla manual",      step = 1, group = grpD)
+autoBase   = input.bool(false, "Rango base automatico",           group = grpD)
+manBase    = input.float(18294.0, "Rango base manual", step = 1, group = grpD)
+
+grpW = "3 - Fracciones macro"
+showMacro = input.bool(false, "Mostrar fracciones macro",  group = grpW)
+autoHigh  = input.bool(false, "Techo de ciclo automatico", group = grpW)
+manHigh   = input.float(126207.0, "Techo de ciclo manual", step = 1, group = grpW)
+
+grpV = "Visual"
+filterMode = input.string("Rango visible", "Que niveles dibujar", options = ["Rango visible", "Distancia %", "Todos"], group = grpV)
+maxDistPct = input.float(4.0, "Distancia maxima al precio (%)", minval = 0.1, step = 0.5, group = grpV)
+visMargin  = input.float(25.0, "Margen del rango visible (%)", minval = 0, maxval = 100, step = 5, group = grpV)
+maxLevels  = input.int(24, "Maximo de niveles por capa", minval = 3, maxval = 60, group = grpV)
+lineLenPct = input.int(25, "Longitud de las lineas (% del ancho visible)", minval = 5, maxval = 100, step = 5, group = grpV)
+startAtDay = input.bool(false, "Arrancar al inicio del dia en curso", group = grpV)
+showLbl  = input.bool(true, "Mostrar etiquetas",           group = grpV)
+lookback = input.int(365, "Ventana del minimo anual (dias)", minval = 30, group = grpV)
+showTable= input.bool(true, "Mostrar tabla de parametros", group = grpV)
+
+cBuy  = #3DD68C
+cSell = #F0616D
+cMid  = #B48CF2
+cGrid = #39C3D6
+cKey  = #F7931A
+
+tfMin      = timeframe.in_seconds(timeframe.period) / 60.0
+isIntraday = tfMin < 1440
+isDaily    = tfMin >= 1440 and tfMin < 10080
+isHigher   = tfMin >= 10080
+
+envOn   = autoLayer ? isIntraday : showEnv
+gridOn  = autoLayer ? (isDaily or isIntraday) : showGrid
+macroOn = autoLayer ? isHigher : showMacro
+gridDim = autoLayer and isIntraday
+
+layerName = autoLayer ? (isIntraday ? "envolvente de sesion" : isDaily ? "rejilla diaria 25%" : "fracciones macro 12.5%") : "manual"
+
+dOpen  = request.security(syminfo.tickerid, "D", open, lookahead = barmerge.lookahead_on)
+dPrev  = request.security(syminfo.tickerid, "D", close[1], lookahead = barmerge.lookahead_on)
+center = useDOpen ? dOpen : dPrev
+
+yLow  = request.security(syminfo.tickerid, "D", ta.lowest(low, lookback),   lookahead = barmerge.lookahead_on)
+yHigh = request.security(syminfo.tickerid, "D", ta.highest(high, lookback), lookahead = barmerge.lookahead_on)
+cHigh = request.security(syminfo.tickerid, "M", ta.highest(high, 24),       lookahead = barmerge.lookahead_on)
+
+anchor     = autoAnchor ? yLow : manAnchor
+baseRange  = autoBase   ? math.max(yHigh - anchor, syminfo.mintick) : manBase
+cycleHigh  = autoHigh   ? cHigh : manHigh
+macroRange = math.max(cycleHigh - anchor, syminfo.mintick)
+
+var int dayStartBar = 0
+if ta.change(time("D")) != 0 or bar_index == 0
+    dayStartBar := bar_index
+
+dayBarMs = math.max(time - nz(time[1], time - 60000), 1)
+
+visibleBars = math.max(math.round((chart.right_visible_bar_time - chart.left_visible_bar_time) / math.max(dayBarMs, 1)), 20)
+safeLen = math.max(math.min(math.min(visibleBars, 3000), bar_index + 1), 1)
+visHigh = ta.highest(high, safeLen)
+visLow  = ta.lowest(low,  safeLen)
+visPad  = (visHigh - visLow) * visMargin / 100
+bandTop = visHigh + visPad
+bandBot = math.max(visLow - visPad, 0)
+
+inRange(float lvl) =>
+    if filterMode == "Todos"
+        true
+    else if filterMode == "Distancia %"
+        math.abs(lvl - close) / close * 100 <= maxDistPct
+    else
+        lvl >= bandBot and lvl <= bandTop
+
+var array<line>  lines  = array.new<line>()
+var array<label> labels = array.new<label>()
+
+clearAll() =>
+    while array.size(lines) > 0
+        line.delete(array.pop(lines))
+    while array.size(labels) > 0
+        label.delete(array.pop(labels))
+
+addLevel(float price, color col, string txt, int width, bool dashed) =>
+    if not na(price) and price > 0 and inRange(price)
+        segLen  = math.max(math.round(visibleBars * lineLenPct / 100), 3)
+        x1 = startAtDay ? math.min(dayStartBar, bar_index) : bar_index
+        x2 = x1 + segLen
+        ln = line.new(x1, price, x2, price, xloc = xloc.bar_index, extend = extend.none, color = col, width = width, style = dashed ? line.style_dashed : line.style_solid)
+        array.push(lines, ln)
+        if showLbl
+            lb = label.new(x2, price, txt, xloc = xloc.bar_index, style = label.style_label_left, color = color.new(color.black, 100), textcolor = col, size = size.small)
+            array.push(labels, lb)
+
+if barstate.islast
+    clearAll()
+
+    if envOn and not na(center)
+        if symMode
+            base = close
+            addLevel(base, cMid, "precio  " + str.tostring(math.round(base)), 2, false)
+            for i = 1 to symCount
+                p  = i * symStep
+                up = base * (1 + p / 100)
+                dn = base * (1 - p / 100)
+                isCore = math.abs(p - b1) < 0.001 or math.abs(p - b2) < 0.001 or math.abs(p - b3) < 0.001 or math.abs(p - b4) < 0.001
+                addLevel(up, isCore ? cSell : color.new(cSell, 40), "+" + str.tostring(p, "#.###") + "%  " + str.tostring(math.round(up)) + "  VENTA", isCore ? 2 : 1, not isCore)
+                addLevel(dn, isCore ? cBuy : color.new(cBuy, 40), "-" + str.tostring(p, "#.###") + "%  " + str.tostring(math.round(dn)) + "  COMPRA", isCore ? 2 : 1, not isCore)
+            if symKeepOpen
+                addLevel(center, color.new(cMid, 35), "apertura  " + str.tostring(math.round(center)), 1, true)
+        else
+            addLevel(center, cMid, "centro  " + str.tostring(math.round(center)), 2, false)
+            bands = array.from(b1, b2, b3, b4)
+            for i = 0 to array.size(bands) - 1
+                b = array.get(bands, i)
+                if b > 0
+                    up = center * (1 + b / 100)
+                    dn = center * (1 - b / 100)
+                    addLevel(up, cSell, "+" + str.tostring(b) + "%  " + str.tostring(math.round(up)) + "  VENTA", b == b1 ? 2 : 1, false)
+                    addLevel(dn, cBuy, "-" + str.tostring(b) + "%  " + str.tostring(math.round(dn)) + "  COMPRA", b == b1 ? 2 : 1, false)
+
+    if gridOn and anchor > 0 and baseRange > 0
+        steps = array.from(0.0, 25.0, 50.0, 62.5, 75.0, 100.0, 125.0, 150.0, 175.0, 200.0, 225.0, 250.0, 275.0)
+        order = array.new<int>()
+        for i = 0 to array.size(steps) - 1
+            array.push(order, i)
+        for a = 0 to array.size(order) - 2
+            for b = 0 to array.size(order) - 2 - a
+                pa = anchor + baseRange * array.get(steps, array.get(order, b)) / 100
+                pb = anchor + baseRange * array.get(steps, array.get(order, b + 1)) / 100
+                if math.abs(pa - close) > math.abs(pb - close)
+                    tmp = array.get(order, b)
+                    array.set(order, b, array.get(order, b + 1))
+                    array.set(order, b + 1, tmp)
+
+        drawn = 0
+        for k = 0 to array.size(order) - 1
+            if drawn < maxLevels
+                p     = array.get(steps, array.get(order, k))
+                lvl   = anchor + baseRange * p / 100
+                isKey = p == 62.5 or p == 125.0 or p == 175.0 or p == 225.0 or p == 250.0 or p == 275.0
+                if (not gridDim or isKey) and inRange(lvl)
+                    rol  = p <= 75.0 ? "  COMPRA" : p >= 125.0 ? "  VENTA" : ""
+                    base = p <= 75.0 ? cBuy : p == 125.0 ? cKey : p >= 150.0 ? cSell : cGrid
+                    col  = gridDim ? color.new(base, 55) : base
+                    addLevel(lvl, col, str.tostring(p) + "%  " + str.tostring(math.round(lvl)) + rol, isKey and not gridDim ? 2 : 1, not isKey or gridDim)
+                    drawn += 1
+
+    if macroOn and anchor > 0 and macroRange > 0
+        for i = 0 to 8
+            p   = i * 12.5
+            lvl = anchor + macroRange * p / 100
+            addLevel(lvl, cGrid, "macro " + str.tostring(p) + "%  " + str.tostring(math.round(lvl)), p == 37.5 ? 2 : 1, p != 37.5)
+
+var table t = table.new(position.top_right, 2, 6, border_width = 1, frame_color = color.new(color.gray, 70), frame_width = 1)
+
+if barstate.islast and showTable
+    devNow = (close - center) / center * 100
+    table.cell(t, 0, 0, "capa",       text_color = color.gray, text_size = size.tiny)
+    table.cell(t, 1, 0, layerName,    text_color = color.new(color.white, 20), text_size = size.tiny)
+    table.cell(t, 0, 1, "centro",     text_color = color.gray, text_size = size.tiny)
+    table.cell(t, 1, 1, str.tostring(math.round(center)),    text_color = cMid, text_size = size.tiny)
+    table.cell(t, 0, 2, "precio vs centro", text_color = color.gray, text_size = size.tiny)
+    table.cell(t, 1, 2, str.tostring(devNow, "#.##") + "%", text_color = devNow >= 0 ? cBuy : cSell, text_size = size.tiny)
+    table.cell(t, 0, 3, "ancla",      text_color = color.gray, text_size = size.tiny)
+    table.cell(t, 1, 3, str.tostring(math.round(anchor)),    text_color = cBuy, text_size = size.tiny)
+    table.cell(t, 0, 4, "rango base", text_color = color.gray, text_size = size.tiny)
+    table.cell(t, 1, 4, str.tostring(math.round(baseRange)), text_color = cKey, text_size = size.tiny)
+    table.cell(t, 0, 5, "125%",       text_color = color.gray, text_size = size.tiny)
+    table.cell(t, 1, 5, str.tostring(math.round(anchor + baseRange * 1.25)), text_color = cKey, text_size = size.tiny)

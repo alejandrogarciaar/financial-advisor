@@ -1,11 +1,11 @@
-"""Derivacion de las entradas de `crecetrader.LevelEngine` desde una serie diaria.
+"""Derivacion de las entradas de `niveles_calculados.LevelEngine` desde una serie diaria.
 
-`src/crecetrader.py` es el modulo tal cual lo entrego el usuario — algoritmo puro,
+`src/niveles_calculados.py` es el modulo tal cual lo entrego el usuario — algoritmo puro,
 sin I/O y sin dependencias externas: recibe las 5 entradas (precio, apertura diaria,
 minimo anual, rango base, caida macro) ya resueltas. Este modulo aparte es el puente
 entre una serie de velas diarias ya descargada (formato de `src/data/binance_client.py`:
 dicts con date/open/high/low/close) y esas 5 entradas, para no tener que cargarlas a
-mano en la UI. Vive afuera para que `crecetrader.py` quede intacto y siga siendo
+mano en la UI. Vive afuera para que `niveles_calculados.py` quede intacto y siga siendo
 copiable/reusable tal como llego.
 
 Sin dependencias externas tampoco aca, igual que el modulo que acompana.
@@ -17,7 +17,7 @@ from dataclasses import dataclass
 from datetime import date, timedelta
 from typing import Optional, Sequence
 
-from src.crecetrader import FALLBACK_BASE_RATIO, FALLBACK_MACRO_RATIO
+from src.niveles_calculados import FALLBACK_BASE_RATIO, FALLBACK_MACRO_RATIO
 
 __all__ = ["InferredInputs", "infer_inputs"]
 

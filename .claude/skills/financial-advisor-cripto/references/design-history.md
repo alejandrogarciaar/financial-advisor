@@ -615,16 +615,16 @@ strong enough to extend any of them to a new temporalidad or ticker. `git status
 the sweep that no project file changed. Ran as a throwaway scratchpad script (not committed),
 same as every other investigation in this file.
 
-## "📐 Niveles Crecetrader" — inner tab (2026-08-28)
+## "📐 Niveles calculados" — inner tab (2026-08-28)
 
-User delivered `crecetrader.py` fully written (their own reverse-engineering of a YouTube
+User delivered `niveles_calculados.py` fully written (their own reverse-engineering of a YouTube
 channel's level algorithm) and asked for it as an inner tab per crypto. What was decided while
 wiring it:
 
 - **The delivered file is kept verbatim.** The first pass appended an `infer_inputs()` section to
   it and added two names to its `__all__`; the user asked, mid-turn, whether the file had been
-  kept as sent. It was split back out into `src/crecetrader_inputs.py` on the spot, restoring
-  `src/crecetrader.py` to exactly what arrived. Keep it that way — the module is meant to stay
+  kept as sent. It was split back out into `src/niveles_calculados_inputs.py` on the spot, restoring
+  `src/niveles_calculados.py` to exactly what arrived. Keep it that way — the module is meant to stay
   copy-pasteable and dependency-free, and it is not this project's code to redesign. Anything the
   app needs on top goes in the companion module.
 - **Nested `st.tabs()` inside `render_crypto()`**, not another top-level tab and not another
@@ -665,7 +665,7 @@ wiring it:
   wording about ZONA COMPRA/VENTA being the method's own labels rather than recommendations.
   Dropped from the first pass: the display-distance slider (unnecessary once each layer is shown
   on its own) and the always-visible Plotly chart + table, both moved into an expander. `Role`
-  comes straight from `src/crecetrader.py`, not re-derived in the UI — the React's `levelRole()`
+  comes straight from `src/niveles_calculados.py`, not re-derived in the UI — the React's `levelRole()`
   logic and the module's own `Role` assignment already agreed.
 - **Third pass, same day: extended to stocks and moved to `src/ui/shared.py`.** The user asked
   whether it could be replicated for the 8 stock `TICKERS` — evaluated as viable (yfinance's

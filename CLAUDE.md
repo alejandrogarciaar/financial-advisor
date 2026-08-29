@@ -500,10 +500,10 @@ zero; cumulative flow by fund over time: categorical identity, capped at the fir
 same fixed palette order as `FAMILY_COLOR`/`VWAP_COLOR`, the rest folded into one muted "Otros"
 line rather than generating a 7th–13th hue) plus a table companion, per the dataviz skill.
 
-**"📐 Niveles Crecetrader" (`src/crecetrader.py` + `src/crecetrader_inputs.py`,
-`render_crecetrader()` in `src/ui/shared.py`)**: as of 2026-08-28 BOTH `render_crypto()` and
+**"📐 Niveles calculados" (`src/niveles_calculados.py` + `src/niveles_calculados_inputs.py`,
+`render_niveles_calculados()` in `src/ui/shared.py`)**: as of 2026-08-28 BOTH `render_crypto()` and
 `render_speculation()` split each ticker's body into two **nested** `st.tabs()` — "📊 Análisis"
-(everything that was already there) and "📐 Niveles Crecetrader" — at the user's explicit request;
+(everything that was already there) and "📐 Niveles calculados" — at the user's explicit request;
 the sticky price (and, in Cripto, the static Fear & Greed block) stays above the split. The
 section lives in `shared.py` because it has two callers, the same path `render_advanced_levels_
 chart()` took; `key_prefix` ("crypto"/"speculation") keeps widget keys from colliding, and
@@ -511,11 +511,11 @@ chart()` took; `key_prefix` ("crypto"/"speculation") keeps widget keys from coll
 BTC/ETH volatility, and a stock's "daily open" arrives after a 17-hour overnight gap).
 `infer_inputs()`' yearly window is measured in **calendar days, not candles** — counting candles
 would silently mean ~1.45 years for a stock (~252 trading days/year); for crypto both are
-identical, so nothing about BTC/ETH/SOL moved. `src/crecetrader.py` was delivered whole by the user (a
+identical, so nothing about BTC/ETH/SOL moved. `src/niveles_calculados.py` was delivered whole by the user (a
 reverse-engineered reconstruction of a YouTube channel's level algorithm: session envelope around
 the daily open, a 25%-step grid off the yearly low, 1/8 fractions of the cycle drawdown) and is
 **kept byte-for-byte as it arrived** — pure, I/O-free, no external deps; the bridge from a Binance
-daily series to its 5 inputs lives in a separate `src/crecetrader_inputs.py` precisely so that
+daily series to its 5 inputs lives in a separate `src/niveles_calculados_inputs.py` precisely so that
 file stays untouched. **Descriptive and NOT validated out of sample** — no OOS study was even
 attempted, and a dense 31-level grid hits touches by construction, which the UI says in an
 `st.warning`; don't add a `*_VALIDATED_*` constant, an `st.success`, or wire these levels into the

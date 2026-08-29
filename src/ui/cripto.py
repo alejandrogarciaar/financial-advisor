@@ -43,7 +43,7 @@ from src.ui.shared import (
     _cached_fear_greed_index,
     fear_greed_badge,
     render_advanced_levels_chart,
-    render_crecetrader,
+    render_niveles_calculados,
     render_sticky_price,
 )
 from src.ui.speculation import render_speculation_indicators
@@ -974,7 +974,7 @@ def render_crypto():
     # que las pestañas de arriba, st.tabs no es lazy: los dos cuerpos se ejecutan en cada rerun —
     # acá no importa, porque lo de Crecetrader es cálculo local sobre la serie diaria que esta
     # función ya tiene en mano, sin ninguna consulta de red propia.
-    tab_analisis, tab_crecetrader = st.tabs(["📊 Análisis", "📐 Niveles calculados"])
+    tab_analisis, tab_niveles = st.tabs(["📊 Análisis", "📐 Niveles calculados"])
 
     with tab_analisis:
         render_speculation_indicators(
@@ -984,5 +984,5 @@ def render_crypto():
         render_wyckoff_spring(ticker, historical_prices, closes)
         render_etf_flows(ticker)
 
-    with tab_crecetrader:
-        render_crecetrader("crypto", ticker, historical_prices, current_price, is_crypto=True)
+    with tab_niveles:
+        render_niveles_calculados("crypto", ticker, historical_prices, current_price, is_crypto=True)

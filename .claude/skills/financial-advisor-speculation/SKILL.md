@@ -96,10 +96,10 @@ config + tab wiring). This tab's code — AND the indicator stack shared with Cr
   recomputed number" pattern as `current_bucket_reaction()`/`compute_regime_reactions()`), and
   picks `st.success`/`st.error` by the actual sign of that number, not by which state it is.
 
-- **"📐 Niveles Crecetrader" — an inner `st.tabs()` inside `render_speculation()`** (2026-08-28).
+- **"📐 Niveles calculados" — an inner `st.tabs()` inside `render_speculation()`** (2026-08-28).
   `render_speculation()` now splits each ticker's body into "📊 Análisis" (everything that was
-  already there — the indicator stack AND the Golden Cross section) and "📐 Niveles Crecetrader",
-  with the sticky price above the split. The section itself is `render_crecetrader()` in
+  already there — the indicator stack AND the Golden Cross section) and "📐 Niveles calculados",
+  with the sticky price above the split. The section itself is `render_niveles_calculados()` in
   `src/ui/shared.py` (see below) — the Cripto tab got it first and this tab reuses the exact same
   function, called with `key_prefix="speculation"`, `is_crypto=False`. Read
   `financial-advisor-cripto`'s design-history for what it is; what matters here:
@@ -118,7 +118,7 @@ config + tab wiring). This tab's code — AND the indicator stack shared with Cr
 
 - `render_sticky_price()` — shared helper (also used by Acciones' `render_detail()`, ETFs, and
   Cripto) for the floating price card; don't fork a speculation-only copy.
-- `render_crecetrader(key_prefix, ticker, historical_prices, current_price, *, is_crypto)` — the
+- `render_niveles_calculados(key_prefix, ticker, historical_prices, current_price, *, is_crypto)` — the
   Crecetrader levels panel described above, shared with Cripto. Lives here (not in either tab's
   file) because it has two callers, the same reason `render_advanced_levels_chart()` moved. It is
   a custom dark HTML panel with its own fixed palette — a user-supplied React design replicated on

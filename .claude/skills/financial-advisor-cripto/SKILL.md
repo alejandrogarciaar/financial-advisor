@@ -174,27 +174,27 @@ config + tab wiring). This tab's code lives in `src/ui/cripto.py`:
   hues). A `st.dataframe` table underneath is the color-carries-meaning companion, same pattern
   as every other chart in this tab.
 
-- `render_crecetrader()` (**`src/ui/shared.py`** — moved there once Especulación became a second
+- `render_niveles_calculados()` (**`src/ui/shared.py`** — moved there once Especulación became a second
   caller, same path `render_advanced_levels_chart()` took; called from here as
-  `render_crecetrader("crypto", ticker, historical_prices, current_price, is_crypto=True)`) +
-  `CRECETRADER_LAYER_COLOR`/
-  `CRECETRADER_LAYER_LABEL`/`CRECETRADER_ROLE_LABEL`/`CRECETRADER_PRICE_COLOR`/
-  `CRECETRADER_CHART_WINDOW_DAYS` — the "📐 Niveles Crecetrader" **inner tab**. As of this change
+  `render_niveles_calculados("crypto", ticker, historical_prices, current_price, is_crypto=True)`) +
+  `NIVELES_LAYER_COLOR`/
+  `NIVELES_LAYER_LABEL`/`NIVELES_ROLE_LABEL`/`NIVELES_PRICE_COLOR`/
+  `NIVELES_CHART_WINDOW_DAYS` — the "📐 Niveles calculados" **inner tab**. As of this change
   `render_crypto()` splits the per-ticker body into two nested `st.tabs()`: "📊 Análisis"
   (everything that was already there — `render_speculation_indicators()`, `render_vwap()`,
-  `render_wyckoff_spring()`, `render_etf_flows()`) and "📐 Niveles Crecetrader". The sticky price
+  `render_wyckoff_spring()`, `render_etf_flows()`) and "📐 Niveles calculados". The sticky price
   and the Fear & Greed block stay OUTSIDE both, above the split. Nested tabs are the user's
   explicit ask ("que sea una pestaña interna en cada criptocurrency"); no eager network fetch was
   added — this section computes locally off the daily Binance series `render_crypto()` already
   holds. Especulación (stocks) now renders the SAME section from the same function — see
   `financial-advisor-speculation`; `key_prefix` keeps the widget keys apart and `is_crypto` gates
   only the extra caveat stocks need.
-  The engine itself is `src/crecetrader.py`, delivered verbatim by the user (reverse-engineered
+  The engine itself is `src/niveles_calculados.py`, delivered verbatim by the user (reverse-engineered
   reconstruction of the Crecetrader channel's level algorithm: session envelope around the daily
   open, 25%-steps daily grid off the yearly low, 1/8 macro fractions of the cycle drawdown). That
   file is **kept byte-for-byte as it arrived** — pure, I/O-free, zero external deps. The bridge
   from a Binance daily series to its 5 inputs lives in a SEPARATE module,
-  `src/crecetrader_inputs.py` (`infer_inputs()`/`InferredInputs`), precisely so the delivered file
+  `src/niveles_calculados_inputs.py` (`infer_inputs()`/`InferredInputs`), precisely so the delivered file
   stays untouched; don't fold it back in.
   **Descriptive, NOT validated out-of-sample** — the strongest disclaimer in this tab: a dense
   grid hits touches by construction, and the UI says so in an `st.warning`. Same standing as ADX/
@@ -231,7 +231,7 @@ config + tab wiring). This tab's code lives in `src/ui/cripto.py`:
   note as TEXT, so color is never the only carrier. The user's one hard constraint: **everything
   computes on the machine running the app** — the React original fetched its numbers from an LLM
   API with web search; that was replaced by the `binance_client` series this tab already holds.
-  Behind an expander: the same layer plotted over the price (Plotly, `CRECETRADER_LAYER_COLOR`,
+  Behind an expander: the same layer plotted over the price (Plotly, `NIVELES_LAYER_COLOR`,
   direct labels only on the two levels bracketing today's price) plus a `st.dataframe` companion;
   confluences live in a second expander. The Plotly palette was checked with
   `node scripts/validate_palette.js` (node IS available here): all PASS in light mode, dark mode

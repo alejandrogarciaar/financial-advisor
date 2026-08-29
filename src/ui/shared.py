@@ -16,8 +16,8 @@ import plotly.graph_objects as go
 import streamlit as st
 
 from src.config import ETF_TICKERS, PORTFOLIO_CDI_TICKERS, RISK_FREE_RATE
-from src.crecetrader import Level, LevelEngine, Role, nearest_levels, session_envelope
-from src.crecetrader_inputs import infer_inputs
+from src.niveles_calculados import Level, LevelEngine, Role, nearest_levels, session_envelope
+from src.niveles_calculados_inputs import infer_inputs
 from src.data import fear_greed_client
 from src.valuation.etf_analysis import evaluate_etf
 from src.valuation.fair_value import PROVIDERS, evaluate_ticker
@@ -485,26 +485,26 @@ def render_advanced_levels_chart(
 # pide). En modo oscuro el naranja queda fuera de la banda de luminosidad del validador — es el
 # mismo trade-off que ya arrastra toda la app con este set de hues, no algo nuevo de esta sección;
 # cambiarlo solo acá rompería la consistencia con las otras secciones de la pestaña.
-CRECETRADER_PRICE_COLOR = "#2a78d6"
-CRECETRADER_LAYER_COLOR = {"envelope": "#eb6834", "daily": "#1baf7a", "macro": "#8a2be2"}
-CRECETRADER_LAYER_LABEL = {
+NIVELES_PRICE_COLOR = "#2a78d6"
+NIVELES_LAYER_COLOR = {"envelope": "#eb6834", "daily": "#1baf7a", "macro": "#8a2be2"}
+NIVELES_LAYER_LABEL = {
     "envelope": "Envolvente de sesión",
     "daily": "Rejilla diaria",
     "macro": "Fracciones macro",
 }
-CRECETRADER_ROLE_LABEL = {
+NIVELES_ROLE_LABEL = {
     "zona_compra": "🟢 Zona de compra",
     "zona_venta": "🔴 Zona de venta",
     "neutro": "⚪ Neutro",
 }
-CRECETRADER_CHART_WINDOW_DAYS = 180
+NIVELES_CHART_WINDOW_DAYS = 180
 
 
 # Panel "consola" del método Crecetrader. Es la única parte de la app con su propia paleta
 # oscura fija en vez de los componentes nativos de Streamlit: fue un pedido explícito del usuario
 # (mandó el diseño completo, en React, y pidió replicarlo acá) — el resto de la pestaña sigue
 # usando los colores de siempre. Los hex son los del diseño que mandó, sin reinterpretar.
-CRECE_C = {
+NIV_C = {
     "bg": "#0C1118",
     "panel": "#121926",
     "panel_soft": "#171F2E",
@@ -520,7 +520,7 @@ CRECE_C = {
     "purple": "#B48CF2",
 }
 
-CRECE_LAYER_TABS = {
+NIV_LAYER_TABS = {
     "Intradía H1": (
         "envelope",
         "Envolvente de sesión: apertura diaria (00:00 UTC) con anillos a ±0.382, 1, 1.5 y 2%. "
@@ -540,69 +540,69 @@ CRECE_LAYER_TABS = {
     ),
 }
 
-CRECE_ROW_HEIGHT_PX = 44
+NIV_ROW_HEIGHT_PX = 44
 # Altura máxima de la escalera antes de que scrollee sola. 10 filas: la capa diaria tiene 13
 # niveles y obligaba a scrollear TODA la página de Streamlit para llegar al último; las de 9
 # (envolvente y macro) entran enteras y no muestran barra. El riel y las filas scrollean
-# juntos porque el overflow vive en `.crece-ladder`, el contenedor de los dos — si se pusiera
-# en `.crece-rows`, las líneas del riel se quedarían quietas y dejarían de corresponder con
+# juntos porque el overflow vive en `.niv-ladder`, el contenedor de los dos — si se pusiera
+# en `.niv-rows`, las líneas del riel se quedarían quietas y dejarían de corresponder con
 # su fila.
-CRECE_LADDER_MAX_PX = CRECE_ROW_HEIGHT_PX * 10
+NIV_LADDER_MAX_PX = NIV_ROW_HEIGHT_PX * 10
 
-CRECE_CSS = """<style>
+NIV_CSS = """<style>
 @import url('https://fonts.googleapis.com/css2?family=Space+Grotesk:wght@400;500;700&family=IBM+Plex+Mono:wght@400;500;600&display=swap');
-.crece-wrap{background:%(bg)s;border:1px solid %(line)s;border-radius:14px;padding:16px;font-family:'Space Grotesk',system-ui,sans-serif;color:%(text)s;}
-.crece-mono{font-family:'IBM Plex Mono',ui-monospace,monospace;}
-.crece-kicker{font-size:10px;letter-spacing:.22em;color:%(btc)s;text-transform:uppercase;margin-bottom:6px;}
-.crece-h1{font-size:24px;font-weight:700;line-height:1.15;margin:0 0 14px;}
-.crece-h1 span{color:%(btc)s;}
-.crece-cards{display:flex;gap:10px;flex-wrap:wrap;margin-bottom:14px;}
-.crece-card{flex:1;min-width:150px;background:%(panel)s;border:1px solid %(line)s;border-radius:10px;padding:10px 14px;}
-.crece-card .t{font-size:10px;letter-spacing:.14em;text-transform:uppercase;color:%(dim)s;}
-.crece-card .v{font-family:'IBM Plex Mono',ui-monospace,monospace;font-size:18px;font-weight:600;margin-top:4px;}
-.crece-card .s{font-size:11px;color:%(faint)s;margin-top:2px;}
-.crece-ladder{display:flex;background:%(panel)s;border:1px solid %(line)s;border-radius:14px;overflow-y:auto;overflow-x:hidden;overscroll-behavior:contain;scrollbar-width:thin;scrollbar-color:%(line)s %(panel)s;}
-.crece-ladder::-webkit-scrollbar{width:10px;}
-.crece-ladder::-webkit-scrollbar-track{background:%(panel)s;border-radius:14px;}
-.crece-ladder::-webkit-scrollbar-thumb{background:%(line)s;border-radius:8px;border:2px solid %(panel)s;}
-.crece-ladder::-webkit-scrollbar-thumb:hover{background:%(faint)s;}
-.crece-rail{position:relative;width:74px;min-width:74px;flex-shrink:0;border-right:1px solid %(line)s;background:%(panel_soft)s;}
-.crece-rail i{position:absolute;left:0;right:0;height:0;display:block;}
-.crece-mark{position:absolute;left:6px;right:6px;text-align:center;background:%(btc)s;color:#141414;font-size:9px;font-weight:600;border-radius:4px;padding:2px 0;font-family:'IBM Plex Mono',ui-monospace,monospace;}
-.crece-rows{flex:1;min-width:0;}
-.crece-row{display:flex;align-items:baseline;gap:10px;padding:0 14px;height:%(row)dpx;box-sizing:border-box;border-bottom:1px solid %(line)s;overflow:hidden;}
-.crece-row:last-child{border-bottom:none;}
-.crece-row.near{background:%(btc_soft)s;}
-.crece-lbl{font-family:'IBM Plex Mono',ui-monospace,monospace;font-size:12px;width:58px;flex-shrink:0;}
-.crece-val{font-family:'IBM Plex Mono',ui-monospace,monospace;font-size:16px;min-width:96px;}
-.crece-role{font-size:9px;font-weight:700;letter-spacing:.08em;border-radius:4px;padding:2px 6px;flex-shrink:0;opacity:.9;white-space:nowrap;}
-.crece-note{font-size:11px;color:%(faint)s;margin-left:auto;text-align:right;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;}
-.crece-foot{margin-top:14px;font-size:11px;color:%(faint)s;line-height:1.6;}
-@media (max-width:640px){.crece-note{display:none;}.crece-val{font-size:15px;min-width:80px;}}
-</style>""" % {**CRECE_C, "row": CRECE_ROW_HEIGHT_PX}
+.niv-wrap{background:%(bg)s;border:1px solid %(line)s;border-radius:14px;padding:16px;font-family:'Space Grotesk',system-ui,sans-serif;color:%(text)s;}
+.niv-mono{font-family:'IBM Plex Mono',ui-monospace,monospace;}
+.niv-kicker{font-size:10px;letter-spacing:.22em;color:%(btc)s;text-transform:uppercase;margin-bottom:6px;}
+.niv-h1{font-size:24px;font-weight:700;line-height:1.15;margin:0 0 14px;}
+.niv-h1 span{color:%(btc)s;}
+.niv-cards{display:flex;gap:10px;flex-wrap:wrap;margin-bottom:14px;}
+.niv-card{flex:1;min-width:150px;background:%(panel)s;border:1px solid %(line)s;border-radius:10px;padding:10px 14px;}
+.niv-card .t{font-size:10px;letter-spacing:.14em;text-transform:uppercase;color:%(dim)s;}
+.niv-card .v{font-family:'IBM Plex Mono',ui-monospace,monospace;font-size:18px;font-weight:600;margin-top:4px;}
+.niv-card .s{font-size:11px;color:%(faint)s;margin-top:2px;}
+.niv-ladder{display:flex;background:%(panel)s;border:1px solid %(line)s;border-radius:14px;overflow-y:auto;overflow-x:hidden;overscroll-behavior:contain;scrollbar-width:thin;scrollbar-color:%(line)s %(panel)s;}
+.niv-ladder::-webkit-scrollbar{width:10px;}
+.niv-ladder::-webkit-scrollbar-track{background:%(panel)s;border-radius:14px;}
+.niv-ladder::-webkit-scrollbar-thumb{background:%(line)s;border-radius:8px;border:2px solid %(panel)s;}
+.niv-ladder::-webkit-scrollbar-thumb:hover{background:%(faint)s;}
+.niv-rail{position:relative;width:74px;min-width:74px;flex-shrink:0;border-right:1px solid %(line)s;background:%(panel_soft)s;}
+.niv-rail i{position:absolute;left:0;right:0;height:0;display:block;}
+.niv-mark{position:absolute;left:6px;right:6px;text-align:center;background:%(btc)s;color:#141414;font-size:9px;font-weight:600;border-radius:4px;padding:2px 0;font-family:'IBM Plex Mono',ui-monospace,monospace;}
+.niv-rows{flex:1;min-width:0;}
+.niv-row{display:flex;align-items:baseline;gap:10px;padding:0 14px;height:%(row)dpx;box-sizing:border-box;border-bottom:1px solid %(line)s;overflow:hidden;}
+.niv-row:last-child{border-bottom:none;}
+.niv-row.near{background:%(btc_soft)s;}
+.niv-lbl{font-family:'IBM Plex Mono',ui-monospace,monospace;font-size:12px;width:58px;flex-shrink:0;}
+.niv-val{font-family:'IBM Plex Mono',ui-monospace,monospace;font-size:16px;min-width:96px;}
+.niv-role{font-size:9px;font-weight:700;letter-spacing:.08em;border-radius:4px;padding:2px 6px;flex-shrink:0;opacity:.9;white-space:nowrap;}
+.niv-note{font-size:11px;color:%(faint)s;margin-left:auto;text-align:right;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;}
+.niv-foot{margin-top:14px;font-size:11px;color:%(faint)s;line-height:1.6;}
+@media (max-width:640px){.niv-note{display:none;}.niv-val{font-size:15px;min-width:80px;}}
+</style>""" % {**NIV_C, "row": NIV_ROW_HEIGHT_PX}
 
 
-def _crece_level_color(layer: str, lv: Level) -> str:
+def _niv_level_color(layer: str, lv: Level) -> str:
     """Color de cada nivel dentro de su capa — el mismo mapeo del diseño que mandó el usuario.
 
     No es color categórico por serie (no hay series acá): distingue el papel del nivel dentro de
     la capa, y siempre viaja junto al texto del nivel, nunca solo."""
     if layer == "envelope":
-        return CRECE_C["purple"] if lv.label == "centro" else CRECE_C["dim"]
+        return NIV_C["purple"] if lv.label == "centro" else NIV_C["dim"]
     if layer == "macro":
-        return CRECE_C["cyan"] if lv.verified else CRECE_C["dim"]
+        return NIV_C["cyan"] if lv.verified else NIV_C["dim"]
     if lv.pct in (175.0, 225.0):
-        return CRECE_C["cyan"]
+        return NIV_C["cyan"]
     if lv.pct >= 250.0:
-        return CRECE_C["red"]
+        return NIV_C["red"]
     if lv.pct == 125.0:
-        return CRECE_C["btc"]
+        return NIV_C["btc"]
     if lv.pct <= 75.0 and (lv.verified or lv.pct == 0.0):
-        return CRECE_C["green"]
-    return CRECE_C["faint"]
+        return NIV_C["green"]
+    return NIV_C["faint"]
 
 
-def _crece_is_key(layer: str, lv: Level) -> bool:
+def _niv_is_key(layer: str, lv: Level) -> bool:
     if layer == "envelope":
         return lv.label == "centro" or abs(lv.pct) == 0.382
     if layer == "daily":
@@ -610,63 +610,63 @@ def _crece_is_key(layer: str, lv: Level) -> bool:
     return lv.verified
 
 
-def _crece_role_chip(lv: Level) -> str:
-    """`Role` ya viene resuelto por `src/crecetrader.py` (zona de compra / venta / neutro) — acá
+def _niv_role_chip(lv: Level) -> str:
+    """`Role` ya viene resuelto por `src/niveles_calculados.py` (zona de compra / venta / neutro) — acá
     solo se pinta. Es la etiqueta que el método le da a cada nivel, no una recomendación, y el
     pie del panel lo dice explícitamente."""
     if lv.role is Role.BUY_ZONE:
-        txt, col = "ZONA COMPRA", CRECE_C["green"]
+        txt, col = "ZONA COMPRA", NIV_C["green"]
     elif lv.role is Role.SELL_ZONE:
-        txt, col = "ZONA VENTA", CRECE_C["red"]
+        txt, col = "ZONA VENTA", NIV_C["red"]
     else:
         return ""
-    return f'<span class="crece-role" style="color:{col};border:1px solid {col};">{txt}</span>'
+    return f'<span class="niv-role" style="color:{col};border:1px solid {col};">{txt}</span>'
 
 
-def _crece_ladder_html(layer: str, levels: list, price: float, near: set) -> str:
+def _niv_ladder_html(layer: str, levels: list, price: float, near: set) -> str:
     """Escalera: riel con las líneas a escala real de precio + una fila por nivel.
 
-    El riel y las filas se alinean porque ambos miden `CRECE_ROW_HEIGHT_PX` × cantidad de
+    El riel y las filas se alinean porque ambos miden `NIV_ROW_HEIGHT_PX` × cantidad de
     niveles: la posición de cada línea es proporcional al precio, la de su fila es secuencial —
     a propósito, es lo que hace visible que los niveles no están equiespaciados."""
     values = [lv.price for lv in levels] + [price]
     top_v, bottom_v = max(values), min(values)
     span = (top_v - bottom_v) or 1.0
-    height = CRECE_ROW_HEIGHT_PX * len(levels)
+    height = NIV_ROW_HEIGHT_PX * len(levels)
 
     def y(v: float) -> float:
         return (top_v - v) / span * 100.0
 
     rail = "".join(
-        f'<i style="top:{y(lv.price):.3f}%;border-top:{"2px solid" if _crece_is_key(layer, lv) else "1px dashed"} '
-        f'{_crece_level_color(layer, lv)};opacity:{1 if _crece_is_key(layer, lv) else 0.5};"></i>'
+        f'<i style="top:{y(lv.price):.3f}%;border-top:{"2px solid" if _niv_is_key(layer, lv) else "1px dashed"} '
+        f'{_niv_level_color(layer, lv)};opacity:{1 if _niv_is_key(layer, lv) else 0.5};"></i>'
         for lv in levels
     )
-    rail += f'<div class="crece-mark" style="top:calc({y(price):.3f}% - 8px);">{price:,.0f}</div>'
+    rail += f'<div class="niv-mark" style="top:calc({y(price):.3f}% - 8px);">{price:,.0f}</div>'
 
     rows = ""
     for lv in levels:
-        key = _crece_is_key(layer, lv)
+        key = _niv_is_key(layer, lv)
         rows += (
-            f'<div class="crece-row{" near" if lv in near else ""}">'
-            f'<span class="crece-lbl" style="color:{_crece_level_color(layer, lv)};'
+            f'<div class="niv-row{" near" if lv in near else ""}">'
+            f'<span class="niv-lbl" style="color:{_niv_level_color(layer, lv)};'
             f'font-weight:{600 if key else 400};">{lv.label}</span>'
-            f'<span class="crece-val" style="color:{CRECE_C["text"] if key else CRECE_C["dim"]};'
+            f'<span class="niv-val" style="color:{NIV_C["text"] if key else NIV_C["dim"]};'
             f'font-weight:{600 if key else 500};">{lv.price:,.2f}</span>'
-            f"{_crece_role_chip(lv)}"
-            f'<span class="crece-note">{lv.note}</span>'
+            f"{_niv_role_chip(lv)}"
+            f'<span class="niv-note">{lv.note}</span>'
             "</div>"
         )
 
     return (
-        f'<div class="crece-ladder" style="height:{min(height, CRECE_LADDER_MAX_PX)}px;">'
-        f'<div class="crece-rail" style="height:{height}px;">{rail}</div>'
-        f'<div class="crece-rows" style="height:{height}px;">{rows}</div>'
+        f'<div class="niv-ladder" style="height:{min(height, NIV_LADDER_MAX_PX)}px;">'
+        f'<div class="niv-rail" style="height:{height}px;">{rail}</div>'
+        f'<div class="niv-rows" style="height:{height}px;">{rows}</div>'
         "</div>"
     )
 
 
-def render_crecetrader(
+def render_niveles_calculados(
     key_prefix: str,
     ticker: str,
     historical_prices: list[dict],
@@ -674,13 +674,13 @@ def render_crecetrader(
     *,
     is_crypto: bool,
 ) -> None:
-    """Sección "📐 Niveles Crecetrader" — pestaña interna de cada cripto Y de cada acción.
+    """Sección "📐 Niveles calculados" — pestaña interna de cada cripto Y de cada acción.
 
-    Reproduce las 3 capas de `src/crecetrader.py` (envolvente de sesión, rejilla diaria anclada
+    Reproduce las 3 capas de `src/niveles_calculados.py` (envolvente de sesión, rejilla diaria anclada
     al mínimo anual, fracciones de 1/8 de la caída macro) sobre la serie diaria que la pestaña
     llamadora ya tiene en mano: Binance para Cripto (`key_prefix="crypto"`), yfinance para
     Especulación (`key_prefix="speculation"`). Las entradas del motor se derivan de esa serie con
-    `src/crecetrader_inputs.py` y se pueden sobrescribir a mano — dónde termina el "primer
+    `src/niveles_calculados_inputs.py` y se pueden sobrescribir a mano — dónde termina el "primer
     impulso" es justamente la parte que el método original traza a ojo.
 
     `key_prefix` existe solo para que las keys de los widgets no choquen entre las dos pestañas
@@ -726,26 +726,26 @@ def render_crecetrader(
             "máquina. La única con margen de interpretación es dónde termina el primer impulso — "
             "estos dos controles la definen, y abajo se puede sobrescribir todo a mano."
         )
-        crece_col1, crece_col2 = st.columns(2)
-        retracement_pct = crece_col1.slider(
+        niv_col1, niv_col2 = st.columns(2)
+        retracement_pct = niv_col1.slider(
             "Retroceso que cierra el impulso (% del avance)",
             min_value=25.0,
             max_value=75.0,
             value=50.0,
             step=5.0,
-            key=f"{key_prefix}_crece_retracement_pct",
+            key=f"{key_prefix}_niv_retracement_pct",
             help=(
                 "Un cierre diario que devuelve este % del avance acumulado desde el mínimo anual "
                 "da por terminado el primer impulso."
             ),
         )
-        min_reversal_pct = crece_col2.slider(
+        min_reversal_pct = niv_col2.slider(
             "Giro mínimo para que ese retroceso cuente (% del techo)",
             min_value=5.0,
             max_value=30.0,
             value=15.0,
             step=1.0,
-            key=f"{key_prefix}_crece_min_reversal_pct",
+            key=f"{key_prefix}_niv_min_reversal_pct",
             help=(
                 "Segunda condición, simultánea con la anterior: sin esto, en cripto el 50% de un "
                 "avance del 13% son 6.5% de precio y el impulso se cerraría a los dos días del "
@@ -775,7 +775,7 @@ def render_crecetrader(
         manual = st.checkbox(
             "Ajustar las entradas a mano",
             value=False,
-            key=f"{key_prefix}_crece_manual_inputs",
+            key=f"{key_prefix}_niv_manual_inputs",
             help=(
                 "Para replicar exactamente un gráfico de referencia: pegá los valores que ves ahí. "
                 "Los campos arrancan en lo que derivó el cálculo automático y se vuelven a "
@@ -822,14 +822,14 @@ def render_crecetrader(
 
     tab_label = st.segmented_control(
         "Capa",
-        list(CRECE_LAYER_TABS.keys()),
+        list(NIV_LAYER_TABS.keys()),
         default="Diario",
-        key=f"{key_prefix}_crece_layer",
+        key=f"{key_prefix}_niv_layer",
         label_visibility="collapsed",
     )
     if tab_label is None:  # segmented_control permite deseleccionar
         tab_label = "Diario"
-    layer, layer_desc = CRECE_LAYER_TABS[tab_label]
+    layer, layer_desc = NIV_LAYER_TABS[tab_label]
     st.caption(layer_desc)
 
     if layer == "envelope":
@@ -837,7 +837,7 @@ def render_crecetrader(
             "Centro de la envolvente",
             ["Apertura diaria (00:00 UTC)", "Precio actual"],
             horizontal=True,
-            key=f"{key_prefix}_crece_envelope_center",
+            key=f"{key_prefix}_niv_envelope_center",
             label_visibility="collapsed",
         )
         use_open = center_choice.startswith("Apertura")
@@ -848,21 +848,21 @@ def render_crecetrader(
                 "Centro de la envolvente",
                 f"${center:,.2f}",
                 "apertura diaria — regla confirmada" if use_open else "precio en vivo (elegido a mano)",
-                CRECE_C["purple"],
+                NIV_C["purple"],
             ),
-            ("Anillos", "± 0.382 / 1 / 1.5 / 2%", "verificados al $1 — 27 y 28-ago", CRECE_C["btc"]),
+            ("Anillos", "± 0.382 / 1 / 1.5 / 2%", "verificados al $1 — 27 y 28-ago", NIV_C["btc"]),
         ]
     elif layer == "daily":
         levels = engine.grid()
         params = [
-            ("Ancla (mínimo anual)", f"${year_low:,.2f}", f"onda V — {inferred.year_low_date}", CRECE_C["green"]),
+            ("Ancla (mínimo anual)", f"${year_low:,.2f}", f"onda V — {inferred.year_low_date}", NIV_C["green"]),
             (
                 "Rango base (Fase 1)",
                 f"${base_range:,.2f}",
                 ("impulso abierto — techo de hoy" if inferred.impulse_open else f"impulso hasta {inferred.base_range_top_date}")
                 if not manual
                 else "valor cargado a mano",
-                CRECE_C["btc"],
+                NIV_C["btc"],
             ),
         ]
     else:
@@ -878,12 +878,12 @@ def render_crecetrader(
                 "diaria reescalada, no una lectura independiente."
             )
         params = [
-            ("Ancla (mínimo anual)", f"${year_low:,.2f}", f"onda V — {inferred.year_low_date}", CRECE_C["green"]),
+            ("Ancla (mínimo anual)", f"${year_low:,.2f}", f"onda V — {inferred.year_low_date}", NIV_C["green"]),
             (
                 "Caída macro (rango)",
                 f"${macro_range:,.2f}",
                 f"techo de ciclo {inferred.cycle_high_date}" if not manual else "valor cargado a mano",
-                CRECE_C["cyan"],
+                NIV_C["cyan"],
             ),
         ]
 
@@ -900,7 +900,7 @@ def render_crecetrader(
         min_value=1,
         max_value=10,
         value=5,
-        key=f"{key_prefix}_crece_per_side",
+        key=f"{key_prefix}_niv_per_side",
         help=(
             "Solo recorta lo que se muestra en esta lista — no cambia el cálculo. Subilo para ver "
             "los extremos de la capa (el ancla, los objetivos lejanos); el gráfico y la tabla de "
@@ -923,7 +923,7 @@ def render_crecetrader(
 
     def _card(title: str, value: str, sub: str, color: str) -> str:
         return (
-            f'<div class="crece-card" style="border-left:3px solid {color};">'
+            f'<div class="niv-card" style="border-left:3px solid {color};">'
             f'<div class="t">{title}</div><div class="v">{value}</div><div class="s">{sub}</div></div>'
         )
 
@@ -938,20 +938,20 @@ def render_crecetrader(
         )
 
     html = (
-        CRECE_CSS
-        + '<div class="crece-wrap">'
-        + '<div class="crece-kicker">Niveles calculados — 3 capas</div>'
-        + f'<div class="crece-h1">Niveles calculados <span>{ticker}</span> '
-        + f'<span class="crece-mono" style="font-size:20px;color:{CRECE_C["text"]};">${current_price:,.2f}</span></div>'
-        + '<div class="crece-cards">'
+        NIV_CSS
+        + '<div class="niv-wrap">'
+        + '<div class="niv-kicker">Niveles calculados — 3 capas</div>'
+        + f'<div class="niv-h1">Niveles calculados <span>{ticker}</span> '
+        + f'<span class="niv-mono" style="font-size:20px;color:{NIV_C["text"]};">${current_price:,.2f}</span></div>'
+        + '<div class="niv-cards">'
         + "".join(_card(*p) for p in params)
         + "</div>"
-        + '<div class="crece-cards">'
-        + _near_card("Resistencia próxima", above, CRECE_C["red"])
-        + _near_card("Soporte próximo", below, CRECE_C["green"])
+        + '<div class="niv-cards">'
+        + _near_card("Resistencia próxima", above, NIV_C["red"])
+        + _near_card("Soporte próximo", below, NIV_C["green"])
         + "</div>"
-        + _crece_ladder_html(layer, shown, current_price, near)
-        + '<div class="crece-foot">Tres capas reconstruidas por ingeniería inversa de gráficos '
+        + _niv_ladder_html(layer, shown, current_price, near)
+        + '<div class="niv-foot">Tres capas reconstruidas por ingeniería inversa de gráficos '
         "públicos: "
         "intradía (envolvente sobre la apertura diaria, 15 niveles verificados), diaria (pasos de "
         "25% del rango base sobre el mínimo anual, 7 verificados) y semanal (fracciones de 12.5% "
@@ -979,7 +979,7 @@ def render_crecetrader(
             f"Se muestran {len(shown)} de los {len(levels)} niveles de esta capa: {reparto} "
             f"({hidden} quedan fuera)."
         )
-    if len(shown) * CRECE_ROW_HEIGHT_PX > CRECE_LADDER_MAX_PX:
+    if len(shown) * NIV_ROW_HEIGHT_PX > NIV_LADDER_MAX_PX:
         notes.append("La lista scrollea dentro del panel.")
     notes.append(
         "Las dos filas resaltadas en naranja son las que rodean el precio de hoy, y la marca "
@@ -989,14 +989,14 @@ def render_crecetrader(
 
     with st.expander("📈 Ver esta capa sobre el precio (y la tabla completa)"):
         fig = go.Figure()
-        window = historical_prices[-CRECETRADER_CHART_WINDOW_DAYS:]
+        window = historical_prices[-NIVELES_CHART_WINDOW_DAYS:]
         fig.add_trace(
             go.Scatter(
                 x=[p["date"] for p in window],
                 y=[p["close"] for p in window],
                 mode="lines",
                 name="Precio",
-                line=dict(color=CRECETRADER_PRICE_COLOR, width=2),
+                line=dict(color=NIVELES_PRICE_COLOR, width=2),
             )
         )
         x0, x1 = window[0]["date"], window[-1]["date"]
@@ -1007,8 +1007,8 @@ def render_crecetrader(
                     x=[x0, x1],
                     y=[lv.price, lv.price],
                     mode="lines",
-                    line=dict(color=CRECETRADER_LAYER_COLOR[layer], width=2, dash="dot"),
-                    name=CRECETRADER_LAYER_LABEL[layer],
+                    line=dict(color=NIVELES_LAYER_COLOR[layer], width=2, dash="dot"),
+                    name=NIVELES_LAYER_LABEL[layer],
                     legendgroup=layer,
                     showlegend=first,
                     hovertemplate=f"{lv.label}<br>$%{{y:,.2f}}<br>{lv.note}<extra></extra>",
@@ -1026,10 +1026,10 @@ def render_crecetrader(
                     showarrow=False,
                     xanchor="right",
                     yanchor="bottom",
-                    font=dict(size=11, color=CRECETRADER_LAYER_COLOR[layer]),
+                    font=dict(size=11, color=NIVELES_LAYER_COLOR[layer]),
                 )
         fig.update_layout(
-            title=f"{ticker} — {CRECETRADER_LAYER_LABEL[layer].lower()} (últimos {CRECETRADER_CHART_WINDOW_DAYS} días)",
+            title=f"{ticker} — {NIVELES_LAYER_LABEL[layer].lower()} (últimos {NIVELES_CHART_WINDOW_DAYS} días)",
             xaxis_title="Fecha",
             yaxis_title="Precio (USD)",
             hovermode="x unified",
@@ -1044,7 +1044,7 @@ def render_crecetrader(
                         "Nivel": lv.label,
                         "Precio": f"${lv.price:,.2f}",
                         "Distancia": f"{lv.distance_pct(current_price):+.2f}%",
-                        "Rol": CRECETRADER_ROLE_LABEL.get(lv.role.value, lv.role.value),
+                        "Rol": NIVELES_ROLE_LABEL.get(lv.role.value, lv.role.value),
                         "Verificado": "✅" if lv.verified else "—",
                         "Nota": lv.note,
                     }
@@ -1075,8 +1075,8 @@ def render_crecetrader(
                         {
                             "Precio": f"${a.price:,.2f}",
                             "Distancia": f"{a.distance_pct(current_price):+.2f}%",
-                            "Capa A": f"{CRECETRADER_LAYER_LABEL[a.layer]} {a.label}",
-                            "Capa B": f"{CRECETRADER_LAYER_LABEL[b.layer]} {b.label}",
+                            "Capa A": f"{NIVELES_LAYER_LABEL[a.layer]} {a.label}",
+                            "Capa B": f"{NIVELES_LAYER_LABEL[b.layer]} {b.label}",
                         }
                         for a, b in confluences
                     ]

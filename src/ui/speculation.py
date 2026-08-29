@@ -40,7 +40,7 @@ from src.ui.shared import (
     _cached_historical_prices,
     classify_trend_state,
     render_advanced_levels_chart,
-    render_crecetrader,
+    render_niveles_calculados,
     render_sticky_price,
 )
 from src.valuation.trend import evaluate_trend
@@ -714,10 +714,10 @@ def render_speculation():
     # Pestañas INTERNAS del ticker elegido, mismo patrón (y mismo pedido del usuario) que la
     # pestaña Cripto: el análisis de siempre por un lado y el método Crecetrader por el otro,
     # para que una reconstrucción descriptiva y no validada fuera de muestra no quede intercalada
-    # entre las secciones que sí pasaron ese filtro. `render_crecetrader()` vive en
+    # entre las secciones que sí pasaron ese filtro. `render_niveles_calculados()` vive en
     # `src/ui/shared.py` justamente porque ahora tiene dos llamadores — mismo camino que siguió
     # `render_advanced_levels_chart()` cuando esta pestaña necesitó el gráfico de la otra.
-    tab_analisis, tab_crecetrader = st.tabs(["📊 Análisis", "📐 Niveles calculados"])
+    tab_analisis, tab_niveles = st.tabs(["📊 Análisis", "📐 Niveles calculados"])
 
     with tab_analisis:
         render_speculation_indicators(
@@ -765,5 +765,5 @@ def render_speculation():
                     else:
                         st.error(golden_phrases)
 
-    with tab_crecetrader:
-        render_crecetrader("speculation", ticker, historical_prices, current_price, is_crypto=False)
+    with tab_niveles:
+        render_niveles_calculados("speculation", ticker, historical_prices, current_price, is_crypto=False)

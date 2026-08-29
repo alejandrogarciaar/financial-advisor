@@ -145,12 +145,12 @@ mapa es solo para ubicarse rápido, no para reemplazar esa lectura.
 
 | Archivo | Rol |
 |---|---|
-| `shared.py` | Cross-tab: caché (`_cached_evaluation`, `_get_or_fetch`, `_parallel_fetch`), badges, `render_sticky_price`, `render_advanced_levels_chart`, `render_crecetrader` (panel de niveles Crecetrader, usado por Cripto y Especulación), labels del Market Reaction Zone Engine. |
+| `shared.py` | Cross-tab: caché (`_cached_evaluation`, `_get_or_fetch`, `_parallel_fetch`), badges, `render_sticky_price`, `render_advanced_levels_chart`, `render_niveles_calculados` (panel de niveles Crecetrader, usado por Cripto y Especulación), labels del Market Reaction Zone Engine. |
 | `stocks.py` | Pestaña Acciones — lista + detalle de `TICKERS`. |
 | `etfs.py` | Pestaña ETFs — lista + detalle. |
 | `validation.py` | Pestaña Validación — backtest en UI + historial de veredictos. |
-| `speculation.py` | Pestaña Especulación (solo acciones) + `render_speculation_indicators()` (compartida con Cripto) + sección del Market Reaction Zone Engine sobre datos diarios + pestaña interna "Niveles Crecetrader". |
-| `cripto.py` | Pestaña Cripto (BTC/ETH/SOL, Binance) — mismo cuerpo de indicadores + Market Reaction Zone Engine sobre 4h + VWAP, Wyckoff Spring y flujos de ETFs spot vía SoSoValue (secciones propias, no compartidas con Especulación), más la pestaña interna "Niveles Crecetrader" (`render_crecetrader()`, en `shared.py`). |
+| `speculation.py` | Pestaña Especulación (solo acciones) + `render_speculation_indicators()` (compartida con Cripto) + sección del Market Reaction Zone Engine sobre datos diarios + pestaña interna "Niveles calculados". |
+| `cripto.py` | Pestaña Cripto (BTC/ETH/SOL, Binance) — mismo cuerpo de indicadores + Market Reaction Zone Engine sobre 4h + VWAP, Wyckoff Spring y flujos de ETFs spot vía SoSoValue (secciones propias, no compartidas con Especulación), más la pestaña interna "Niveles calculados" (`render_niveles_calculados()`, en `shared.py`). |
 | `portfolio.py` | Pestaña Portafolio — alta de compras y ventas, resumen de holdings, "Ganancias realizadas", "Plan de compra escalonada", auto-refresh de precios (`st.fragment`). |
 
 ### `src/` — módulos de cómputo top-level (no UI)
@@ -161,8 +161,8 @@ mapa es solo para ubicarse rápido, no para reemplazar esa lectura.
 | `speculation.py` | RSI, MACD, Bollinger, VWAP, ADX, OBV, soportes/resistencias simples, reacciones por régimen — computación técnica, separada de la valoración. |
 | `support_resistance.py` | "Market Reaction Zone Engine" — motor multi-metodología de soporte/resistencia (DBSCAN, KDE, RANSAC/Theil-Sen/Huber, Hough, Volume Profile, VWAP), compartido por Especulación y Cripto vía `daily_reference_config()`/`SRConfig()`. |
 | `drawdown_dca.py` | Zona de acumulación por caída desde máximo de 1 año, usado en Portafolio. |
-| `crecetrader.py` | Reconstrucción del método de niveles de Crecetrader (envolvente de sesión, rejilla diaria, fracciones macro) + confirmaciones sobre un nivel (rebote/ruptura/retest, sin uso en la UI) — algoritmo puro, sin I/O ni dependencias externas. |
-| `crecetrader_inputs.py` | Deriva las 5 entradas de `crecetrader.LevelEngine` desde una serie de velas diarias (mínimo anual, primer impulso, caída macro). |
+| `niveles_calculados.py` | (motor de la app; el homónimo en `scripts/` es el CLI autocontenido) Reconstrucción del método de niveles de Crecetrader (envolvente de sesión, rejilla diaria, fracciones macro) + confirmaciones sobre un nivel (rebote/ruptura/retest, sin uso en la UI) — algoritmo puro, sin I/O ni dependencias externas. |
+| `niveles_calculados_inputs.py` | Deriva las 5 entradas de `niveles_calculados.LevelEngine` desde una serie de velas diarias (mínimo anual, primer impulso, caída macro). |
 | `backtest.py` | ¿El veredicto de hace N años habría anticipado el retorno real? Limitaciones documentadas en su propio docstring. |
 | `preferences.py` | Persiste el filtro de tickers de Acciones entre reinicios (`app_data/preferences.json`). |
 | `verdict_history.py` | Historial diario de veredictos por ticker (`app_data/verdict_history.json`). |
@@ -178,7 +178,8 @@ mapa es solo para ubicarse rápido, no para reemplazar esa lectura.
 | `_platform.sh` | Lo único que sabe en qué sistema operativo corre (venv `Scripts/` vs `bin/`, sondeo de puerto, match de procesos) — se hace `source` desde los dos scripts de arriba, no se ejecuta solo. |
 | `add_sale.py` | Agrega una venta a `portfolio_data/sales.json` desde la terminal, validada igual que la tabla "Tus ventas" de la UI — para registrar una venta dictada por chat sin abrir el navegador. |
 | `niveles_calculados.pine` | El mismo cálculo como indicador de TradingView (Pine v6). Corrige el modo automático de una versión previa: ventana anual en días de calendario (no barras), rango base = primer impulso (no el rango del año) y rol de la envolvente contra el precio. Lógica verificada contra el `.py` en los 11 tickers; la sintaxis hay que compilarla en TradingView. |
-| `niveles_calculados.py` | Las 3 capas de "Niveles calculados" desde la terminal, para cualquier cripto (Binance) o acción (Yahoo). **Autocontenido**: un archivo, solo stdlib, no importa nada de `src/` — copiable a otra máquina tal cual. Verificado nivel por nivel contra el motor de la app en los 11 tickers. |
+| `niveles_calculados_abanico.pine` | Variante del anterior: abanico simétrico de anillos alrededor del precio actual (paso configurable), filtros de dibujo (rango visible / distancia % / tope de niveles por capa) y atenuación de la rejilla en intradía. **No reemplaza al de arriba**: su modo automático vuelve al rango del año en vez del primer impulso, que es justo lo que el otro corrige, y viene con los modos automáticos apagados por defecto. Sin verificar contra el `.py`. |
+| `niveles_calculados.py` | (CLI; no confundir con `src/niveles_calculados.py`, el motor que usa la app) Las 3 capas de "Niveles calculados" desde la terminal, para cualquier cripto (Binance) o acción (Yahoo). **Autocontenido**: un archivo, solo stdlib, no importa nada de `src/` — copiable a otra máquina tal cual. Verificado nivel por nivel contra el motor de la app en los 11 tickers. |
 
 ## Skills (`.claude/skills/`)
 

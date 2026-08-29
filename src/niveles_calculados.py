@@ -1,5 +1,5 @@
 """
-crecetrader.py
+niveles_calculados.py
 ==============
 
 Reconstruccion del algoritmo de "niveles calculados" del canal Crecetrader,
