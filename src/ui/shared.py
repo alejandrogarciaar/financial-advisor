@@ -541,6 +541,13 @@ CRECE_LAYER_TABS = {
 }
 
 CRECE_ROW_HEIGHT_PX = 44
+# Altura máxima de la escalera antes de que scrollee sola. 10 filas: la capa diaria tiene 13
+# niveles y obligaba a scrollear TODA la página de Streamlit para llegar al último; las de 9
+# (envolvente y macro) entran enteras y no muestran barra. El riel y las filas scrollean
+# juntos porque el overflow vive en `.crece-ladder`, el contenedor de los dos — si se pusiera
+# en `.crece-rows`, las líneas del riel se quedarían quietas y dejarían de corresponder con
+# su fila.
+CRECE_LADDER_MAX_PX = CRECE_ROW_HEIGHT_PX * 10
 
 CRECE_CSS = """<style>
 @import url('https://fonts.googleapis.com/css2?family=Space+Grotesk:wght@400;500;700&family=IBM+Plex+Mono:wght@400;500;600&display=swap');
@@ -554,8 +561,12 @@ CRECE_CSS = """<style>
 .crece-card .t{font-size:10px;letter-spacing:.14em;text-transform:uppercase;color:%(dim)s;}
 .crece-card .v{font-family:'IBM Plex Mono',ui-monospace,monospace;font-size:18px;font-weight:600;margin-top:4px;}
 .crece-card .s{font-size:11px;color:%(faint)s;margin-top:2px;}
-.crece-ladder{display:flex;background:%(panel)s;border:1px solid %(line)s;border-radius:14px;overflow:hidden;}
-.crece-rail{position:relative;width:74px;flex-shrink:0;border-right:1px solid %(line)s;background:%(panel_soft)s;}
+.crece-ladder{display:flex;background:%(panel)s;border:1px solid %(line)s;border-radius:14px;overflow-y:auto;overflow-x:hidden;overscroll-behavior:contain;scrollbar-width:thin;scrollbar-color:%(line)s %(panel)s;}
+.crece-ladder::-webkit-scrollbar{width:10px;}
+.crece-ladder::-webkit-scrollbar-track{background:%(panel)s;border-radius:14px;}
+.crece-ladder::-webkit-scrollbar-thumb{background:%(line)s;border-radius:8px;border:2px solid %(panel)s;}
+.crece-ladder::-webkit-scrollbar-thumb:hover{background:%(faint)s;}
+.crece-rail{position:relative;width:74px;min-width:74px;flex-shrink:0;border-right:1px solid %(line)s;background:%(panel_soft)s;}
 .crece-rail i{position:absolute;left:0;right:0;height:0;display:block;}
 .crece-mark{position:absolute;left:6px;right:6px;text-align:center;background:%(btc)s;color:#141414;font-size:9px;font-weight:600;border-radius:4px;padding:2px 0;font-family:'IBM Plex Mono',ui-monospace,monospace;}
 .crece-rows{flex:1;min-width:0;}
@@ -567,6 +578,7 @@ CRECE_CSS = """<style>
 .crece-role{font-size:9px;font-weight:700;letter-spacing:.08em;border-radius:4px;padding:2px 6px;flex-shrink:0;opacity:.9;white-space:nowrap;}
 .crece-note{font-size:11px;color:%(faint)s;margin-left:auto;text-align:right;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;}
 .crece-foot{margin-top:14px;font-size:11px;color:%(faint)s;line-height:1.6;}
+@media (max-width:640px){.crece-note{display:none;}.crece-val{font-size:15px;min-width:80px;}}
 </style>""" % {**CRECE_C, "row": CRECE_ROW_HEIGHT_PX}
 
 
@@ -647,9 +659,9 @@ def _crece_ladder_html(layer: str, levels: list, price: float, near: set) -> str
         )
 
     return (
-        f'<div class="crece-ladder" style="min-height:{height}px;">'
+        f'<div class="crece-ladder" style="height:{min(height, CRECE_LADDER_MAX_PX)}px;">'
         f'<div class="crece-rail" style="height:{height}px;">{rail}</div>'
-        f'<div class="crece-rows">{rows}</div>'
+        f'<div class="crece-rows" style="height:{height}px;">{rows}</div>'
         "</div>"
     )
 
@@ -878,6 +890,37 @@ def render_crecetrader(
     below, above = nearest_levels(levels, current_price)
     near = {lv for lv in (below, above) if lv is not None}
 
+    # Abanico alrededor del precio (pedido explícito: 5 arriba y 5 abajo por defecto). La capa
+    # diaria tiene 13 niveles y los extremos — el 0% del mínimo anual, el 275% — quedan a decenas
+    # de por ciento del precio de hoy: ocupan pantalla y no son lo que se está leyendo. El corte
+    # es puramente de VISUALIZACIÓN: `levels` se calcula entero y sigue entero abajo, en el
+    # gráfico y en la tabla del expander.
+    per_side = st.slider(
+        "Niveles a cada lado del precio",
+        min_value=1,
+        max_value=10,
+        value=5,
+        key=f"{key_prefix}_crece_per_side",
+        help=(
+            "Solo recorta lo que se muestra en esta lista — no cambia el cálculo. Subilo para ver "
+            "los extremos de la capa (el ancla, los objetivos lejanos); el gráfico y la tabla de "
+            "más abajo siempre muestran la capa completa."
+        ),
+    )
+    # `levels` viene ordenado de mayor a menor precio: los de arriba más cercanos al precio son
+    # los últimos de su tramo, y los de abajo más cercanos son los primeros del suyo.
+    up_side = [lv for lv in levels if lv.price >= current_price]
+    down_side = [lv for lv in levels if lv.price < current_price]
+    # Si de un lado no hay `per_side` niveles (el precio quedó fuera de la capa, o pegado a un
+    # extremo), el faltante se compensa con el otro lado: el abanico mantiene su tamaño total en
+    # vez de encogerse justo cuando el precio está en una punta. Pasa de verdad — hoy en BTC el
+    # precio está por debajo de los 9 anillos de la envolvente, así que "5 abajo" no existe.
+    n_up = min(per_side + max(0, per_side - len(down_side)), len(up_side))
+    n_down = min(per_side + max(0, per_side - len(up_side)), len(down_side))
+    shown = (up_side[len(up_side) - n_up :] if n_up else []) + down_side[:n_down]
+    hidden = len(levels) - len(shown)
+    lopsided = n_up != n_down and hidden > 0
+
     def _card(title: str, value: str, sub: str, color: str) -> str:
         return (
             f'<div class="crece-card" style="border-left:3px solid {color};">'
@@ -907,7 +950,7 @@ def render_crecetrader(
         + _near_card("Resistencia próxima", above, CRECE_C["red"])
         + _near_card("Soporte próximo", below, CRECE_C["green"])
         + "</div>"
-        + _crece_ladder_html(layer, levels, current_price, near)
+        + _crece_ladder_html(layer, shown, current_price, near)
         + '<div class="crece-foot">Tres capas reconstruidas por ingeniería inversa de gráficos '
         "públicos: "
         "intradía (envolvente sobre la apertura diaria, 15 niveles verificados), diaria (pasos de "
@@ -924,6 +967,25 @@ def render_crecetrader(
         + "</div>"
     )
     st.markdown(html, unsafe_allow_html=True)
+    notes = []
+    if hidden > 0:
+        reparto = (
+            f"{n_up} por encima del precio y {n_down} por debajo — de un lado no había {per_side}, "
+            "así que el abanico se completó con el otro"
+            if lopsided
+            else f"los {n_up} más próximos por encima del precio y los {n_down} por debajo"
+        )
+        notes.append(
+            f"Se muestran {len(shown)} de los {len(levels)} niveles de esta capa: {reparto} "
+            f"({hidden} quedan fuera)."
+        )
+    if len(shown) * CRECE_ROW_HEIGHT_PX > CRECE_LADDER_MAX_PX:
+        notes.append("La lista scrollea dentro del panel.")
+    notes.append(
+        "Las dos filas resaltadas en naranja son las que rodean el precio de hoy, y la marca "
+        "naranja de la barra izquierda es ese mismo precio a escala."
+    )
+    st.caption(" ".join(notes))
 
     with st.expander("📈 Ver esta capa sobre el precio (y la tabla completa)"):
         fig = go.Figure()

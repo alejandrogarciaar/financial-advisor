@@ -143,6 +143,8 @@ mapa es solo para ubicarse rápido, no para reemplazar esa lectura.
 | `verify_app.py` | Smoke test de las 6 pestañas vía `AppTest`, sin navegador. |
 | `run_app.sh` / `stop_app.sh` | Arrancar/parar el servidor Streamlit local (puerto libre, health check, kill confiable por línea de comando). |
 | `add_sale.py` | Agrega una venta a `portfolio_data/sales.json` desde la terminal, validada igual que la tabla "Tus ventas" de la UI — para registrar una venta dictada por chat sin abrir el navegador. |
+| `niveles_calculados.pine` | El mismo cálculo como indicador de TradingView (Pine v6). Corrige el modo automático de una versión previa: ventana anual en días de calendario (no barras), rango base = primer impulso (no el rango del año) y rol de la envolvente contra el precio. Lógica verificada contra el `.py` en los 11 tickers; la sintaxis hay que compilarla en TradingView. |
+| `niveles_calculados.py` | Las 3 capas de "Niveles calculados" desde la terminal, para cualquier cripto (Binance) o acción (Yahoo). **Autocontenido**: un archivo, solo stdlib, no importa nada de `src/` — copiable a otra máquina tal cual. Verificado nivel por nivel contra el motor de la app en los 11 tickers. |
 
 ## Skills (`.claude/skills/`)
 

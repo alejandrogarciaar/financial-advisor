@@ -220,7 +220,14 @@ config + tab wiring). This tab's code lives in `src/ui/cripto.py`:
   daily open or the live price; "Diario" = `engine.grid()`; "Semanal" = `engine.macro()`), two
   parameter cards, resistance/support cards, then the "ladder": a 74px rail with each level drawn
   at its true price-proportional height next to fixed-height rows (`CRECE_ROW_HEIGHT_PX = 44`, the
-  rail's height is `44 × len(levels)` so the two line up). Rows carry label + price + role chip +
+  rail's height is `44 × len(levels)` so the two line up; the ladder caps at
+  `CRECE_LADDER_MAX_PX = 44 × 10` and scrolls internally past that — the overflow MUST stay on
+  `.crece-ladder`, the flex parent of both rail and rows, or the rail's lines stop matching
+  their rows). The ladder shows a FAN around the price — `per_side` levels above and `per_side`
+  below (`st.slider`, default 5, so 10 rows), display-only; when one side has fewer (BTC's
+  price sits below all 9 envelope rings today) the shortfall is taken from the other side so
+  the fan keeps its size, and the caption says which split it used. The chart and table in the
+  expander always show the FULL layer. Rows carry label + price + role chip +
   note as TEXT, so color is never the only carrier. The user's one hard constraint: **everything
   computes on the machine running the app** — the React original fetched its numbers from an LLM
   API with web search; that was replaced by the `binance_client` series this tab already holds.
