@@ -4,23 +4,22 @@ crecetrader.py
 
 Reconstruccion del algoritmo de "niveles calculados" del canal Crecetrader,
 obtenida por ingenieria inversa de sus graficos publicos (BTC y ETH,
-27-28 agosto 2026).
+27-29 agosto 2026; el 29-ago la envolvente PREDIJO los 7 anillos publicados
+antes del video, error max $1).
 
 El sistema tiene tres capas independientes que conviven en el grafico:
 
     1. ENVOLVENTE DE SESION  (intradia, cualquier temporalidad < 1D)
        centro  = apertura diaria (00:00 UTC)
        anillos = centro * (1 +/- 0.382% / 1% / 1.5% / 2%)
-       Verificada al dolar en 15 niveles, dos jornadas, dos activos.
 
     2. REJILLA DIARIA
        nivel = ancla + n * 25% * rango_base   (con medio paso en 62.5%)
        ancla = minimo del ultimo ano; rango_base = primer impulso desde ahi.
-       Verificada en 7 niveles, incluida una prediccion algebraica (125%).
 
     3. FRACCIONES MACRO (semanal)
        nivel = ancla + n * 12.5% * caida_macro
-       caida_macro = techo de ciclo - ancla.  Verificada en 1 nivel.
+       caida_macro = techo de ciclo - ancla.
 
 Una cuarta capa (pivots trazados a mano) no es algoritmizable y queda fuera.
 
@@ -52,25 +51,18 @@ __all__ = [
 
 # ---------------------------------------------------------------- constantes --
 
-#: Anillos de la envolvente de sesion, en porcentaje sobre el centro.
 ENVELOPE_BANDS: tuple[float, ...] = (0.382, 1.0, 1.5, 2.0)
 
-#: Pasos de la rejilla diaria, en porcentaje del rango base.
 DAILY_STEPS: tuple[float, ...] = (
     0.0, 25.0, 50.0, 62.5, 75.0, 100.0, 125.0, 150.0, 175.0, 200.0, 225.0, 250.0, 275.0,
 )
 
-#: Pasos verificados contra sus graficos publicos.
 DAILY_VERIFIED: frozenset[float] = frozenset({62.5, 125.0, 175.0, 225.0, 250.0, 275.0})
 
-#: Fracciones de la caida macro, en porcentaje.
 MACRO_STEPS: tuple[float, ...] = tuple(i * 12.5 for i in range(9))
 
-#: Calibracion de respaldo (grafico BTC 1D del 28-ago-2026).
-#: rango_base = 18294 sobre un ancla de 57670.
+# Calibracion de respaldo (grafico BTC 1D del 28-ago-2026).
 FALLBACK_BASE_RATIO: float = 18294 / 57670
-
-#: caida_macro = 68537 sobre la misma ancla.
 FALLBACK_MACRO_RATIO: float = 68537 / 57670
 
 
@@ -84,17 +76,7 @@ class Role(str, Enum):
 
 @dataclass(frozen=True)
 class Level:
-    """Un nivel calculado.
-
-    Attributes:
-        price: precio del nivel.
-        label: identificador corto ("125%", "+1%", "centro").
-        layer: capa que lo genero ("envelope" | "daily" | "macro").
-        pct: porcentaje aplicado en la formula.
-        role: rol operativo dentro del metodo.
-        verified: True si el nivel fue confirmado contra un grafico publico.
-        note: descripcion legible.
-    """
+    """Un nivel calculado."""
 
     price: float
     label: str
@@ -105,7 +87,6 @@ class Level:
     note: str = ""
 
     def distance_pct(self, reference: float) -> float:
-        """Distancia porcentual del nivel respecto a un precio de referencia."""
         if reference == 0:
             raise ValueError("El precio de referencia no puede ser cero.")
         return (self.price - reference) / reference * 100.0
@@ -120,21 +101,7 @@ def session_envelope(
     bands: Sequence[float] = ENVELOPE_BANDS,
     reference: Optional[float] = None,
 ) -> list[Level]:
-    """Capa 1: envolvente de sesion alrededor de la apertura diaria.
-
-    Args:
-        center: apertura diaria (00:00 UTC) del dia en curso. Si no se dispone,
-            el cierre diario anterior es la mejor aproximacion.
-        bands: anillos en porcentaje.
-        reference: precio actual usado para asignar el rol de cada anillo.
-            Si es None se usa el propio centro.
-
-    Returns:
-        Lista de niveles ordenada de mayor a menor precio.
-
-    Raises:
-        ValueError: si el centro no es positivo.
-    """
+    """Capa 1: envolvente de sesion alrededor de la apertura diaria."""
     if center <= 0:
         raise ValueError("El centro de la envolvente debe ser positivo.")
 
@@ -178,20 +145,7 @@ def daily_grid(
     *,
     steps: Sequence[float] = DAILY_STEPS,
 ) -> list[Level]:
-    """Capa 2: rejilla diaria anclada al minimo anual.
-
-    Args:
-        anchor: minimo del ultimo ano (la "onda V" en su nomenclatura).
-        base_range: amplitud del primer impulso desde el ancla. Si es None se
-            estima con la proporcion calibrada (~31.7% del ancla).
-        steps: pasos porcentuales del rango base.
-
-    Returns:
-        Lista de niveles ordenada de mayor a menor precio.
-
-    Raises:
-        ValueError: si el ancla no es positiva o el rango base no es positivo.
-    """
+    """Capa 2: rejilla diaria anclada al minimo anual."""
     if anchor <= 0:
         raise ValueError("El ancla debe ser positiva.")
 
@@ -238,18 +192,7 @@ def macro_grid(
     steps: Sequence[float] = MACRO_STEPS,
     reference: Optional[float] = None,
 ) -> list[Level]:
-    """Capa 3: fracciones de 12.5% de la caida macro.
-
-    Args:
-        anchor: minimo del ultimo ano.
-        macro_range: techo de ciclo menos ancla. Si es None se estima con la
-            proporcion calibrada (~118.9% del ancla).
-        steps: fracciones porcentuales.
-        reference: precio actual para asignar roles.
-
-    Returns:
-        Lista de niveles ordenada de mayor a menor precio.
-    """
+    """Capa 3: fracciones de 12.5% de la caida macro."""
     if anchor <= 0:
         raise ValueError("El ancla debe ser positiva.")
 
@@ -288,16 +231,7 @@ def macro_grid(
 def nearest_levels(
     levels: Iterable[Level], price: float
 ) -> tuple[Optional[Level], Optional[Level]]:
-    """Devuelve (soporte, resistencia) mas proximos a un precio.
-
-    Args:
-        levels: niveles a evaluar.
-        price: precio de referencia.
-
-    Returns:
-        Tupla (nivel inmediatamente inferior, nivel inmediatamente superior).
-        Cualquiera puede ser None si el precio queda fuera de la rejilla.
-    """
+    """Devuelve (soporte, resistencia) mas proximos a un precio."""
     below = above = None
     for lv in levels:
         if lv.price <= price and (below is None or lv.price > below.price):
@@ -326,18 +260,7 @@ def format_levels(levels: Sequence[Level], price: Optional[float] = None) -> str
 
 @dataclass
 class LevelEngine:
-    """Motor que combina las tres capas para un activo.
-
-    Los parametros son independientes del instrumento: el mismo motor sirve
-    para BTC, ETH o cualquier otro simbolo, solo cambian las entradas.
-
-    Attributes:
-        price: precio actual.
-        daily_open: apertura diaria del dia en curso.
-        year_low: minimo del ultimo ano (ancla de las capas 2 y 3).
-        base_range: amplitud del primer impulso desde el ancla.
-        macro_range: techo de ciclo menos ancla.
-    """
+    """Motor que combina las tres capas para un activo."""
 
     price: float
     daily_open: Optional[float] = None
@@ -347,41 +270,27 @@ class LevelEngine:
     _cache: dict = field(default_factory=dict, repr=False, compare=False)
 
     def envelope(self) -> list[Level]:
-        """Capa 1. Usa el precio actual como centro si falta la apertura."""
         center = self.daily_open if self.daily_open else self.price
         return session_envelope(center, reference=self.price)
 
     def grid(self) -> list[Level]:
-        """Capa 2. Requiere `year_low`."""
         if not self.year_low:
             raise ValueError("Se requiere year_low para la rejilla diaria.")
         return daily_grid(self.year_low, self.base_range)
 
     def macro(self) -> list[Level]:
-        """Capa 3. Requiere `year_low`."""
         if not self.year_low:
             raise ValueError("Se requiere year_low para las fracciones macro.")
         return macro_grid(self.year_low, self.macro_range, reference=self.price)
 
     def all_levels(self) -> list[Level]:
-        """Las tres capas juntas, ordenadas por precio."""
         out = list(self.envelope())
         if self.year_low:
             out += self.grid() + self.macro()
         return sorted(out, key=lambda lv: lv.price, reverse=True)
 
     def confluences(self, tolerance_pct: float = 0.15) -> list[tuple[Level, Level]]:
-        """Detecta niveles de capas distintas que casi coinciden.
-
-        En el metodo original, cuando una rejilla nueva reproduce un nivel de
-        otra capa, ese precio se trata como critico.
-
-        Args:
-            tolerance_pct: distancia maxima entre dos niveles, en porcentaje.
-
-        Returns:
-            Pares de niveles en confluencia.
-        """
+        """Niveles de capas distintas que casi coinciden (niveles criticos)."""
         levels = self.all_levels()
         pairs: list[tuple[Level, Level]] = []
         for i, a in enumerate(levels):
@@ -391,6 +300,154 @@ class LevelEngine:
                 if abs(a.price - b.price) / a.price * 100.0 <= tolerance_pct:
                     pairs.append((a, b))
         return pairs
+
+
+# ============================================================================
+#  CONFIRMACIONES DE COMPRA / VENTA
+# ============================================================================
+
+
+class SignalType(str, Enum):
+    """Tipo de confirmacion detectada."""
+
+    REBOTE_COMPRA = "rebote_compra"
+    REBOTE_VENTA = "rebote_venta"
+    RUPTURA_ALCISTA = "ruptura_alcista"
+    RUPTURA_BAJISTA = "ruptura_bajista"
+    RETEST_ALCISTA = "retest_alcista"
+    RETEST_BAJISTA = "retest_bajista"
+
+
+@dataclass(frozen=True)
+class Candle:
+    """Una vela OHLC. `time` es libre (timestamp, indice, fecha-str...)."""
+
+    time: object
+    open: float
+    high: float
+    low: float
+    close: float
+
+
+@dataclass(frozen=True)
+class Signal:
+    """Una confirmacion detectada sobre un nivel."""
+
+    time: object
+    type: SignalType
+    level: Level
+    candle: Candle
+
+    @property
+    def is_buy(self) -> bool:
+        return self.type in (
+            SignalType.REBOTE_COMPRA,
+            SignalType.RUPTURA_ALCISTA,
+            SignalType.RETEST_ALCISTA,
+        )
+
+    def __str__(self) -> str:
+        rol = "COMPRA" if self.is_buy else "VENTA"
+        return (
+            f"[{self.time}] {rol:6} {self.type.value:16} "
+            f"nivel {self.level.layer}/{self.level.label} @ {self.level.price:,.0f} "
+            f"(cierre vela: {self.candle.close:,.0f})"
+        )
+
+
+def _touches(candle: Candle, price: float, tolerance_pct: float) -> bool:
+    band = price * tolerance_pct / 100.0
+    return candle.low - band <= price <= candle.high + band
+
+
+def confirm_rebote(
+    candles: Sequence[Candle], level: Level, *, wick_tolerance_pct: float = 0.05
+) -> list[Signal]:
+    """Rebote: mecha toca el nivel, cierre se aleja en contra. Recomendado."""
+    out: list[Signal] = []
+    for c in candles:
+        if not _touches(c, level.price, wick_tolerance_pct):
+            continue
+        if c.low <= level.price and c.close > level.price:
+            out.append(Signal(c.time, SignalType.REBOTE_COMPRA, level, c))
+        elif c.high >= level.price and c.close < level.price:
+            out.append(Signal(c.time, SignalType.REBOTE_VENTA, level, c))
+    return out
+
+
+def confirm_ruptura(candles: Sequence[Candle], level: Level) -> list[Signal]:
+    """Ruptura: el CIERRE cruza el nivel respecto a la vela anterior."""
+    out: list[Signal] = []
+    for prev, cur in zip(candles, candles[1:]):
+        if prev.close <= level.price < cur.close:
+            out.append(Signal(cur.time, SignalType.RUPTURA_ALCISTA, level, cur))
+        elif prev.close >= level.price > cur.close:
+            out.append(Signal(cur.time, SignalType.RUPTURA_BAJISTA, level, cur))
+    return out
+
+
+def confirm_retest(
+    candles: Sequence[Candle], level: Level, *, retest_tolerance_pct: float = 0.1
+) -> list[Signal]:
+    """Retest: tras una ruptura, el precio vuelve al nivel sin recruzarlo."""
+    rupturas = confirm_ruptura(candles, level)
+    if not rupturas:
+        return []
+
+    out: list[Signal] = []
+    idx_by_time = {c.time: i for i, c in enumerate(candles)}
+    for r in rupturas:
+        start = idx_by_time[r.time] + 1
+        for c in candles[start:]:
+            invalidated = (
+                r.type == SignalType.RUPTURA_ALCISTA and c.close < level.price
+            ) or (r.type == SignalType.RUPTURA_BAJISTA and c.close > level.price)
+            if invalidated:
+                break
+            if _touches(c, level.price, retest_tolerance_pct):
+                sig_type = (
+                    SignalType.RETEST_ALCISTA
+                    if r.type == SignalType.RUPTURA_ALCISTA
+                    else SignalType.RETEST_BAJISTA
+                )
+                out.append(Signal(c.time, sig_type, level, c))
+                break
+    return out
+
+
+def detect_signals(
+    candles: Sequence[Candle],
+    levels: Iterable[Level],
+    *,
+    mode: str = "rebote",
+    wick_tolerance_pct: float = 0.05,
+    retest_tolerance_pct: float = 0.1,
+) -> list[Signal]:
+    """Punto de entrada unico: confirmaciones para una lista de niveles.
+
+    mode: "rebote" (defecto, recomendado), "ruptura", "retest" o "todos".
+    """
+    valid_modes = {"rebote", "ruptura", "retest", "todos"}
+    if mode not in valid_modes:
+        raise ValueError(f"mode debe ser uno de {valid_modes}, recibido {mode!r}")
+
+    out: list[Signal] = []
+    for lv in levels:
+        if mode in ("rebote", "todos"):
+            out += confirm_rebote(candles, lv, wick_tolerance_pct=wick_tolerance_pct)
+        if mode in ("ruptura", "todos"):
+            out += confirm_ruptura(candles, lv)
+        if mode in ("retest", "todos"):
+            out += confirm_retest(candles, lv, retest_tolerance_pct=retest_tolerance_pct)
+
+    return sorted(out, key=lambda s: idx_of(candles, s.candle))
+
+
+def idx_of(candles: Sequence[Candle], candle: Candle) -> int:
+    for i, c in enumerate(candles):
+        if c is candle:
+            return i
+    return -1
 
 
 # ------------------------------------------------------------------ ejemplo --
@@ -423,7 +480,35 @@ if __name__ == "__main__":
     for a, b in engine.confluences():
         print(f"  {a.price:,.0f}  {a.layer} {a.label}  ~  {b.layer} {b.label}")
 
-    # Comprobacion contra los valores leidos en sus graficos.
+    # Validacion prospectiva 29-ago-2026: con apertura 77.835 la envolvente
+    # predijo 78.133 / 78.614 / 79.003 / 79.392 / 77.538 / 77.057 / 76.668
+    # antes de publicarse el video (error max $1).
     expected = {80_586, 79_972, 81_082, 79_476, 81_483, 79_075, 81_885, 78_673}
     produced = {round(lv.price) for lv in engine.envelope()}
     print(f"\nanillos verificados reproducidos: {len(expected & produced)}/{len(expected)}")
+
+    # CONFIRMACIONES - ejemplo con velas sinteticas alrededor del 125%.
+    print("\n" + "=" * 68)
+    print("CONFIRMACIONES sobre el nivel 125% (80.538)")
+    print("=" * 68)
+
+    nivel_125 = next(lv for lv in engine.grid() if lv.label == "125%")
+
+    velas = [
+        Candle("09:00", open=80_100, high=80_400, low=79_900, close=80_150),
+        Candle("10:00", open=80_150, high=80_600, low=80_050, close=80_200),
+        Candle("11:00", open=80_200, high=80_950, low=80_150, close=80_900),
+        Candle("12:00", open=80_900, high=81_000, low=80_500, close=80_600),
+        Candle("13:00", open=80_600, high=80_900, low=80_450, close=80_750),
+    ]
+
+    senales = detect_signals(velas, [nivel_125], mode="todos")
+    for s in senales:
+        print(" ", s)
+    if not senales:
+        print("  (sin confirmaciones en esta serie de ejemplo)")
+
+    print(
+        "\nUso recomendado: mode='rebote' por defecto (mas fiel a como el "
+        "confirma en sus graficos), 'retest' para mayor exigencia."
+    )

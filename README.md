@@ -128,7 +128,7 @@ mapa es solo para ubicarse rápido, no para reemplazar esa lectura.
 | `speculation.py` | RSI, MACD, Bollinger, VWAP, ADX, OBV, soportes/resistencias simples, reacciones por régimen — computación técnica, separada de la valoración. |
 | `support_resistance.py` | "Market Reaction Zone Engine" — motor multi-metodología de soporte/resistencia (DBSCAN, KDE, RANSAC/Theil-Sen/Huber, Hough, Volume Profile, VWAP), compartido por Especulación y Cripto vía `daily_reference_config()`/`SRConfig()`. |
 | `drawdown_dca.py` | Zona de acumulación por caída desde máximo de 1 año, usado en Portafolio. |
-| `crecetrader.py` | Reconstrucción del método de niveles de Crecetrader (envolvente de sesión, rejilla diaria, fracciones macro) — algoritmo puro, sin I/O ni dependencias externas. |
+| `crecetrader.py` | Reconstrucción del método de niveles de Crecetrader (envolvente de sesión, rejilla diaria, fracciones macro) + confirmaciones sobre un nivel (rebote/ruptura/retest, sin uso en la UI) — algoritmo puro, sin I/O ni dependencias externas. |
 | `crecetrader_inputs.py` | Deriva las 5 entradas de `crecetrader.LevelEngine` desde una serie de velas diarias (mínimo anual, primer impulso, caída macro). |
 | `backtest.py` | ¿El veredicto de hace N años habría anticipado el retorno real? Limitaciones documentadas en su propio docstring. |
 | `preferences.py` | Persiste el filtro de tickers de Acciones entre reinicios (`app_data/preferences.json`). |
