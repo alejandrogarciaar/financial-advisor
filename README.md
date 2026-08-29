@@ -36,6 +36,39 @@ pip install -r requirements.txt
 streamlit run app.py
 ```
 
+### Requisito previo: el paquete privado `portfolio`
+
+`requirements.txt` **no** alcanza. La lógica de costo promedio / ganancias realizadas vive en el
+paquete privado [`portfolio`](https://github.com/alejandrogarciaar/portfolio), que a propósito no
+está en `requirements.txt` (rompería el deploy público de Streamlit Cloud, que no tiene llave SSH
+ni PAT para instalar una dependencia privada — ver `CLAUDE.md`). Sin él, la app **entera** falla
+al importar (`app.py:11` → `src/ui/portfolio.py` → `src/portfolio.py`), no solo la pestaña
+Portafolio:
+
+```
+ModuleNotFoundError: No module named 'portfolio'
+```
+
+En una máquina nueva, antes de `streamlit run app.py`:
+
+```
+cd ..                      # a la raíz donde vive este repo
+git clone git@github.personal:alejandrogarciaar/portfolio.git
+cd financial-advisor
+./venv/bin/pip install -e ../portfolio
+```
+
+Dos detalles que cuestan un rato si no se saben:
+
+- **El alias SSH `github.personal`, no `github.com`.** `~/.ssh/config` en esta máquina no tiene
+  entrada `Host github.com`; las tres llaves están detrás de aliases. Con la URL
+  `git@github.com:...` el clone falla con `Permission denied (publickey)`. Es el mismo alias que
+  usa el `origin` de este repo.
+- **El clone va como checkout hermano (`../portfolio`).** También se acepta `.portfolio_repo/`
+  adentro de este repo (la ubicación original) — `_SYNC_REPO_CANDIDATES` en `src/portfolio.py`
+  prueba las dos. Si no encuentra ninguna, el auto-sync de compras/ventas hacia ese repo se
+  desactiva **en silencio**, sin error.
+
 O, equivalente y con manejo de puerto/health-check/reuso de instancia ya resuelto:
 `./scripts/run_app.sh` para arrancar, `./scripts/stop_app.sh` para parar (ver
 `.claude/skills/financial-advisor-run-app/`).

@@ -200,17 +200,37 @@ sole owner of `portfolio_data/` (still the real source of truth — `load_purcha
 bundled/embedded snapshot, which is only a fallback for other, unrelated consumers of that
 package).
 
-**Installed locally only, in editable mode from `.portfolio_repo/`** (a full local clone of that
-repo, gitignored here) — **not** added to `requirements.txt`, by explicit user choice
-(2026-08-18), because the repo is private and Streamlit Community Cloud has no SSH key or GitHub
-PAT configured to install a private git dependency; adding it to `requirements.txt` today would
-break the public deploy at import time. Revisit only if the user sets up a PAT as a Streamlit
-secret and asks for it — don't add it to `requirements.txt` unprompted.
+**Installed locally only, in editable mode from a local clone of that repo** — **not** added to
+`requirements.txt`, by explicit user choice (2026-08-18), because the repo is private and
+Streamlit Community Cloud has no SSH key or GitHub PAT configured to install a private git
+dependency; adding it to `requirements.txt` today would break the public deploy at import time.
+Revisit only if the user sets up a PAT as a Streamlit secret and asks for it — don't add it to
+`requirements.txt` unprompted.
+
+**Where that clone lives: `../portfolio`, a sibling checkout, as of 2026-08-29** (user's explicit
+choice of location — `git clone` at the root of `personal_projects/`, same sibling-checkout
+pattern `market-signals-telegram` already uses). It used to be `.portfolio_repo/` inside this
+repo; `src/portfolio.py`'s `_SYNC_REPO_CANDIDATES` accepts **both**, first one containing a
+`.git` wins, resolved per save rather than at import. That tuple is the only place either path is
+hardcoded. Note the clone must be made through the `github.personal` SSH alias
+(`git@github.personal:alejandrogarciaar/portfolio.git`) — `~/.ssh/config` has no `Host
+github.com` entry, so the plain `git@github.com:` URL fails with `Permission denied (publickey)`
+on this machine; same alias this repo's own `origin` uses. Install with
+`./venv/bin/pip install -e ../portfolio`. **If the clone is missing, the whole app fails at import
+time** (`app.py` → `src/ui/portfolio.py` → `src/portfolio.py`'s `import portfolio`), not just the
+Portafolio tab — a fresh machine needs the clone + editable install before `streamlit run app.py`
+or `scripts/verify_app.py` will get past line 11. Because the install is **editable**, the
+freshness check that repo's README prescribes for consumers (compare a pinned SHA in
+`requirements.txt`) doesn't apply here — there's no pin; `git -C ../portfolio pull` is what picks
+up upstream logic changes, and it takes effect immediately with no reinstall.
 
 **Every `save_purchases()`/`save_sales()` call auto-syncs to that repo**, by explicit user
 request: `src/portfolio.py`'s `_sync_to_portfolio_repo()` copies the just-saved
-`purchases.json`/`sales.json` into `.portfolio_repo/portfolio/portfolio_data/` and runs `git
+`purchases.json`/`sales.json` into `<clone>/portfolio/portfolio_data/` and runs `git
 add`/`commit`/`push` there (SSH remote — the same key verified working for the initial clone).
+If no clone is found in either candidate location it returns early and does nothing — silently,
+which is how moving the clone out to `../portfolio` on 2026-08-29 disabled this without any error
+until it was noticed; that's what `_SYNC_REPO_CANDIDATES` accepting both paths now prevents.
 Skips the commit entirely when the copied file is byte-identical to what's already staged (via
 `git diff --cached --quiet`), so a re-save with no real change doesn't create empty commits. A
 sync failure (network down, remote rejects the push) is caught and only printed to console — it
