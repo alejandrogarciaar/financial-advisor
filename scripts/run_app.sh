@@ -4,10 +4,17 @@
 # live instance if one already answers its health check; otherwise picks a free port (never
 # assumes 8501 is free — the user runs other things locally) and launches a fresh one.
 #
+# Portable across the Windows (git-bash) machine this started on and macOS/Linux since 2026-08-29
+# — it used to hardcode `venv/Scripts/python.exe` and a PowerShell port probe, so on macOS it just
+# exited 1 at the venv check and the app had to be launched by hand. Everything platform-specific
+# lives in `scripts/_platform.sh`; nothing else in here knows which OS it's on.
+#
 # Usage: ./scripts/run_app.sh
 # Writes streamlit.pid / streamlit.port in the project root (same as before this script existed).
 set -euo pipefail
 cd "$(dirname "${BASH_SOURCE[0]}")/.."
+# shellcheck source=scripts/_platform.sh
+source scripts/_platform.sh
 
 if [ -f streamlit.port ] && [ -f streamlit.pid ]; then
   PORT="$(cat streamlit.port)"
@@ -17,18 +24,15 @@ if [ -f streamlit.port ] && [ -f streamlit.pid ]; then
   fi
 fi
 
-if [ ! -x "./venv/Scripts/python.exe" ]; then
+PY="$(venv_python)"
+if [ -z "$PY" ]; then
   echo "venv/ not found or incomplete — set it up first:" >&2
-  echo '  "/c/Users/alejo/AppData/Local/Programs/Python/Python312/python.exe" -m venv venv' >&2
-  echo "  ./venv/Scripts/python.exe -m pip install --quiet --upgrade pip" >&2
-  echo "  ./venv/Scripts/python.exe -m pip install --quiet -r requirements.txt" >&2
+  venv_setup_hint >&2
   exit 1
 fi
 
 PORT=8501
-while powershell.exe -NoProfile -Command \
-  "if (Get-NetTCPConnection -LocalPort $PORT -State Listen -ErrorAction SilentlyContinue) { 'busy' }" \
-  | grep -q busy; do
+while port_in_use "$PORT"; do
   PORT=$((PORT + 1))
 done
 echo "$PORT" > streamlit.port
@@ -42,7 +46,7 @@ echo "$PORT" > streamlit.port
 # run_app.sh anyway (see this skill), there's no reliance on hot-reload-on-save, so disabling the
 # watcher removes the whole dual-process ambiguity: one process, unambiguously the venv one,
 # guaranteed to be running whatever's on disk right now.
-./venv/Scripts/python.exe -m streamlit run app.py \
+"$PY" -m streamlit run app.py \
   --server.headless true --server.port "$PORT" --server.fileWatcherType none \
   > streamlit.log 2>&1 &
 echo $! > streamlit.pid
