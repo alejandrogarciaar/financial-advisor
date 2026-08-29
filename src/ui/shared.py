@@ -520,8 +520,13 @@ NIV_C = {
     "purple": "#B48CF2",
 }
 
+# Los nombres de las 3 secciones son la TEMPORALIDAD de cada capa, no el nombre del cálculo
+# (eso ya lo dice NIVELES_LAYER_LABEL, que se usa en la leyenda del gráfico y en la tabla de
+# confluencias — las dos cosas se complementan, no se repiten). "Intradía" perdió el "H1" que
+# traía: la envolvente es idéntica en H1 y en 5 minutos, así que nombrar una temporalidad
+# concreta sugería una precisión que la capa no tiene.
 NIV_LAYER_TABS = {
-    "Intradía H1": (
+    "Intradía": (
         "envelope",
         "Envolvente de sesión: apertura diaria (00:00 UTC) con anillos a ±0.382, 1, 1.5 y 2%. "
         "Regla confirmada en dos jornadas distintas contra los gráficos de referencia, con 15 "
@@ -532,11 +537,11 @@ NIV_LAYER_TABS = {
         "Rejilla anclada al mínimo anual con pasos de 25% del rango base. 7 niveles verificados "
         "contra los gráficos de referencia, incluida la predicción algebraica del 125%.",
     ),
-    "Semanal": (
+    "Mensual": (
         "macro",
         "Fracciones de 12.5% de la caída macro (techo de ciclo → mínimo anual). El 37.5% "
-        "verificado; otros niveles semanales del método original son pivots trazados a mano, no "
-        "algoritmizables.",
+        "verificado; otros niveles de esta capa en el método original son pivots trazados a mano, "
+        "no algoritmizables.",
     ),
 }
 
@@ -954,8 +959,8 @@ def render_niveles_calculados(
         + '<div class="niv-foot">Tres capas reconstruidas por ingeniería inversa de gráficos '
         "públicos: "
         "intradía (envolvente sobre la apertura diaria, 15 niveles verificados), diaria (pasos de "
-        "25% del rango base sobre el mínimo anual, 7 verificados) y semanal (fracciones de 12.5% "
-        "de la caída macro, 1 verificado). Algunos niveles semanales del método original son pivots "
+        "25% del rango base sobre el mínimo anual, 7 verificados) y mensual (fracciones de 12.5% "
+        "de la caída macro, 1 verificado). Algunos niveles de esa última capa en el método original son pivots "
         "discrecionales, no automatizables. Si el mínimo anual cambia, hay que recalibrar. Las "
         "etiquetas ZONA COMPRA / ZONA VENTA describen el rol que cada nivel tiene dentro del "
         "método replicado (refugios donde el método busca rebotes, objetivos donde toma beneficios); "

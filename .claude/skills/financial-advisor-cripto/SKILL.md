@@ -216,8 +216,14 @@ config + tab wiring). This tab's code lives in `src/ui/cripto.py`:
   values included, so this is the one place in the app with its own fixed dark palette; it is a
   deliberate exception, not a new house style, and the surrounding captions/warnings stay native
   so they follow the user's Streamlit theme. Layout: one layer at a time via
-  `st.segmented_control` ("Intradía H1" = envelope, with an extra `st.radio` to center it on the
-  daily open or the live price; "Diario" = `engine.grid()`; "Semanal" = `engine.macro()`), two
+  `st.segmented_control` ("Intradía" = envelope, with an extra `st.radio` to center it on the
+  daily open or the live price; "Diario" = `engine.grid()`; "Mensual" = `engine.macro()`) — the
+  three options are named after each layer's TIMEFRAME, deliberately not after the calculation
+  (that's `NIVELES_LAYER_LABEL`'s job, in the chart legend and the confluences table). "Intradía"
+  dropped its old "H1" suffix because the envelope is identical on H1 and on 5 minutes, and
+  "Semanal" became "Mensual" (2026-08-29, user request). Note `src/niveles_calculados.py`'s own
+  docstring still calls that layer "(semanal)" — that file is kept byte-for-byte as delivered,
+  so the UI label is what changed, not the engine. Two
   parameter cards, resistance/support cards, then the "ladder": a 74px rail with each level drawn
   at its true price-proportional height next to fixed-height rows (`CRECE_ROW_HEIGHT_PX = 44`, the
   rail's height is `44 × len(levels)` so the two line up; the ladder caps at
