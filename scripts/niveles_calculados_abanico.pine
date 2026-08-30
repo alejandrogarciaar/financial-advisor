@@ -1,4 +1,12 @@
 //@version=6
+// 2026-08-30: portados los dos fixes del .py — ancla estructural (el minimo de la
+// ventana anual se valida como piso real y la ventana se extiende si es un artefacto
+// del borde; ademas la ventana ahora se mide en DIAS DE CALENDARIO, como decia la
+// etiqueta, y no en barras) y capa 4 (eje semanal = apertura semanal, con objetivos
+// = primer nivel de las capas 2/3 a cada lado — heuristica NO verificada).
+// El rango base automatico sigue siendo el rango del ano (no el primer impulso):
+// esa divergencia con el .py es previa y esta documentada; los modos automaticos
+// vienen apagados por defecto.
 indicator("Niveles Calculados (abanico)", shorttitle = "NC", overlay = true, max_lines_count = 500, max_labels_count = 500)
 
 grpA = "0 - Modo"
@@ -28,6 +36,11 @@ showMacro = input.bool(false, "Mostrar fracciones macro",  group = grpW)
 autoHigh  = input.bool(false, "Techo de ciclo automatico", group = grpW)
 manHigh   = input.float(126207.0, "Techo de ciclo manual", step = 1, group = grpW)
 
+grpS = "4 - Eje semanal"
+showWeekly = input.bool(true, "Mostrar eje semanal", group = grpS)
+showWeeklyObj = input.bool(true, "Mostrar objetivos semanales", group = grpS,
+     tooltip = "Primer nivel de las capas 2/3 a cada lado del eje. Heuristica NO verificada.")
+
 grpV = "Visual"
 filterMode = input.string("Rango visible", "Que niveles dibujar", options = ["Rango visible", "Distancia %", "Todos"], group = grpV)
 maxDistPct = input.float(4.0, "Distancia maxima al precio (%)", minval = 0.1, step = 0.5, group = grpV)
@@ -37,6 +50,10 @@ lineLenPct = input.int(25, "Longitud de las lineas (% del ancho visible)", minva
 startAtDay = input.bool(false, "Arrancar al inicio del dia en curso", group = grpV)
 showLbl  = input.bool(true, "Mostrar etiquetas",           group = grpV)
 lookback = input.int(365, "Ventana del minimo anual (dias)", minval = 30, group = grpV)
+structAnchor = input.bool(true, "Ancla estructural (extender si el minimo es el borde)", group = grpV,
+     tooltip = "Solo aplica con el ancla automatica: si en los 45 dias previos al inicio de la " +
+     "ventana hubo velas por debajo del minimo hallado, la ventana se agranda un ano hasta dar " +
+     "con un piso real.")
 showTable= input.bool(true, "Mostrar tabla de parametros", group = grpV)
 
 cBuy  = #3DD68C
@@ -51,6 +68,7 @@ isDaily    = tfMin >= 1440 and tfMin < 10080
 isHigher   = tfMin >= 10080
 
 envOn   = autoLayer ? isIntraday : showEnv
+weeklyOn = autoLayer ? not isHigher : showWeekly
 gridOn  = autoLayer ? (isDaily or isIntraday) : showGrid
 macroOn = autoLayer ? isHigher : showMacro
 gridDim = autoLayer and isIntraday
@@ -59,13 +77,49 @@ layerName = autoLayer ? (isIntraday ? "envolvente de sesion" : isDaily ? "rejill
 
 dOpen  = request.security(syminfo.tickerid, "D", open, lookahead = barmerge.lookahead_on)
 dPrev  = request.security(syminfo.tickerid, "D", close[1], lookahead = barmerge.lookahead_on)
+wOpen  = request.security(syminfo.tickerid, "W", open, lookahead = barmerge.lookahead_on)
 center = useDOpen ? dOpen : dPrev
 
-yLow  = request.security(syminfo.tickerid, "D", ta.lowest(low, lookback),   lookahead = barmerge.lookahead_on)
+// Ancla en contexto diario, por DIAS DE CALENDARIO (no barras) y con la
+// validacion estructural del .py (2026-08-30). Solo corre en la ultima barra.
+calcAnchor() =>
+    float aAnchor = na
+    if barstate.islast
+        int   maxScan = math.min(bar_index, 2000)
+        int   spanDays = lookback
+        float minLow  = low
+        bool  searching = true
+        while searching
+            int spanMs   = spanDays * 86400000
+            int startOff = 0
+            minLow := low
+            for i = 0 to maxScan
+                if time - time[i] > spanMs
+                    break
+                startOff := i
+                if low[i] < minLow
+                    minLow := low[i]
+            bool isFloor = true
+            if structAnchor and startOff < maxScan
+                float threshold = minLow * 1.02
+                for j = (startOff + 1) to maxScan
+                    if time[startOff] - time[j] > 45 * 86400000
+                        break
+                    if low[j] <= threshold
+                        isFloor := false
+                        break
+            if isFloor or startOff >= maxScan
+                searching := false
+            else
+                spanDays += lookback
+        aAnchor := minLow
+    aAnchor
+
+yLow  = request.security(syminfo.tickerid, "D", calcAnchor(), lookahead = barmerge.lookahead_on)
 yHigh = request.security(syminfo.tickerid, "D", ta.highest(high, lookback), lookahead = barmerge.lookahead_on)
 cHigh = request.security(syminfo.tickerid, "M", ta.highest(high, 24),       lookahead = barmerge.lookahead_on)
 
-anchor     = autoAnchor ? yLow : manAnchor
+anchor     = autoAnchor and not na(yLow) ? yLow : manAnchor
 baseRange  = autoBase   ? math.max(yHigh - anchor, syminfo.mintick) : manBase
 cycleHigh  = autoHigh   ? cHigh : manHigh
 macroRange = math.max(cycleHigh - anchor, syminfo.mintick)
@@ -172,7 +226,41 @@ if barstate.islast
             lvl = anchor + macroRange * p / 100
             addLevel(lvl, cGrid, "macro " + str.tostring(p) + "%  " + str.tostring(math.round(lvl)), p == 37.5 ? 2 : 1, p != 37.5)
 
-var table t = table.new(position.top_right, 2, 6, border_width = 1, frame_color = color.new(color.gray, 70), frame_width = 1)
+    // capa 4: eje semanal (verificado) + objetivos (heuristica NO verificada)
+    if weeklyOn and not na(wOpen)
+        addLevel(wOpen, #E8EDF5, "eje semanal  " + str.tostring(math.round(wOpen)), 2, false)
+        if showWeeklyObj and anchor > 0
+            float  objUp = na
+            float  objDn = na
+            string objUpTxt = ""
+            string objDnTxt = ""
+            if baseRange > 0
+                gsteps = array.from(0.0, 25.0, 50.0, 62.5, 75.0, 100.0, 125.0, 150.0, 175.0, 200.0, 225.0, 250.0, 275.0)
+                for i = 0 to array.size(gsteps) - 1
+                    gp  = array.get(gsteps, i)
+                    lvl = anchor + baseRange * gp / 100
+                    if lvl >= wOpen and (na(objUp) or lvl < objUp)
+                        objUp    := lvl
+                        objUpTxt := "rejilla " + str.tostring(gp) + "%"
+                    if lvl <= wOpen and (na(objDn) or lvl > objDn)
+                        objDn    := lvl
+                        objDnTxt := "rejilla " + str.tostring(gp) + "%"
+            if macroRange > 0
+                for i = 0 to 8
+                    mp  = i * 12.5
+                    lvl = anchor + macroRange * mp / 100
+                    if lvl >= wOpen and (na(objUp) or lvl < objUp)
+                        objUp    := lvl
+                        objUpTxt := "macro " + str.tostring(mp) + "%"
+                    if lvl <= wOpen and (na(objDn) or lvl > objDn)
+                        objDn    := lvl
+                        objDnTxt := "macro " + str.tostring(mp) + "%"
+            if not na(objUp)
+                addLevel(objUp, cSell, "1er obj alcista semanal (" + objUpTxt + ")  " + str.tostring(math.round(objUp)), 1, true)
+            if not na(objDn)
+                addLevel(objDn, cBuy, "1er obj bajista semanal (" + objDnTxt + ")  " + str.tostring(math.round(objDn)), 1, true)
+
+var table t = table.new(position.top_right, 2, 7, border_width = 1, frame_color = color.new(color.gray, 70), frame_width = 1)
 
 if barstate.islast and showTable
     devNow = (close - center) / center * 100
@@ -186,5 +274,7 @@ if barstate.islast and showTable
     table.cell(t, 1, 3, str.tostring(math.round(anchor)),    text_color = cBuy, text_size = size.tiny)
     table.cell(t, 0, 4, "rango base", text_color = color.gray, text_size = size.tiny)
     table.cell(t, 1, 4, str.tostring(math.round(baseRange)), text_color = cKey, text_size = size.tiny)
-    table.cell(t, 0, 5, "125%",       text_color = color.gray, text_size = size.tiny)
-    table.cell(t, 1, 5, str.tostring(math.round(anchor + baseRange * 1.25)), text_color = cKey, text_size = size.tiny)
+    table.cell(t, 0, 5, "eje semanal", text_color = color.gray, text_size = size.tiny)
+    table.cell(t, 1, 5, na(wOpen) ? "-" : str.tostring(math.round(wOpen)), text_color = #E8EDF5, text_size = size.tiny)
+    table.cell(t, 0, 6, "125%",       text_color = color.gray, text_size = size.tiny)
+    table.cell(t, 1, 6, str.tostring(math.round(anchor + baseRange * 1.25)), text_color = cKey, text_size = size.tiny)

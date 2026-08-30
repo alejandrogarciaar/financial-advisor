@@ -7,7 +7,7 @@ obtenida por ingenieria inversa de sus graficos publicos (BTC y ETH,
 27-29 agosto 2026; el 29-ago la envolvente PREDIJO los 7 anillos publicados
 antes del video, error max $1).
 
-El sistema tiene tres capas independientes que conviven en el grafico:
+El sistema tiene cuatro capas independientes que conviven en el grafico:
 
     1. ENVOLVENTE DE SESION  (intradia, cualquier temporalidad < 1D)
        centro  = apertura diaria (00:00 UTC)
@@ -17,11 +17,17 @@ El sistema tiene tres capas independientes que conviven en el grafico:
        nivel = ancla + n * 25% * rango_base   (con medio paso en 62.5%)
        ancla = minimo del ultimo ano; rango_base = primer impulso desde ahi.
 
-    3. FRACCIONES MACRO (semanal)
+    3. FRACCIONES MACRO (mensual en la UI)
        nivel = ancla + n * 12.5% * caida_macro
        caida_macro = techo de ciclo - ancla.
 
-Una cuarta capa (pivots trazados a mano) no es algoritmizable y queda fuera.
+    4. EJE SEMANAL
+       eje central = apertura semanal (lunes 00:00 UTC)
+       objetivos   = primer nivel de las capas 2/3 a cada lado del eje
+       (BTC 29-ago: eje publicado 77724 vs apertura semanal 77734 en Binance,
+       la misma brecha Bitstamp/Binance de 0.01% que la apertura diaria.)
+
+El resto de los pivots trazados a mano no es algoritmizable y queda fuera.
 
 AVISO
 -----
@@ -44,6 +50,7 @@ __all__ = [
     "session_envelope",
     "daily_grid",
     "macro_grid",
+    "weekly_axis",
     "LevelEngine",
     "nearest_levels",
     "format_levels",
@@ -225,6 +232,47 @@ def macro_grid(
     return sorted(levels, key=lambda lv: lv.price, reverse=True)
 
 
+# ------------------------------------------------------------------- capa 4 --
+
+
+def weekly_axis(weekly_open: float, *, reference: Optional[float] = None) -> list[Level]:
+    """Capa 4: eje central de la semana — la apertura semanal (lunes 00:00 UTC).
+
+    Verificado tres veces contra los graficos publicos: (1) BTC 29-ago-2026,
+    "Eje Central para la semana" 77724 = apertura semanal (Binance 77734,
+    0.013% — la brecha Bitstamp/Binance de siempre); (2) BTC semana del
+    17-ago, la linea magenta 62832 del 4h es literalmente el open de la vela
+    semanal de Bitstamp (O=62.832 visible en el header del 1S); (3) ETH, linea
+    "PAS" 2463.5 = apertura del lunes 24-ago (Binance 2463.4, 0.004%). Los objetivos semanales que lo acompanan salen de una heuristica
+    propia NO verificada — el primer nivel de las capas 2 y 3 a cada lado del
+    eje (ver `LevelEngine.weekly_objectives`): el "1er Objetivo Alcista Semanal"
+    del mismo grafico (83366) coincide con la fraccion macro 37.5% (83371), pero
+    la regla con la que el metodo original elige que nivel promover a objetivo
+    no se pudo confirmar (ese dia habia niveles diarios mas cercanos al eje).
+    """
+    if weekly_open <= 0:
+        raise ValueError("La apertura semanal debe ser positiva.")
+
+    ref = weekly_open if reference is None else reference
+    if weekly_open < ref * 0.995:
+        role = Role.BUY_ZONE
+    elif weekly_open > ref * 1.005:
+        role = Role.SELL_ZONE
+    else:
+        role = Role.NEUTRAL
+    return [
+        Level(
+            price=weekly_open,
+            label="eje",
+            layer="weekly",
+            pct=0.0,
+            role=role,
+            verified=True,
+            note="eje central de la semana - apertura semanal (lunes 00:00 UTC)",
+        )
+    ]
+
+
 # ---------------------------------------------------------------- utilidades --
 
 
@@ -267,6 +315,7 @@ class LevelEngine:
     year_low: Optional[float] = None
     base_range: Optional[float] = None
     macro_range: Optional[float] = None
+    weekly_open: Optional[float] = None
     _cache: dict = field(default_factory=dict, repr=False, compare=False)
 
     def envelope(self) -> list[Level]:
@@ -283,8 +332,30 @@ class LevelEngine:
             raise ValueError("Se requiere year_low para las fracciones macro.")
         return macro_grid(self.year_low, self.macro_range, reference=self.price)
 
+    def weekly(self) -> list[Level]:
+        if not self.weekly_open:
+            raise ValueError("Se requiere weekly_open para el eje semanal.")
+        return weekly_axis(self.weekly_open, reference=self.price)
+
+    def weekly_objectives(self) -> tuple[Optional[Level], Optional[Level]]:
+        """(1er objetivo bajista, 1er objetivo alcista) de la semana.
+
+        Heuristica propia, NO verificada: el primer nivel de las capas 2 y 3 a
+        cada lado del eje semanal. El "1er Objetivo Alcista Semanal" del grafico
+        del 29-ago (83366) coincide con la fraccion macro 37.5%, pero la regla
+        de seleccion del metodo original no se pudo confirmar — lo verificado es
+        el eje.
+        """
+        if not self.weekly_open:
+            raise ValueError("Se requiere weekly_open para los objetivos semanales.")
+        if not self.year_low:
+            raise ValueError("Se requieren las capas 2 y 3 para los objetivos semanales.")
+        return nearest_levels(self.grid() + self.macro(), self.weekly_open)
+
     def all_levels(self) -> list[Level]:
         out = list(self.envelope())
+        if self.weekly_open:
+            out += self.weekly()
         if self.year_low:
             out += self.grid() + self.macro()
         return sorted(out, key=lambda lv: lv.price, reverse=True)

@@ -9,7 +9,7 @@ Calcula, desde la terminal, los mismos niveles que muestra la pestana interna
 AUTOCONTENIDO A PROPOSITO: un solo archivo, cero dependencias externas (solo
 stdlib), sin importar nada de `src/`. Se puede copiar a cualquier carpeta o
 maquina con Python 3.9+ y correr tal cual. Dentro de este repo, la fuente de
-verdad para la app sigue siendo `src/niveles_calculados.py` (las tres formulas) y
+verdad para la app sigue siendo `src/niveles_calculados.py` (las cuatro capas) y
 `src/niveles_calculados_inputs.py` (la derivacion de las entradas); esto reproduce sus
 numeros, verificado nivel por nivel contra los 11 tickers de la app.
 
@@ -32,15 +32,20 @@ de Binance; cualquier otro simbolo, de la API publica de Yahoo Finance. Ninguna
 de las dos pide API key. Binance responde 451 desde IPs de datacenter (nube),
 asi que para cripto conviene correrlo desde una maquina propia.
 
-Las tres capas
---------------
+Las cuatro capas
+----------------
     1. ENVOLVENTE DE SESION
        centro = apertura diaria; anillos = centro * (1 +/- 0.382/1/1.5/2%)
     2. REJILLA DIARIA
        nivel = ancla + n * 25% del rango base   (con medio paso en 62.5%)
-       ancla = minimo del ultimo ano; rango base = primer impulso desde ahi
+       ancla = minimo estructural (la ventana anual se extiende hacia atras si
+       su minimo era un artefacto del borde; --ancla anual la deja fija);
+       rango base = primer impulso desde ahi
     3. FRACCIONES MACRO
        nivel = ancla + n * 12.5% de la caida macro (techo de ciclo - ancla)
+    4. EJE SEMANAL
+       eje central = apertura semanal (lunes 00:00 UTC); objetivos = primer
+       nivel de las capas 2/3 a cada lado del eje
 
 AVISO
 -----
@@ -177,11 +182,50 @@ def _year_window_start(candles: list[dict], year_days: int) -> int:
     return max(0, len(candles) - 1)
 
 
+def _structural_window_start(candles: list[dict], year_days: int, edge_days: int = 45, proximity_pct: float = 2.0):
+    """Inicio de la ventana del ancla, validado como piso estructural.
+
+    Si el activo subio todo el ano, el "minimo anual" es la primera vela de la
+    ventana — un artefacto del borde (oro, ago-2026: ancla 3400 justo en el
+    corte), que ademas salta cada dia al deslizarse la ventana. Validacion: las
+    velas de `edge_days` dias ANTES del inicio tienen que cotizar por encima del
+    minimo (margen `proximity_pct`); si no, se agranda la ventana un ano y se
+    repite. Devuelve (indice, dias de ventana, True si hubo que extender).
+    """
+    span = year_days
+    extended = False
+    start = _year_window_start(candles, span)
+    while start > 0:
+        window_low = min(float(c["low"]) for c in candles[start:])
+        threshold = window_low * (1 + proximity_pct / 100.0)
+        edge_start = _parse_date(candles[start].get("date"))
+        if edge_start is None:
+            edge = candles[max(0, start - edge_days) : start]
+        else:
+            edge_cutoff = edge_start - timedelta(days=edge_days)
+            edge = [
+                c
+                for c in candles[:start]
+                if (d := _parse_date(c.get("date"))) is not None and d >= edge_cutoff
+            ]
+        if all(float(c["low"]) > threshold for c in edge):
+            break
+        span += year_days
+        extended = True
+        new_start = _year_window_start(candles, span)
+        if new_start >= start:  # no queda mas historia hacia atras
+            start = new_start
+            break
+        start = new_start
+    return start, span, extended
+
+
 def infer_inputs(
     candles: list[dict],
     year_days: int = 365,
     retracement_pct: float = 50.0,
     min_reversal_pct: float = 15.0,
+    structural: bool = True,
 ) -> dict:
     """Deriva las 5 entradas del calculo desde las velas diarias.
 
@@ -198,7 +242,12 @@ def infer_inputs(
     price = float(candles[-1]["close"])
     daily_open = float(candles[-1]["open"])
 
-    window = candles[_year_window_start(candles, year_days) :]
+    if structural:
+        window_start, anchor_window_days, anchor_extended = _structural_window_start(candles, year_days)
+    else:
+        window_start = _year_window_start(candles, year_days)
+        anchor_window_days, anchor_extended = year_days, False
+    window = candles[window_start:]
     low_rel = min(range(len(window)), key=lambda i: float(window[i]["low"]))
     year_low = float(window[low_rel]["low"])
     if year_low <= 0:
@@ -223,6 +272,20 @@ def infer_inputs(
     cycle_idx = max(range(len(candles)), key=lambda i: float(candles[i]["high"]))
     cycle_high = float(candles[cycle_idx]["high"])
 
+    # Capa 4: apertura semanal = open de la primera vela de la semana ISO en curso
+    # (recorriendo hacia atras; cubre acciones con lunes feriado).
+    weekly_open = daily_open
+    weekly_open_date = str(candles[-1].get("date", ""))
+    last_date = _parse_date(candles[-1].get("date"))
+    if last_date is not None:
+        monday = last_date - timedelta(days=last_date.weekday())
+        for candle in reversed(candles):
+            parsed = _parse_date(candle.get("date"))
+            if parsed is None or parsed < monday:
+                break
+            weekly_open = float(candle["open"])
+            weekly_open_date = str(candle.get("date", ""))
+
     return {
         "price": price,
         "daily_open": daily_open,
@@ -236,6 +299,10 @@ def infer_inputs(
         "cycle_high": cycle_high,
         "cycle_high_date": candles[cycle_idx]["date"],
         "n_candles": len(candles),
+        "weekly_open": weekly_open,
+        "weekly_open_date": weekly_open_date,
+        "anchor_window_days": anchor_window_days,
+        "anchor_extended": anchor_extended,
     }
 
 
@@ -323,6 +390,40 @@ def macro_grid(anchor: float, macro_range: float, reference: float) -> list[dict
     return sorted(levels, key=lambda lv: lv["price"], reverse=True)
 
 
+def weekly_axis(weekly_open: float, reference: float, daily: list[dict], macro: list[dict]) -> list[dict]:
+    """Capa 4: eje central (apertura semanal) + primer objetivo de las capas 2/3 a cada lado.
+
+    El eje esta verificado tres veces: BTC 29-ago ("Eje Central para la semana"
+    77724 vs apertura semanal Binance 77734, 0.013%), BTC semana del 17-ago (la
+    linea magenta 62832 del 4h es el open de la vela semanal Bitstamp, visible
+    en el header del 1S) y ETH (linea "PAS" 2463.5 vs apertura del lunes 24-ago
+    Binance 2463.4, 0.004%). Los objetivos salen de una
+    heuristica propia NO verificada (el primer nivel de las capas 2/3 a cada
+    lado): el "1er Objetivo Alcista Semanal" de ese grafico (83366) coincide con
+    la fraccion macro 37.5% (83371), pero la regla con la que el metodo original
+    elige que nivel promover a objetivo no se pudo confirmar.
+    """
+    layer_name = {"daily": "rejilla diaria", "macro": "fraccion macro"}
+    if weekly_open < reference * 0.995:
+        role = "zona_compra"
+    elif weekly_open > reference * 1.005:
+        role = "zona_venta"
+    else:
+        role = "neutro"
+    levels = [
+        _level(weekly_open, "eje", "weekly", role, True,
+               "eje central de la semana - apertura semanal (lunes 00:00 UTC)")
+    ]
+    below, above = nearest_levels(daily + macro, weekly_open)
+    if below:
+        levels.append(_level(below["price"], "obj.baja", "weekly", "zona_compra", False,
+                             f"1er objetivo bajista semanal = {layer_name[below['layer']]} {below['label']}"))
+    if above:
+        levels.append(_level(above["price"], "obj.alza", "weekly", "zona_venta", False,
+                             f"1er objetivo alcista semanal = {layer_name[above['layer']]} {above['label']}"))
+    return sorted(levels, key=lambda lv: lv["price"], reverse=True)
+
+
 def nearest_levels(levels: list[dict], price: float):
     """(nivel inmediatamente por debajo, nivel inmediatamente por encima)."""
     below = above = None
@@ -350,8 +451,9 @@ def confluences(all_levels: list[dict], tolerance_pct: float = 0.15):
 
 LAYER_TITLE = {
     "envelope": "CAPA 1 - envolvente de sesion (intradia)",
+    "weekly": "CAPA 4 - eje semanal (apertura semanal + objetivos)",
     "daily": "CAPA 2 - rejilla diaria",
-    "macro": "CAPA 3 - fracciones macro (semanal)",
+    "macro": "CAPA 3 - fracciones macro (mensual)",
 }
 
 
@@ -381,15 +483,22 @@ def main(argv=None) -> int:
     ap.add_argument("--fuente", choices=["auto", "binance", "yahoo"], default="auto")
     ap.add_argument(
         "--capa",
-        choices=["todas", "intradia", "diaria", "macro"],
+        choices=["todas", "intradia", "diaria", "macro", "semanal"],
         default="todas",
         help="Que capa imprimir (default: todas).",
+    )
+    ap.add_argument(
+        "--ancla",
+        choices=["estructural", "anual"],
+        default="estructural",
+        help="'estructural' (default) extiende la ventana anual si su minimo es un artefacto del borde; 'anual' reproduce la ventana fija original.",
     )
     ap.add_argument("--retroceso", type=float, default=50.0, help="%% del avance que cierra el primer impulso (default 50).")
     ap.add_argument("--giro-minimo", type=float, default=15.0, help="%% de caida desde el techo para que ese retroceso cuente (default 15).")
     ap.add_argument("--ventana-anual", type=int, default=365, help="Dias de calendario del 'minimo anual' (default 365).")
     ap.add_argument("--precio", type=float, help="Sobrescribe el precio actual.")
     ap.add_argument("--apertura", type=float, help="Sobrescribe la apertura diaria.")
+    ap.add_argument("--apertura-semanal", type=float, dest="apertura_semanal", help="Sobrescribe la apertura semanal (eje central).")
     ap.add_argument("--minimo-anual", type=float, dest="minimo_anual", help="Sobrescribe el ancla.")
     ap.add_argument("--rango-base", type=float, dest="rango_base", help="Sobrescribe la amplitud del primer impulso.")
     ap.add_argument("--caida-macro", type=float, dest="caida_macro", help="Sobrescribe la caida macro.")
@@ -406,14 +515,18 @@ def main(argv=None) -> int:
         print(f"Sin velas para {args.simbolo}.", file=sys.stderr)
         return 1
 
-    inputs = infer_inputs(candles, args.ventana_anual, args.retroceso, args.giro_minimo)
+    inputs = infer_inputs(
+        candles, args.ventana_anual, args.retroceso, args.giro_minimo,
+        structural=args.ancla == "estructural",
+    )
     price = args.precio if args.precio else inputs["price"]
     daily_open = args.apertura if args.apertura else inputs["daily_open"]
     anchor = args.minimo_anual if args.minimo_anual else inputs["year_low"]
     base_range = args.rango_base if args.rango_base else inputs["base_range"]
     macro_range = args.caida_macro if args.caida_macro else inputs["macro_range"]
+    weekly_open = args.apertura_semanal if args.apertura_semanal else inputs["weekly_open"]
 
-    if min(price, daily_open, anchor, base_range, macro_range) <= 0:
+    if min(price, daily_open, weekly_open, anchor, base_range, macro_range) <= 0:
         print("Alguna entrada quedo en cero o negativa; revisa los valores manuales.", file=sys.stderr)
         return 1
 
@@ -423,7 +536,11 @@ def main(argv=None) -> int:
     print(line)
     print(f"  precio actual        {price:>15,.2f}")
     print(f"  apertura diaria      {daily_open:>15,.2f}")
-    print(f"  ancla (min. anual)   {anchor:>15,.2f}   {inputs['year_low_date']}")
+    print(f"  apertura semanal     {weekly_open:>15,.2f}   semana del {inputs['weekly_open_date']}")
+    ancla_nota = f"ventana {inputs['anchor_window_days']} dias"
+    if inputs["anchor_extended"]:
+        ancla_nota += " - extendida: el minimo anual era un artefacto del borde"
+    print(f"  ancla                {anchor:>15,.2f}   {inputs['year_low_date']} ({ancla_nota})")
     impulso = "impulso todavia abierto" if inputs["impulse_open"] else f"impulso hasta {inputs['base_top_date']}"
     print(f"  rango base           {base_range:>15,.2f}   techo {inputs['base_top']:,.2f} ({impulso})")
     print(f"  caida macro          {macro_range:>15,.2f}   techo de ciclo {inputs['cycle_high']:,.2f} ({inputs['cycle_high_date']})")
@@ -432,20 +549,23 @@ def main(argv=None) -> int:
     envelope = session_envelope(daily_open, price)
     daily = daily_grid(anchor, base_range)
     macro = macro_grid(anchor, macro_range, price)
+    weekly = weekly_axis(weekly_open, price, daily, macro)
     wanted = {
-        "todas": ["envelope", "daily", "macro"],
+        "todas": ["envelope", "weekly", "daily", "macro"],
         "intradia": ["envelope"],
+        "semanal": ["weekly"],
         "diaria": ["daily"],
         "macro": ["macro"],
     }[args.capa]
-    by_layer = {"envelope": envelope, "daily": daily, "macro": macro}
+    by_layer = {"envelope": envelope, "weekly": weekly, "daily": daily, "macro": macro}
 
     for layer in wanted:
         print(f"\n{LAYER_TITLE[layer]}")
         print("-" * 78)
         print(format_levels(by_layer[layer], price))
 
-    every = sorted(envelope + daily + macro, key=lambda lv: lv["price"], reverse=True)
+    eje = [lv for lv in weekly if lv["label"] == "eje"]
+    every = sorted(envelope + eje + daily + macro, key=lambda lv: lv["price"], reverse=True)
     below, above = nearest_levels(every, price)
     print("\n" + "-" * 78)
     if below:

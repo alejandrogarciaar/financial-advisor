@@ -674,3 +674,51 @@ wiring it:
   yearly window counted CANDLES, so for a stock (~252 trading days/year) "365" meant ~1.45 years.
   It now walks calendar dates (`_year_window_start()`); crypto is unaffected (1 candle = 1 day),
   verified by re-running all three coins before and after — identical anchors/ranges.
+- **2026-08-30: the two fixes that ended the "byte-for-byte" era of `src/niveles_calculados.py`.**
+  The user asked whether the standalone script computed the levels correctly "indiferente al
+  asset"; validating it against the channel's published charts across 4 assets (BTC 4h/1h/5m,
+  ETH 4h, gold GC1! 4h, NVDA 1D) found: capa 1 exact (12/12 rings, ≤$1, across two sessions —
+  only a 0.013–0.036% Bitstamp-vs-Binance open gap), capa 2's 25%-step GEOMETRY confirmed on BTC
+  (step 8,750 twice) and NVDA (step 18.98 twice) but with hand-picked anchors older than 365d
+  that `infer_inputs()` could not reach, and one new discovery: the chart's "Eje Central para la
+  semana" (77,724) is the WEEKLY OPEN (Binance 77,734 — same exchange gap). The user then
+  explicitly asked to apply two fixes ("si, aplica los dos fixes"), superseding the byte-for-byte
+  rule:
+  1. **Ancla estructural** (`_structural_window_start()` in `src/niveles_calculados_inputs.py` and the
+     script): the 365d-window min must be a real swing low — every candle in the 45 days BEFORE
+     the window start must sit above it (2% margin) — else the window extends a year at a time.
+     Real cases: gold's anchor was 3,400.00 dated exactly at the window edge (pure cutoff
+     artifact, would slide daily) → now 1,809.40 (2023-10-06, the true pre-rally floor, 1095d
+     window); NVDA 164.07 → 86.62 (2025-04-07 crash low, 730d); BTC unchanged at 57,800 (its
+     365d min is a genuine interior swing low). `structural_anchor=False` / `--ancla anual`
+     reproduce the old fixed window. This does NOT recover the channel's hand-picked anchors
+     (BTC ~35,000, NVDA ~132.9 — near real lows of nov-2023/ene-2025 but rounded by hand);
+     manual overrides remain the way to replicate a specific chart.
+  2. **Capa 4, eje semanal** (`weekly_axis()` + `LevelEngine.weekly_open`/`weekly()`/
+     `weekly_objectives()`): center = weekly open (first candle of the current ISO week, walking
+     back from the last candle so a Monday-holiday stock week still works), the ONLY verified
+     part of this layer. The side objectives — first daily/macro level each side of the axis —
+     are an UNVERIFIED heuristic: the chart's "1er Objetivo Alcista Semanal" (83,366) coincides
+     with macro 37.5% (83,371, 0.006% with the docstring's replication inputs), but the
+     selection rule couldn't be confirmed (that day daily-grid levels sat closer to the axis
+     than the level the channel promoted), so `verified=False` and every docstring says so.
+  UI: new "Semanal" tab in `NIV_LAYER_TABS` (name freed by the 2026-08-29 "Mensual" rename),
+  axis+objectives in the ladder, a 5th manual input (apertura semanal), and the inputs caption
+  now shows the anchor window and whether it was extended. The CLI gained `--capa semanal`,
+  `--apertura-semanal`, `--ancla {estructural,anual}`. Macro's "(semanal)" doc tag became
+  "(mensual)" to stop colliding with the new layer. Both `.pine` ports got the two fixes the same day (abanico's auto base range keeps its documented year-range divergence; Pine syntax must still be compiled in TradingView to be verified).
+- **2026-08-30, second validation round (5 more screenshots, 17–29 ago).** The user asked to keep
+  validating against more of the channel's charts. Results, all against Binance data (Bitstamp gap
+  0.004–0.05%): **envelope now verified on ETH too** — 8/8 rings of the 28-ago session (center
+  2511 = Binance open 2510.9), so capa 1 is confirmed cross-asset, not just BTC; BTC 28-ago upper
+  rings 4/4 exact and BTC 20-ago 6/6 exact (center 69298 = Bitstamp open; its +1% ring at 69991
+  sits on the grid's 69997 — a real on-chart confluence). **Weekly axis confirmed twice more,
+  once directly**: the BTC 1S chart's own header prints O=62.832 for the week of 17-ago — the
+  exact magenta line on the 4h chart — and ETH's "PAS" line 2463.5 is the Monday 24-ago open
+  (2463.4). **Capa 3's derivation confirmed by the trader's own measuring tool**: the 1S chart
+  shows a measurement of −68.537 (−54.28%) → implied cycle top 126,266 and anchor 57,729 — the
+  docstring's caida_macro=68537 exactly, i.e. techo de ciclo − minimo anual is literally how the
+  channel measures it on screen. Still unmapped (discretionary layer): the deep 1S blues
+  56750/51585/44100, the 65555 box, ETH's 2478.5 target, and "Tercer Objetivo = 68361" — which,
+  like the other Objetivos, is STATIC from at least 20-ago through 29-ago. The weekly_axis
+  docstrings in src/ and scripts/ now cite all three eje confirmations.

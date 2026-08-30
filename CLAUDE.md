@@ -513,10 +513,20 @@ BTC/ETH volatility, and a stock's "daily open" arrives after a 17-hour overnight
 would silently mean ~1.45 years for a stock (~252 trading days/year); for crypto both are
 identical, so nothing about BTC/ETH/SOL moved. `src/niveles_calculados.py` was delivered whole by the user (a
 reverse-engineered reconstruction of a YouTube channel's level algorithm: session envelope around
-the daily open, a 25%-step grid off the yearly low, 1/8 fractions of the cycle drawdown) and is
-**kept byte-for-byte as it arrived** — pure, I/O-free, no external deps; the bridge from a Binance
-daily series to its 5 inputs lives in a separate `src/niveles_calculados_inputs.py` precisely so that
-file stays untouched. **Descriptive and NOT validated out of sample** — no OOS study was even
+the daily open, a 25%-step grid off the yearly low, 1/8 fractions of the cycle drawdown). It was
+kept byte-for-byte until **2026-08-30**, when the user explicitly asked for two fixes that came out
+of validating the standalone script against the channel's charts across 4 assets (BTC/ETH/gold/
+NVDA): (1) a 4th layer, **eje semanal** — center = the weekly open, verified at 0.013% against the
+29-ago BTC chart's "Eje Central para la semana"; its side objectives (first daily/macro level each
+side of the axis) are an UNVERIFIED heuristic and are labeled as such — and (2) a **structural
+anchor** in `infer_inputs()` — the fixed 365-day-window min is validated as a real swing low and
+the window auto-extends a year at a time when that min is a window-edge artifact (gold's
+3400-at-the-cutoff case; it finds 1809.40 of oct-2023 instead), with `structural_anchor=False` /
+the CLI's `--ancla anual` reproducing the old behavior. Still pure, I/O-free, no external deps; the
+bridge from a Binance daily series to its 6 inputs lives in the separate
+`src/niveles_calculados_inputs.py`. The UI gained a "Semanal" layer tab (the name was free — macro's
+tab was renamed "Mensual" 2026-08-29). Both `.pine` ports in `scripts/` got the same two fixes the same day (the
+abanico's auto base range still uses the year range — its pre-existing, documented divergence). **Descriptive and NOT validated out of sample** — no OOS study was even
 attempted, and a dense 31-level grid hits touches by construction, which the UI says in an
 `st.warning`; don't add a `*_VALIDATED_*` constant, an `st.success`, or wire these levels into the
 DCA box or the Zone Engine without running this project's usual 60/40 study first. The section is

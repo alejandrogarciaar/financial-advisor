@@ -191,11 +191,15 @@ config + tab wiring). This tab's code lives in `src/ui/cripto.py`:
   only the extra caveat stocks need.
   The engine itself is `src/niveles_calculados.py`, delivered verbatim by the user (reverse-engineered
   reconstruction of the Crecetrader channel's level algorithm: session envelope around the daily
-  open, 25%-steps daily grid off the yearly low, 1/8 macro fractions of the cycle drawdown). That
-  file is **kept byte-for-byte as it arrived** — pure, I/O-free, zero external deps. The bridge
-  from a Binance daily series to its 5 inputs lives in a SEPARATE module,
-  `src/niveles_calculados_inputs.py` (`infer_inputs()`/`InferredInputs`), precisely so the delivered file
-  stays untouched; don't fold it back in.
+  open, 25%-steps daily grid off the yearly low, 1/8 macro fractions of the cycle drawdown). It was
+  kept byte-for-byte until 2026-08-30, when the user explicitly asked for two fixes (see design-
+  history): a 4th layer — `weekly_axis()`, eje semanal = the weekly open, verified 0.013% vs the
+  29-ago chart; its side objectives (`LevelEngine.weekly_objectives()`, first daily/macro level
+  each side) are an UNVERIFIED heuristic — and a structural anchor in `infer_inputs()`
+  (`_structural_window_start()`: the 365d-window min must be a real swing low, else the window
+  auto-extends; `structural_anchor=False` keeps the old fixed window). Still pure, I/O-free, zero
+  external deps; the bridge from a Binance daily series to its 6 inputs stays in the SEPARATE
+  `src/niveles_calculados_inputs.py` (`infer_inputs()`/`InferredInputs`); don't fold it back in.
   **Descriptive, NOT validated out-of-sample** — the strongest disclaimer in this tab: a dense
   grid hits touches by construction, and the UI says so in an `st.warning`. Same standing as ADX/
   OBV/Fear & Greed but weaker, since no OOS study was even attempted. Do NOT add a validated-
@@ -217,13 +221,14 @@ config + tab wiring). This tab's code lives in `src/ui/cripto.py`:
   deliberate exception, not a new house style, and the surrounding captions/warnings stay native
   so they follow the user's Streamlit theme. Layout: one layer at a time via
   `st.segmented_control` ("Intradía" = envelope, with an extra `st.radio` to center it on the
-  daily open or the live price; "Diario" = `engine.grid()`; "Mensual" = `engine.macro()`) — the
-  three options are named after each layer's TIMEFRAME, deliberately not after the calculation
+  daily open or the live price; "Semanal" = `engine.weekly()` + `engine.weekly_objectives()`;
+  "Diario" = `engine.grid()`; "Mensual" = `engine.macro()`) — the
+  options are named after each layer's TIMEFRAME, deliberately not after the calculation
   (that's `NIVELES_LAYER_LABEL`'s job, in the chart legend and the confluences table). "Intradía"
   dropped its old "H1" suffix because the envelope is identical on H1 and on 5 minutes, and
-  "Semanal" became "Mensual" (2026-08-29, user request). Note `src/niveles_calculados.py`'s own
-  docstring still calls that layer "(semanal)" — that file is kept byte-for-byte as delivered,
-  so the UI label is what changed, not the engine. Two
+  "Semanal" became "Mensual" (2026-08-29, user request), which freed the "Semanal" name for the
+  new weekly-axis layer added 2026-08-30 (the engine docstring's "(semanal)" tag on macro was
+  updated to "(mensual en la UI)" at the same time). Two
   parameter cards, resistance/support cards, then the "ladder": a 74px rail with each level drawn
   at its true price-proportional height next to fixed-height rows (`CRECE_ROW_HEIGHT_PX = 44`, the
   rail's height is `44 × len(levels)` so the two line up; the ladder caps at

@@ -1,6 +1,6 @@
 //@version=6
 // =============================================================================
-//  NIVELES CALCULADOS - 3 capas
+//  NIVELES CALCULADOS - 4 capas
 // =============================================================================
 //  Capa 1  ENVOLVENTE DE SESION (intradia, cualquier TF < 1D)
 //          centro  = apertura diaria (00:00 UTC)
@@ -11,6 +11,12 @@
 //  Capa 3  FRACCIONES MACRO
 //          nivel = ancla + n * 12.5% * caida_macro
 //          caida_macro = techo de ciclo - ancla
+//  Capa 4  EJE SEMANAL
+//          eje central = apertura semanal (verificado: BTC 29-ago-2026, eje
+//          publicado 77724 vs apertura semanal 77734 - brecha de exchange).
+//          Objetivos = primer nivel de las capas 2/3 a cada lado del eje;
+//          heuristica propia NO verificada (la regla con la que el metodo
+//          original elige que nivel promover a objetivo no se pudo confirmar).
 //
 //  Esta version alinea el modo AUTOMATICO con la implementacion de referencia
 //  (scripts/niveles_calculados.py). Tres cambios respecto de la version previa:
@@ -39,6 +45,21 @@
 //  Extras: techo de ciclo sobre toda la historia disponible (antes 24 meses),
 //  precios con la precision del simbolo (antes redondeados a entero), rol
 //  tambien en la capa macro, y soporte/resistencia mas proximos en la tabla.
+//
+//  2026-08-30 - dos fixes portados del .py (mismo dia que en la app):
+//
+//   4. ANCLA ESTRUCTURAL.  El minimo de la ventana anual tiene que ser un piso
+//      real: las velas de los `edgeDays` dias ANTERIORES al inicio de la
+//      ventana deben cotizar por encima de el (margen `proximityPct`). Si no,
+//      el "minimo anual" es un artefacto del corte (oro ago-2026: ancla 3400
+//      justo en el borde, que ademas saltaba cada dia al deslizarse la
+//      ventana) y la ventana se agranda un ano y se reintenta, hasta hallar un
+//      piso o agotar la historia escaneada (~2000 barras diarias, como los 5
+//      anos del .py). Desactivable para reproducir la ventana fija original.
+//
+//   5. CAPA 4 - EJE SEMANAL.  Centro = apertura semanal (request.security "W").
+//      Los objetivos semanales son el primer nivel de las capas 2/3 a cada
+//      lado del eje - heuristica NO verificada, y las etiquetas lo dicen.
 //
 //  AVISO: reproduce COMO se generan los niveles; no implica poder predictivo.
 //         Una rejilla densa acierta toques por construccion, y nada de esto se
@@ -83,12 +104,28 @@ minReversalPct = input.float(15.0, "Giro minimo para que ese retroceso cuente (%
      minval = 1, maxval = 50, step = 1, group = grpI,
      tooltip = "Las dos condiciones se exigen juntas. Bajarlo mucho cierra el impulso " +
      "con cualquier mecha; subirlo mucho lo deja abierto para siempre.")
+structAnchor = input.bool(true, "Ancla estructural (extender la ventana si el minimo es el borde)",
+     group = grpI,
+     tooltip = "Como el .py: si en los dias previos al inicio de la ventana hubo velas por " +
+     "debajo del minimo hallado, ese minimo es un artefacto del corte y la ventana se " +
+     "agranda un ano hasta dar con un piso real. Desactivado = ventana fija original.")
+edgeDays = input.int(45, "Dias previos al corte a validar", minval = 5, maxval = 365, group = grpI)
+proximityPct = input.float(2.0, "Margen de validacion del piso (%)", minval = 0, maxval = 10,
+     step = 0.5, group = grpI)
 
 grpW = "3 - Fracciones macro"
 showMacro = input.bool(false, "Mostrar fracciones macro",  group = grpW)
 autoHigh  = input.bool(true,  "Techo de ciclo automatico", group = grpW,
      tooltip = "Maximo de toda la historia disponible del simbolo.")
 manHigh   = input.float(126207.0, "Techo de ciclo manual", step = 1, group = grpW)
+
+grpS = "4 - Eje semanal"
+showWeekly = input.bool(true, "Mostrar eje semanal", group = grpS,
+     tooltip = "Eje central de la semana = apertura semanal. En capa automatica se muestra " +
+     "en intradia y diario (en semanal o mayor coincide con la barra en curso).")
+showWeeklyObj = input.bool(true, "Mostrar objetivos semanales", group = grpS,
+     tooltip = "Primer nivel de las capas 2/3 a cada lado del eje. HEURISTICA NO VERIFICADA: " +
+     "lo verificado contra el grafico de referencia es el eje, no la regla de los objetivos.")
 
 grpV = "Visual"
 lineLenPct = input.int(25, "Longitud de las lineas (% del ancho visible)",
@@ -103,6 +140,7 @@ cSell = #F0616D
 cMid  = #B48CF2
 cGrid = #39C3D6
 cKey  = #F7931A
+cAxis = #E8EDF5
 
 // ------------------------------------------------------ capa por timeframe ---
 tfMin      = timeframe.in_seconds(timeframe.period) / 60.0
@@ -111,6 +149,7 @@ isDaily    = tfMin >= 1440 and tfMin < 10080
 isHigher   = tfMin >= 10080
 
 envOn   = autoLayer ? isIntraday : showEnv
+weeklyOn = autoLayer ? not isHigher : showWeekly
 gridOn  = autoLayer ? (isDaily or isIntraday) : showGrid
 macroOn = autoLayer ? isHigher : showMacro
 gridDim = autoLayer and isIntraday
@@ -129,22 +168,52 @@ calcInputs() =>
     float aAnchor  = na
     float aBase    = na
     bool  aOpen    = true
+    int   aSpan    = lookbackDays
+    bool  aExt     = false
 
-    // Los dos bucles solo se corren en la ultima barra diaria: es lo unico que
+    // Los bucles solo se corren en la ultima barra diaria: es lo unico que
     // se dibuja, y hacerlo en cada barra multiplicaria ~700 iteraciones por cada
     // dia de historia del simbolo.
     if barstate.islast
-        int   lookbackMs = lookbackDays * 86400000
-        int   maxScan    = math.min(bar_index, 2000)
-        float minLow     = low
-        int   minOff     = 0
-        for i = 0 to maxScan
-            if time - time[i] > lookbackMs
-                break
-            if low[i] < minLow
-                minLow := low[i]
-                minOff := i
-        aAnchor    := minLow
+        int   maxScan = math.min(bar_index, 2000)
+        float minLow  = low
+        int   minOff  = 0
+
+        // Ancla estructural (fix 2026-08-30, igual que el .py): el minimo de la
+        // ventana tiene que ser un piso real — las velas de `edgeDays` dias
+        // ANTES del inicio de la ventana deben cotizar por encima (margen
+        // `proximityPct`). Si no, es un artefacto del corte y la ventana se
+        // agranda un ano y se reintenta, hasta hallar un piso o agotar las
+        // ~2000 barras escaneadas (equivalen a los ~5 anos del .py).
+        bool searching = true
+        while searching
+            int spanMs   = aSpan * 86400000
+            int startOff = 0
+            minLow := low
+            minOff := 0
+            for i = 0 to maxScan
+                if time - time[i] > spanMs
+                    break
+                startOff := i
+                if low[i] < minLow
+                    minLow := low[i]
+                    minOff := i
+            bool isFloor = true
+            if structAnchor and startOff < maxScan
+                float threshold = minLow * (1 + proximityPct / 100)
+                int   edgeMs    = edgeDays * 86400000
+                for j = (startOff + 1) to maxScan
+                    if time[startOff] - time[j] > edgeMs
+                        break
+                    if low[j] <= threshold
+                        isFloor := false
+                        break
+            if isFloor or startOff >= maxScan
+                searching := false
+            else
+                aSpan += lookbackDays
+                aExt  := true
+        aAnchor := minLow
 
         // Primer impulso: desde la barra del ancla hacia el presente.
         // El techo sale del `high` (la amplitud va del minimo al maximo tocado);
@@ -161,12 +230,13 @@ calcInputs() =>
                     break
         aBase := top - minLow
 
-    [aAnchor, aBase, allTimeHigh, aOpen ? 1 : 0]
+    [aAnchor, aBase, allTimeHigh, aOpen ? 1 : 0, aSpan, aExt ? 1 : 0]
 
-[autoAnchorVal, autoBaseVal, autoCycleVal, impulseOpenFlag] =
+[autoAnchorVal, autoBaseVal, autoCycleVal, impulseOpenFlag, anchorSpanDays, anchorExtFlag] =
      request.security(syminfo.tickerid, "D", calcInputs(), lookahead = barmerge.lookahead_on)
 
 dOpen  = request.security(syminfo.tickerid, "D", open,     lookahead = barmerge.lookahead_on)
+wOpen  = request.security(syminfo.tickerid, "W", open,     lookahead = barmerge.lookahead_on)
 dPrev  = request.security(syminfo.tickerid, "D", close[1], lookahead = barmerge.lookahead_on)
 center = useDOpen ? dOpen : dPrev
 
@@ -269,6 +339,8 @@ if barstate.islast
         if macroOn and anchor > 0 and macroRange > 0
             for i = 0 to array.size(macroSteps) - 1
                 scanNear(anchor + macroRange * array.get(macroSteps, i) / 100)
+        if weeklyOn and not na(wOpen)
+            scanNear(wOpen)
 
     // ---- capa 1: envolvente de sesion --------------------------------------
     if envOn and not na(center)
@@ -308,25 +380,65 @@ if barstate.islast
             addLevel(lvl, cGrid, "macro " + str.tostring(p) + "%  " + fmt(lvl) + roleTxt(lvl),
                  p == 37.5 ? 2 : 1, p != 37.5)
 
+    // ---- capa 4: eje semanal (fix 2026-08-30) ------------------------------
+    // Eje = apertura semanal (lo unico verificado de esta capa). Objetivos =
+    // primer nivel de las capas 2/3 a cada lado del eje, se muestren o no esas
+    // capas — HEURISTICA NO VERIFICADA, igual que en el .py.
+    if weeklyOn and not na(wOpen)
+        addLevel(wOpen, cAxis, "eje semanal  " + fmt(wOpen) + roleTxt(wOpen), 2, false)
+        if showWeeklyObj and anchor > 0
+            float  objUp    = na
+            float  objDn    = na
+            string objUpTxt = ""
+            string objDnTxt = ""
+            if baseRange > 0
+                for i = 0 to array.size(gridSteps) - 1
+                    p   = array.get(gridSteps, i)
+                    lvl = anchor + baseRange * p / 100
+                    if lvl >= wOpen and (na(objUp) or lvl < objUp)
+                        objUp    := lvl
+                        objUpTxt := "rejilla " + str.tostring(p) + "%"
+                    if lvl <= wOpen and (na(objDn) or lvl > objDn)
+                        objDn    := lvl
+                        objDnTxt := "rejilla " + str.tostring(p) + "%"
+            if macroRange > 0
+                for i = 0 to array.size(macroSteps) - 1
+                    p   = array.get(macroSteps, i)
+                    lvl = anchor + macroRange * p / 100
+                    if lvl >= wOpen and (na(objUp) or lvl < objUp)
+                        objUp    := lvl
+                        objUpTxt := "macro " + str.tostring(p) + "%"
+                    if lvl <= wOpen and (na(objDn) or lvl > objDn)
+                        objDn    := lvl
+                        objDnTxt := "macro " + str.tostring(p) + "%"
+            if not na(objUp)
+                addLevel(objUp, cSell, "1er obj alcista semanal (" + objUpTxt + ")  " + fmt(objUp), 1, true)
+            if not na(objDn)
+                addLevel(objDn, cBuy, "1er obj bajista semanal (" + objDnTxt + ")  " + fmt(objDn), 1, true)
+
 // ------------------------------------------------------------- diagnostico ---
-var table t = table.new(position.top_right, 2, 8, border_width = 1,
+var table t = table.new(position.top_right, 2, 9, border_width = 1,
      frame_color = color.new(color.gray, 70), frame_width = 1)
 
 if barstate.islast and showTable
     impulsoTxt = autoBase ? (impulseOpenFlag == 1 ? "abierto" : "cerrado") : "manual"
     table.cell(t, 0, 0, "capa",       text_color = color.gray, text_size = size.tiny)
     table.cell(t, 1, 0, layerName,    text_color = color.new(color.white, 20), text_size = size.tiny)
+    anclaTxt = fmt(anchor) + (autoAnchor ? "  (" + str.tostring(anchorSpanDays) + "d" +
+         (anchorExtFlag == 1 ? ", extendida" : "") + ")" : "")
     table.cell(t, 0, 1, "ancla",      text_color = color.gray, text_size = size.tiny)
-    table.cell(t, 1, 1, fmt(anchor),  text_color = cBuy, text_size = size.tiny)
+    table.cell(t, 1, 1, anclaTxt,     text_color = cBuy, text_size = size.tiny)
     table.cell(t, 0, 2, "rango base", text_color = color.gray, text_size = size.tiny)
     table.cell(t, 1, 2, fmt(baseRange) + " (" + impulsoTxt + ")", text_color = cKey, text_size = size.tiny)
     table.cell(t, 0, 3, "caida macro", text_color = color.gray, text_size = size.tiny)
     table.cell(t, 1, 3, fmt(macroRange), text_color = cGrid, text_size = size.tiny)
     table.cell(t, 0, 4, "centro",     text_color = color.gray, text_size = size.tiny)
     table.cell(t, 1, 4, fmt(center),  text_color = cMid, text_size = size.tiny)
-    table.cell(t, 0, 5, "125%",       text_color = color.gray, text_size = size.tiny)
-    table.cell(t, 1, 5, fmt(anchor + baseRange * 1.25), text_color = cKey, text_size = size.tiny)
-    table.cell(t, 0, 6, "resistencia", text_color = color.gray, text_size = size.tiny)
-    table.cell(t, 1, 6, na(array.get(near, 1)) ? "-" : fmt(array.get(near, 1)), text_color = cSell, text_size = size.tiny)
-    table.cell(t, 0, 7, "soporte",    text_color = color.gray, text_size = size.tiny)
-    table.cell(t, 1, 7, na(array.get(near, 0)) ? "-" : fmt(array.get(near, 0)), text_color = cBuy, text_size = size.tiny)
+    table.cell(t, 0, 5, "eje semanal", text_color = color.gray, text_size = size.tiny)
+    table.cell(t, 1, 5, na(wOpen) ? "-" : fmt(wOpen), text_color = cAxis, text_size = size.tiny)
+    table.cell(t, 0, 6, "125%",       text_color = color.gray, text_size = size.tiny)
+    table.cell(t, 1, 6, fmt(anchor + baseRange * 1.25), text_color = cKey, text_size = size.tiny)
+    table.cell(t, 0, 7, "resistencia", text_color = color.gray, text_size = size.tiny)
+    table.cell(t, 1, 7, na(array.get(near, 1)) ? "-" : fmt(array.get(near, 1)), text_color = cSell, text_size = size.tiny)
+    table.cell(t, 0, 8, "soporte",    text_color = color.gray, text_size = size.tiny)
+    table.cell(t, 1, 8, na(array.get(near, 0)) ? "-" : fmt(array.get(near, 0)), text_color = cBuy, text_size = size.tiny)

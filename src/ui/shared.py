@@ -486,9 +486,10 @@ def render_advanced_levels_chart(
 # mismo trade-off que ya arrastra toda la app con este set de hues, no algo nuevo de esta sección;
 # cambiarlo solo acá rompería la consistencia con las otras secciones de la pestaña.
 NIVELES_PRICE_COLOR = "#2a78d6"
-NIVELES_LAYER_COLOR = {"envelope": "#eb6834", "daily": "#1baf7a", "macro": "#8a2be2"}
+NIVELES_LAYER_COLOR = {"envelope": "#eb6834", "weekly": "#2f7fd4", "daily": "#1baf7a", "macro": "#8a2be2"}
 NIVELES_LAYER_LABEL = {
     "envelope": "Envolvente de sesión",
+    "weekly": "Eje semanal",
     "daily": "Rejilla diaria",
     "macro": "Fracciones macro",
 }
@@ -532,9 +533,18 @@ NIV_LAYER_TABS = {
         "Regla confirmada en dos jornadas distintas contra los gráficos de referencia, con 15 "
         "niveles exactos a ±$1, idéntica en H1 y en 5 minutos.",
     ),
+    "Semanal": (
+        "weekly",
+        "Eje central de la semana: la apertura semanal (lunes 00:00 UTC), verificada contra el "
+        "gráfico del 29-ago (77.724 publicado vs 77.734 en Binance, 0.013% — la misma brecha "
+        "Bitstamp/Binance de la apertura diaria). Los objetivos semanales no llevan fórmula "
+        "propia: son el primer nivel de las capas Diario y Mensual a cada lado del eje — "
+        "heurística no verificada; lo verificado es el eje.",
+    ),
     "Diario": (
         "daily",
-        "Rejilla anclada al mínimo anual con pasos de 25% del rango base. 7 niveles verificados "
+        "Rejilla con pasos de 25% del rango base sobre el ancla (el mínimo anual, con la ventana "
+        "extendida hacia atrás si ese mínimo era un artefacto del borde). 7 niveles verificados "
         "contra los gráficos de referencia, incluida la predicción algebraica del 125%.",
     ),
     "Mensual": (
@@ -594,6 +604,8 @@ def _niv_level_color(layer: str, lv: Level) -> str:
     la capa, y siempre viaja junto al texto del nivel, nunca solo."""
     if layer == "envelope":
         return NIV_C["purple"] if lv.label == "centro" else NIV_C["dim"]
+    if layer == "weekly":
+        return NIV_C["purple"] if lv.layer == "weekly" else NIV_C["cyan"]
     if layer == "macro":
         return NIV_C["cyan"] if lv.verified else NIV_C["dim"]
     if lv.pct in (175.0, 225.0):
@@ -769,7 +781,15 @@ def render_niveles_calculados(
             return
 
         st.caption(
-            f"**Ancla (mínimo anual):** ${inferred.year_low:,.2f} ({inferred.year_low_date}) · "
+            f"**Ancla:** ${inferred.year_low:,.2f} ({inferred.year_low_date}, ventana de "
+            f"{inferred.anchor_window_days} días"
+            + (
+                " — extendida: el mínimo de 365 días era un artefacto del borde de la ventana"
+                if inferred.anchor_extended
+                else ""
+            )
+            + ") · "
+            f"**Apertura semanal:** ${inferred.weekly_open:,.2f} ({inferred.weekly_open_date}) · "
             f"**Techo del primer impulso:** ${inferred.base_range_top:,.2f} "
             f"({inferred.base_range_top_date}"
             + (", impulso todavía abierto" if inferred.impulse_open else "")
@@ -788,6 +808,7 @@ def render_niveles_calculados(
             ),
         )
         daily_open = inferred.daily_open
+        weekly_open = inferred.weekly_open
         year_low = inferred.year_low
         base_range = inferred.base_range
         macro_range = inferred.macro_range
@@ -801,7 +822,7 @@ def render_niveles_calculados(
                 "Apertura diaria (00:00 UTC)", value=float(inferred.daily_open), min_value=0.0, format="%.2f"
             )
             year_low = man_col2.number_input(
-                "Mínimo anual (ancla)", value=float(inferred.year_low), min_value=0.0, format="%.2f"
+                "Ancla (mínimo estructural)", value=float(inferred.year_low), min_value=0.0, format="%.2f"
             )
             base_range = man_col1.number_input(
                 "Rango base (primer impulso)", value=float(inferred.base_range), min_value=0.0, format="%.2f"
@@ -809,8 +830,11 @@ def render_niveles_calculados(
             macro_range = man_col2.number_input(
                 "Caída macro (techo de ciclo − ancla)", value=float(inferred.macro_range), min_value=0.0, format="%.2f"
             )
+            weekly_open = man_col1.number_input(
+                "Apertura semanal (eje central)", value=float(inferred.weekly_open), min_value=0.0, format="%.2f"
+            )
 
-    if year_low <= 0 or base_range <= 0 or macro_range <= 0 or daily_open <= 0:
+    if year_low <= 0 or base_range <= 0 or macro_range <= 0 or daily_open <= 0 or weekly_open <= 0:
         st.caption(
             "Alguna de las entradas quedó en cero o negativa — no se puede armar la rejilla con "
             "esos valores. Revisá los campos manuales."
@@ -820,6 +844,7 @@ def render_niveles_calculados(
     engine = LevelEngine(
         price=current_price,
         daily_open=daily_open,
+        weekly_open=weekly_open,
         year_low=year_low,
         base_range=base_range,
         macro_range=macro_range,
@@ -857,10 +882,31 @@ def render_niveles_calculados(
             ),
             ("Anillos", "± 0.382 / 1 / 1.5 / 2%", "verificados al $1 — 27 y 28-ago", NIV_C["btc"]),
         ]
+    elif layer == "weekly":
+        w_below, w_above = engine.weekly_objectives()
+        levels = sorted(
+            engine.weekly() + [lv for lv in (w_below, w_above) if lv is not None],
+            key=lambda lv: lv.price,
+            reverse=True,
+        )
+        params = [
+            (
+                "Eje central de la semana",
+                f"${weekly_open:,.2f}",
+                f"apertura semanal — {inferred.weekly_open_date}" if not manual else "valor cargado a mano",
+                NIV_C["purple"],
+            ),
+            (
+                "Objetivos semanales",
+                "1er nivel a cada lado",
+                "de las capas Diario y Mensual — heurística no verificada",
+                NIV_C["cyan"],
+            ),
+        ]
     elif layer == "daily":
         levels = engine.grid()
         params = [
-            ("Ancla (mínimo anual)", f"${year_low:,.2f}", f"onda V — {inferred.year_low_date}", NIV_C["green"]),
+            ("Ancla", f"${year_low:,.2f}", f"onda V — {inferred.year_low_date}", NIV_C["green"]),
             (
                 "Rango base (Fase 1)",
                 f"${base_range:,.2f}",
@@ -883,7 +929,7 @@ def render_niveles_calculados(
                 "diaria reescalada, no una lectura independiente."
             )
         params = [
-            ("Ancla (mínimo anual)", f"${year_low:,.2f}", f"onda V — {inferred.year_low_date}", NIV_C["green"]),
+            ("Ancla", f"${year_low:,.2f}", f"onda V — {inferred.year_low_date}", NIV_C["green"]),
             (
                 "Caída macro (rango)",
                 f"${macro_range:,.2f}",
@@ -945,7 +991,7 @@ def render_niveles_calculados(
     html = (
         NIV_CSS
         + '<div class="niv-wrap">'
-        + '<div class="niv-kicker">Niveles calculados — 3 capas</div>'
+        + '<div class="niv-kicker">Niveles calculados — 4 capas</div>'
         + f'<div class="niv-h1">Niveles calculados <span>{ticker}</span> '
         + f'<span class="niv-mono" style="font-size:20px;color:{NIV_C["text"]};">${current_price:,.2f}</span></div>'
         + '<div class="niv-cards">'
@@ -956,12 +1002,14 @@ def render_niveles_calculados(
         + _near_card("Soporte próximo", below, NIV_C["green"])
         + "</div>"
         + _niv_ladder_html(layer, shown, current_price, near)
-        + '<div class="niv-foot">Tres capas reconstruidas por ingeniería inversa de gráficos '
+        + '<div class="niv-foot">Cuatro capas reconstruidas por ingeniería inversa de gráficos '
         "públicos: "
         "intradía (envolvente sobre la apertura diaria, 15 niveles verificados), diaria (pasos de "
-        "25% del rango base sobre el mínimo anual, 7 verificados) y mensual (fracciones de 12.5% "
-        "de la caída macro, 1 verificado). Algunos niveles de esa última capa en el método original son pivots "
-        "discrecionales, no automatizables. Si el mínimo anual cambia, hay que recalibrar. Las "
+        "25% del rango base sobre el ancla, 7 verificados), mensual (fracciones de 12.5% "
+        "de la caída macro, 1 verificado) y semanal (eje central = apertura semanal, verificado "
+        "al 0.013% contra el gráfico del 29-ago; sus objetivos, primer nivel de las otras capas "
+        "a cada lado, son heurística no verificada). Algunos niveles de esa última capa en el método original son pivots "
+        "discrecionales, no automatizables. Si el ancla cambia, hay que recalibrar. Las "
         "etiquetas ZONA COMPRA / ZONA VENTA describen el rol que cada nivel tiene dentro del "
         "método replicado (refugios donde el método busca rebotes, objetivos donde toma beneficios); "
         "no son "
