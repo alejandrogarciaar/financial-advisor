@@ -762,3 +762,45 @@ wiring it:
   four sessions), and none of them — including the "institutional Fibonacci" ring — anticipates
   forward returns better than arbitrary levels of equal density. Reproduction ≠ prediction is
   now the section's measured conclusion.
+
+- **2026-08-31, `scripts/niveles_calculados_v2.pine`: Elliott waves as a 5th layer, in a NEW
+  file — v1 stays frozen.** The user asked whether Elliott waves can be defined and added to the
+  Pine script, and to do it as a v2 because v1 is immutable. Answer given: yes, but only a
+  BOUNDED Elliott. What is genuinely objective and got implemented — the 3 hard impulse rules
+  (wave 2 doesn't fully retrace wave 1; wave 3 isn't the shortest of 1/3/5; wave 4 doesn't
+  overlap wave 1's territory), the usual inter-wave Fibonacci proportions, and the exact price
+  that INVALIDATES the current count (the most useful output: it doesn't claim where price goes,
+  it says where the reading stops being valid). What is NOT objective and is therefore resolved
+  by convention, stated in the file's header — which pivot counts as a pivot (Elliott is fractal
+  and defines no scale, so the zigzag threshold IS the count), the wave's degree (this layer
+  counts on the CHART's timeframe, unlike layers 1-4 which always derive from the daily
+  context), and every structure that isn't a simple impulse or simple ABC (diagonals, triangles,
+  flats, double/triple corrections, nested extensions — not implemented; when reality is one of
+  those, the script either finds no count or reports a short one with low confidence).
+  Implementation: a deviation zigzag (ATR×mult or fixed %) → alternating pivots → 6 count cases
+  tried most-confirmed-first (ABC with C running / closed 1-5 / wave 5 / 4 / 3 / 2 running),
+  each producing its Fibonacci targets plus its invalidation level, with confluence against
+  layers 1-4 annotated in the label. Bullish and bearish share ONE rule implementation via a
+  sign transform (prices × ±1), so a mirrored copy can't drift.
+  **Two things it inherits and does not fix: it REPAINTS** (a pivot is only confirmed once price
+  has moved the threshold the other way — any "non-repainting Elliott" is either only showing
+  old pivots or lying), and it is **NOT validated out of sample**, same standing as layers 1-4,
+  which by now have been measured and returned 0/24 and 0/18 (see the two entries above). Do NOT
+  add a `*_VALIDATED_*` constant, an `st.success`, or wire wave targets into the DCA box or the
+  Zone Engine without running the usual 60/40 study first — and note that study is harder here
+  than for layers 1-4: the zigzag has to be rebuilt bar-by-bar from past data only, which
+  `scripts/elliott_check.py` already does (its zigzag is causal), but nobody has run it.
+  **A real bug was found by verifying the algorithm rather than eyeballing the chart**
+  (`scripts/elliott_check.py`, the harness that reimplements the Pine layer in Python since Pine
+  only runs inside TradingView): the "wave 4 in progress" case checked the no-overlap rule only
+  against closed pivots, so BTC daily at ATR14×5 reported a wave-4 count whose live price was
+  already ~19,000 USD past its own invalidation level. Fixed by applying R3 to the LIVE price
+  while wave 4 is still open; the same class of guard was added to the "closed impulse" case
+  (if price already passed wave 5's extreme, the 5th is extending, it isn't a correction).
+  After the fix, across 3 symbols × 9 ATR thresholds: the zigzag always alternates, no count is
+  ever shown with its invalidation already breached, and 4 of the 27 combos honestly return
+  "sin conteo" instead of forcing a count. The count changing completely with the threshold
+  (ETH: wave 5 at ×2, wave 3 at ×2.5, complete impulse at ×5) is not a defect — it is the
+  fractality caveat above, made visible; the table always shows which threshold produced the
+  count on screen. **This is a standalone TradingView indicator; nothing in `src/` or the app
+  shows Elliott waves, and the app's own "📐 Niveles calculados" section was not touched.**
