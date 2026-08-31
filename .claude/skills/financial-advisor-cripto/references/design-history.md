@@ -722,3 +722,43 @@ wiring it:
   56750/51585/44100, the 65555 box, ETH's 2478.5 target, and "Tercer Objetivo = 68361" — which,
   like the other Objetivos, is STATIC from at least 20-ago through 29-ago. The weekly_axis
   docstrings in src/ and scripts/ now cite all three eje confirmations.
+- **2026-08-30, the OOS study the st.warning said was missing: `scripts/niveles_oos_validate.py`.**
+  The user asked to backtest the zones ("hagamos backtesting de esas zonas"). Design: walk-forward
+  daily recomputation of capas 2 (rejilla 25%) and 3 (macro 12.5%) via the reference CLI's
+  `infer_inputs()` (structural anchor included) on candles up to t-1, plus capa 4's weekly axis
+  (Monday open, known at t's open); capa 1 (envelope) deliberately excluded — it is intraday and
+  judging it on daily candles measures the wrong thing (pending with 1h data). Condition = a
+  level of the layer below (support) / above (resistance) yesterday's close within θ·ATR(14,
+  shifted) of today's low/high, θ swept {0.1, 0.25, 0.5}; forward returns 5/10/20/30d vs the
+  slice's unconditional mean via `run_oos_validation` (60/40 chronological). NEW vs the house
+  template: a **density placebo** — 40 fake grids per combo (anchor/ranges jittered ±12%, fixed
+  seed), same walk-forward construction, and the real grid's mean test gap is ranked against
+  them; this directly answers the "a dense grid hits touches by construction" objection instead
+  of just restating it. Bar to validate: sign-consistent across all 4 horizons AND all 3 θ AND
+  the EXPECTED sign for the role (support→positive, resistance→negative) AND placebo percentile
+  ≥90 / ≤10. **Result: 0 of 24 combos (BTC/ETH/SOL × 4 layers × 2 sides) validated.** Patterns
+  worth remembering: (1) resistance touches were followed by POSITIVE forward returns almost
+  everywhere (drift/momentum — touching a "sell zone" in an uptrending series precedes more
+  upside, the anti-signal shape ADX/Fibonacci also showed); (2) support results flip sign
+  between 5-10d and 20-30d horizons (fragile); (3) the decisive one: placebo percentiles
+  scattered 18-92 with only one combo ≥90 (SOL todas/soporte, 92, which failed the θ-consistency
+  bar anyway) — the method's grids are statistically indistinguishable from arbitrary grids of
+  equal density. So the section's standing disclaimer is now a measured result, not just a
+  caveat: do NOT add `*_VALIDATED_*` constants, an st.success, or wire these levels into the DCA
+  box or the Zone Engine. If someone re-opens this, the untested piece is the intraday envelope
+  on 1h candles — everything daily is settled here.
+- **2026-08-30, part 2 of the OOS study: the session envelope on 1h candles
+  (`scripts/envolvente_oos_validate.py`).** Same guarantees as part 1 (walk-forward — center =
+  the UTC session's first 1h open, known from 00:00 —, 60/40 chronological split, θ sweep in
+  hourly ATR, 40-placebo density control with center ±0.7% / bands ±35%), horizons 4/8/12/24
+  HOURS, sub-layers: full 9-ring envelope, the ±0.382% "Fibonacci" ring alone, and the outer
+  ±1/1.5/2% rings. **Result: 0 of 18 combos (BTC/ETH/SOL × 3 sub-layers × 2 sides) validated.**
+  Test gaps were tiny everywhere (−0.17% to +0.06% per touch at hourly horizons — noise around
+  zero, versus the daily layers' ±1-2% drift artifacts). Three isolated placebo-extreme cells
+  (BTC completa/resistencia pct 8; SOL anillo-0.382 soporte 92 / resistencia 10) all failed the
+  θ/horizon consistency bar — the exact single-cell fragility criterion 2 exists to reject.
+  With this, ALL FOUR layers of the Niveles Calculados are now measured, not just disclaimed:
+  the formulas reproduce the channel's published levels to the dollar (30 rings, two assets,
+  four sessions), and none of them — including the "institutional Fibonacci" ring — anticipates
+  forward returns better than arbitrary levels of equal density. Reproduction ≠ prediction is
+  now the section's measured conclusion.
