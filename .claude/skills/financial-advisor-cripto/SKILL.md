@@ -200,6 +200,13 @@ config + tab wiring). This tab's code lives in `src/ui/cripto.py`:
   auto-extends; `structural_anchor=False` keeps the old fixed window). Still pure, I/O-free, zero
   external deps; the bridge from a Binance daily series to its 6 inputs stays in the SEPARATE
   `src/niveles_calculados_inputs.py` (`infer_inputs()`/`InferredInputs`); don't fold it back in.
+  FROZEN AND ENFORCED since later that same day (2026-08-30, user rule: "ningún proceso tiene
+  permitido ajustar el .py de niveles calculados"): `.claude/settings.json` denies Edit/Write on
+  `src/niveles_calculados.py` and `scripts/niveles_calculados.py`, and both carry chmod 444 plus
+  macOS `chflags uchg` (immutable: blocks write/unlink/rename for every process — 444 alone did
+  not stop the Edit tool's tmp+rename path, verified in-session). git operations that rewrite
+  them fail until `chflags nouchg`. Never lift any guard without the user explicitly asking in
+  that conversation.
   **Descriptive, NOT validated out-of-sample** — the strongest disclaimer in this tab: a dense
   grid hits touches by construction, and the UI says so in an `st.warning`. Same standing as ADX/
   OBV/Fear & Greed but weaker, since no OOS study was even attempted. Do NOT add a validated-

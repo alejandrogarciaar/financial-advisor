@@ -525,7 +525,16 @@ the window auto-extends a year at a time when that min is a window-edge artifact
 the CLI's `--ancla anual` reproducing the old behavior. Still pure, I/O-free, no external deps; the
 bridge from a Binance daily series to its 6 inputs lives in the separate
 `src/niveles_calculados_inputs.py`. The UI gained a "Semanal" layer tab (the name was free — macro's
-tab was renamed "Mensual" 2026-08-29). Both `.pine` ports in `scripts/` got the same two fixes the same day (the
+tab was renamed "Mensual" 2026-08-29). **Later that same day the user reinstated the freeze at the
+4-layer state, now ENFORCED: "ningún proceso tiene permitido ajustar el .py de niveles calculados"
+(2026-08-30).** `.claude/settings.json` denies Edit/Write on `src/niveles_calculados.py` and
+`scripts/niveles_calculados.py`, and both files carry chmod 444 **plus macOS `chflags uchg`** (the
+immutable flag — verified in-session: 444 alone did NOT stop the Edit tool, which rewrites via
+tmp+rename; `uchg` blocks write, unlink AND rename for every process, owner included). A `git
+pull`/`checkout` that needs to rewrite these files will also fail until the flag is lifted — that
+is the intended behavior. Do not lift any guard (`chflags nouchg`, chmod +w, or removing the deny
+rules) without the user explicitly asking in that conversation. `src/niveles_calculados_inputs.py`, the UI
+and the `.pine` ports are NOT frozen. Both `.pine` ports in `scripts/` got the same two fixes the same day (the
 abanico's auto base range still uses the year range — its pre-existing, documented divergence). **Descriptive and NOT validated out of sample** — no OOS study was even
 attempted, and a dense 31-level grid hits touches by construction, which the UI says in an
 `st.warning`; don't add a `*_VALIDATED_*` constant, an `st.success`, or wire these levels into the

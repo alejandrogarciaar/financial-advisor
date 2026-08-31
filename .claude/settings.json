@@ -1,0 +1,10 @@
+{
+  "permissions": {
+    "deny": [
+      "Edit(src/niveles_calculados.py)",
+      "Write(src/niveles_calculados.py)",
+      "Edit(scripts/niveles_calculados.py)",
+      "Write(scripts/niveles_calculados.py)"
+    ]
+  }
+}
