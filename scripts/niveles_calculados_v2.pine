@@ -65,7 +65,9 @@
 //   * NO ESTA VALIDADO FUERA DE MUESTRA. Igual que las capas 1-4 de la v1: es
 //     descriptivo. Nadie midio aca si el conteo aporta retorno esperado. Ademas
 //     hereda el problema de la rejilla: mas lineas dibujadas = mas "aciertos"
-//     por construccion. Las etiquetas describen el metodo, no son senales.
+//     por construccion. Ninguna etiqueta sugiere una accion: describen DONDE esta cada
+//     nivel (respecto del precio o del rango base) y de que calculo sale. Esa es toda la
+//     intencion de la herramienta - ver la accion del precio, no anticiparla.
 //     Esto no es asesoramiento de inversion.
 // =============================================================================
 
@@ -281,8 +283,13 @@ clearAll() =>
     array.clear(drawnPrice)
     array.clear(drawnLabel)
 
+// Ubicacion del nivel respecto del precio de AHORA. Decia "COMPRA"/"VENTA", heredado de la
+// v1: describia el rol dentro del metodo, pero leido suelto en el grafico sonaba a
+// recomendacion, que es exactamente lo contrario de para que existe esto (mirar la accion
+// del precio, no anticiparla). El dato que aporta la etiqueta es el mismo; lo que cambia es
+// que ahora dice lo que es.
 roleTxt(float lvl) =>
-    lvl > close * 1.0005 ? "  VENTA" : lvl < close * 0.9995 ? "  COMPRA" : ""
+    lvl > close * 1.0005 ? "  sobre el precio" : lvl < close * 0.9995 ? "  bajo el precio" : ""
 
 fmt(float p) =>
     str.tostring(p, format.mintick)
@@ -759,7 +766,9 @@ if barstate.islast
             lvl   = anchor + baseRange * p / 100
             isKey = p == 62.5 or p == 125.0 or p == 175.0 or p == 225.0 or p == 250.0 or p == 275.0
             if not gridDim or isKey
-                rol  = p <= 75.0 ? "  COMPRA" : p >= 125.0 ? "  VENTA" : ""
+                // Igual que en roleTxt, pero esto es POSICION ESTRUCTURAL, no relativa al
+                // precio: <=75% esta dentro del rango base, >=125% ya lo excedio.
+                rol  = p <= 75.0 ? "  en la base" : p >= 125.0 ? "  sobre la base" : ""
                 base = p <= 75.0 ? cBuy : p == 125.0 ? cKey : p >= 150.0 ? cSell : cGrid
                 col  = gridDim ? color.new(base, 55) : base
                 addLevel(lvl, col, str.tostring(p) + "%  " + fmt(lvl) + rol,
@@ -834,14 +843,14 @@ if barstate.islast
             float pt    = array.get(elP, i)
             bool  isInv = array.get(elK, i) == 1
             if (showWaveObj and not isInv) or (showInvalid and isInv)
-                // El rol COMPRA/VENTA NO aplica a la invalidacion: ese precio no es una
-                // zona donde operar, es donde la lectura entera deja de valer, y
-                // etiquetarlo "COMPRA" por estar debajo del precio decia justo lo
-                // contrario de lo que significa. En su lugar va el lado que hay que
-                // vigilar. El conteo siempre se muestra con el precio del lado valido
-                // (lo verifica scripts/elliott_check.py), asi que comparar contra
-                // `close` alcanza para saber cual de los dos es.
-                string suf = isInv ? (pt < close ? "  NO PERDER" : "  NO SUPERAR") : roleTxt(pt) + confTxt(pt)
+                // Para la invalidacion, decir donde esta respecto del precio se queda corto:
+                // ese precio no es un nivel mas, es donde la lectura entera deja de valer.
+                // La etiqueta dice entonces por que lado se rompe el conteo — en indicativo
+                // ("si lo pierde"), no en imperativo: es una condicion del conteo, no una
+                // instruccion. El conteo siempre se muestra con el precio del lado valido (lo
+                // verifica scripts/elliott_check.py), asi que comparar contra `close` alcanza
+                // para saber cual de los dos lados es.
+                string suf = isInv ? (pt < close ? "  si lo pierde" : "  si lo supera") : roleTxt(pt) + confTxt(pt)
                 addLevel(pt, isInv ? cSell : cWave,
                      (isInv ? "X " : "EW ") + array.get(elT, i) + "  " + fmt(pt) + suf,
                      isInv ? 1 : 2, isInv)
