@@ -893,3 +893,30 @@ wiring it:
   middle dot in `distTxt` rendered as mojibake on the chart (seen live, replaced with ASCII
   parens); (2) the user granted standing authorization to update the saved "Niveles Calculados v2"
   script in TradingView on every iteration, so the paste-update-verify loop needs no per-step ask.
+
+- **2026-08-31, night: `scripts/niveles_calculados_v3.pine` — v2 plus a SURVEILLANCE layer; v2
+  becomes the stable reference (same v1→v2 pattern).** Asked as "corre todo pero crea una versión
+  3" after the improvement list was reviewed. Five additions, all descriptive, none a signal:
+  (1) **alert() calls** — price within X daily ATR of a ladder level (with hysteresis: one alert
+  per level, re-armed at 2× the distance), count invalidation crossed, count changed at bar close
+  only (so intrabar repaint can't spam). They need ONE TradingView alert with "Any alert()
+  function call" created on the indicator — the one step only the user can do.
+  (2) **Count stability test** — the count recomputed with the zigzag threshold ±17% (two extra
+  zigzag instances driven by a parametrized `zzStep()`), read through `waveCode()`, a CONDENSED
+  mirror of the main count. The mirror was verified in Python before touching Pine: 5,400
+  comparisons (3 symbols × 9 thresholds × last 200 bars) against the full count, 0 disagreements
+  — and the table carries a coherence guard (mirror at the main threshold vs the real count) so
+  any future drift between the two implementations is self-evident on screen. First live render
+  was the perfect demonstration: SOL daily showed `FRAGIL: onda 5 alcista | onda C bajista |
+  onda 3 alcista` — the OOS study's threshold-fragility finding, surfaced as operating
+  information.
+  (3) **Pivot state** — bars since the last confirmed pivot, and the exact price that would
+  confirm the current leg's reversal (the repainting part made explicit as a number).
+  (4) **Generalized confluence** — any drawn level annotates `~ <tag>` for a neighbor of another
+  layer within the confluence distance; before, only the Elliott targets annotated. EW levels are
+  excluded from the generic path (they keep their own `confTxt`).
+  (5) **Full ladder** — the table's ladder can include layers that are NOT drawn (marked `*`),
+  so e.g. macro fractions participate in the plan on a daily chart where the auto mode doesn't
+  draw them. Seen live: `arriba 3: macro 25%* 119.10 +15.5% (3.6 ATR)`.
+  Compiled first try (1,314 lines). The NC2 chart instance was removed and NC3 added; the saved
+  scripts "Niveles Calculados v2" and "Niveles Calculados v3" both exist in the account.

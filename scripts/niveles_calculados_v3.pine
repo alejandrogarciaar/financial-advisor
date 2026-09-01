@@ -1,0 +1,1313 @@
+//@version=6
+// =============================================================================
+//  NIVELES CALCULADOS v3 - 4 capas + ondas de Elliott + vigilancia
+// =============================================================================
+//  La v2 (scripts/niveles_calculados_v2.pine) queda como referencia estable, igual
+//  que la v1 quedo congelada cuando nacio la v2. La v3 es la v2 completa mas la capa
+//  de VIGILANCIA: lo que un plan necesita ademas de ver los niveles.
+//
+//   v3.1  ALERTAS via alert(): precio a menos de X ATR de un nivel de la escalera,
+//         invalidacion del conteo cruzada, y cambio de conteo al cierre de barra.
+//         (En TradingView: crear una alerta sobre el indicador con la condicion
+//         "Any alert() function call".)
+//   v3.2  TEST DE ESTABILIDAD DEL CONTEO: el mismo conteo corrido con el umbral del
+//         zigzag +/-17%. El estudio OOS mostro que la fragilidad al umbral es el
+//         mayor riesgo de apoyarse en el conteo; la tabla ahora dice si la lectura
+//         vigente es estable o un filo.
+//   v3.3  ESTADO DEL PIVOTE: hace cuantas barras confirmo el ultimo pivote, y el
+//         precio exacto que confirmaria el giro del tramo en curso (la parte que
+//         repinta, hecha explicita).
+//   v3.4  CONFLUENCIA GENERALIZADA: cualquier nivel dibujado anota con "~" a un
+//         vecino de otra capa a menos de la distancia de confluencia (antes solo
+//         los objetivos de Elliott anotaban).
+//   v3.5  ESCALERA COMPLETA: la escalera de la tabla puede incluir las capas no
+//         dibujadas (van marcadas con *), para que un nivel macro relevante no
+//         quede fuera del plan solo porque el modo automatico no lo dibuja.
+// =============================================================================
+//  La v1 (scripts/niveles_calculados.pine) queda CONGELADA: este archivo es una
+//  copia de aquella logica, sin tocar una sola formula, mas una capa 5 nueva.
+//  Si algo de las capas 1-4 hay que cambiarlo, se cambia aca, nunca alla.
+//
+//  Capa 1  ENVOLVENTE DE SESION (intradia, cualquier TF < 1D)
+//          centro  = apertura diaria (00:00 UTC)
+//          anillos = centro * (1 +/- 0.382% / 1% / 1.5% / 2%)
+//  Capa 2  REJILLA DIARIA
+//          nivel = ancla + n * 25% * rango_base   (medio paso en 62.5%)
+//          ancla = minimo del ultimo ano; rango_base = PRIMER IMPULSO desde ahi
+//  Capa 3  FRACCIONES MACRO
+//          nivel = ancla + n * 12.5% * caida_macro
+//  Capa 4  EJE SEMANAL
+//          eje central = apertura semanal; objetivos = primer nivel de las
+//          capas 2/3 a cada lado (heuristica NO verificada).
+//  Capa 5  ONDAS DE ELLIOTT  <-- NUEVO EN v2
+//          zigzag por umbral (ATR o %) -> pivotes alternados -> validacion de
+//          las 3 reglas duras del impulso -> conteo de la onda en curso ->
+//          objetivos por proporciones de Fibonacci entre ondas.
+//
+// -----------------------------------------------------------------------------
+//  QUE ES Y QUE NO ES LA CAPA 5 (leer antes de operar nada de esto)
+// -----------------------------------------------------------------------------
+//  SI se puede definir Elliott de forma algoritmica, pero solo una version
+//  ACOTADA de Elliott, y conviene saber exactamente cual:
+//
+//   * Lo que SI es objetivo y esta implementado tal cual:
+//       - Las 3 reglas duras del impulso, que son binarias:
+//           R1  la onda 2 no retrocede el 100% de la onda 1,
+//           R2  la onda 3 no es la mas corta de 1/3/5,
+//           R3  la onda 4 no invade el territorio de la onda 1.
+//       - Las proporciones habituales entre ondas (0.382 / 0.5 / 0.618 / 0.786
+//         para retrocesos; 0.618 / 1 / 1.618 / 2.618 para proyecciones), que son
+//         aritmetica sobre los extremos ya identificados.
+//       - Los precios exactos que INVALIDAN el conteo vigente. Esto es lo mas
+//         util del indicador: no dice a donde va el precio, dice a partir de que
+//         precio la lectura que estas mirando deja de ser valida.
+//
+//   * Lo que NO es objetivo, y por lo tanto aca se resuelve por convencion, no
+//     por teoria (o sea: otro analista contaria distinto y no estaria "mal"):
+//       - QUE pivote cuenta como pivote. Elliott es fractal y no define una
+//         escala: el conteo depende enteramente del umbral del zigzag. Cambiar
+//         "Multiplo de ATR" de 3 a 4 puede cambiar el conteo entero. Por eso el
+//         umbral es un input visible y la tabla muestra cual se uso.
+//       - El GRADO de la onda. Este script cuenta sobre la temporalidad DEL
+//         GRAFICO, no sobre el contexto diario como las capas 1-4. Un conteo en
+//         H1 y uno en semanal son ambos correctos y hablan de cosas distintas.
+//       - Las estructuras que no son impulso simple ni ABC simple: diagonales,
+//         triangulos, planas, dobles y triples correcciones, extensiones y
+//         truncamientos anidados. NO estan implementadas. Cuando la estructura
+//         real es una de esas, el script o no encuentra conteo o encuentra uno
+//         parcial y lo marca con confianza baja.
+//
+//   * REPINTA, por construccion y sin arreglo posible. Un pivote solo se
+//     confirma cuando el precio ya se alejo el umbral en sentido contrario, asi
+//     que el ultimo tramo del conteo se reescribe en vivo. Cualquier "Elliott
+//     que no repinta" o esta mirando solo pivotes viejos o esta mintiendo.
+//     Consecuencia practica: no se puede backtestear con este mismo objeto sin
+//     reconstruir el zigzag barra por barra con datos de esa barra.
+//
+//   * NO ESTA VALIDADO FUERA DE MUESTRA. Igual que las capas 1-4 de la v1: es
+//     descriptivo. Nadie midio aca si el conteo aporta retorno esperado. Ademas
+//     hereda el problema de la rejilla: mas lineas dibujadas = mas "aciertos"
+//     por construccion. Ninguna etiqueta sugiere una accion: describen DONDE esta cada
+//     nivel, A QUE DISTANCIA (en % y en ATR diarios, que es lo que un plan necesita
+//     saber: cuanto falta y si es alcanzable) y de que calculo sale. La tabla ademas
+//     lista los 3 niveles mas cercanos a cada lado del precio, con nombre y distancia.
+//     Esa es toda la intencion de la herramienta - ver la accion del precio para poder
+//     planear sobre ella, no anticiparla.
+//     Esto no es asesoramiento de inversion.
+// =============================================================================
+
+indicator("Niveles Calculados v3", shorttitle = "NC3", overlay = true,
+     max_lines_count = 500, max_labels_count = 500)
+
+// ---------------------------------------------------------------- entradas ---
+grpA = "0 - Modo"
+autoLayer = input.bool(true, "Capa automatica segun temporalidad", group = grpA,
+     tooltip = "Intradia (< 1D): envolvente de sesion. Diario a 3 dias: rejilla del 25%. " +
+     "Semanal o mayor: fracciones macro. No afecta a la capa 5 (Elliott), que siempre " +
+     "cuenta sobre la temporalidad del grafico.")
+
+grpE = "1 - Envolvente de sesion (intradia)"
+showEnv  = input.bool(true,  "Mostrar envolvente",       group = grpE)
+useDOpen = input.bool(true,  "Centro = apertura diaria", group = grpE,
+     tooltip = "Desactivado: usa el cierre diario anterior.")
+b1 = input.float(0.382, "Anillo 1 (%)", step = 0.001, minval = 0, group = grpE)
+b2 = input.float(1.0,   "Anillo 2 (%)", step = 0.1,   minval = 0, group = grpE)
+b3 = input.float(1.5,   "Anillo 3 (%)", step = 0.1,   minval = 0, group = grpE)
+b4 = input.float(2.0,   "Anillo 4 (%)", step = 0.1,   minval = 0, group = grpE)
+
+grpD = "2 - Rejilla diaria"
+showGrid   = input.bool(true, "Mostrar rejilla diaria",           group = grpD)
+autoAnchor = input.bool(true, "Ancla automatica (minimo 1 ano)",  group = grpD,
+     tooltip = "La ventana se mide en dias de calendario, no en barras.")
+manAnchor  = input.float(57670.0, "Ancla manual",      step = 1, group = grpD)
+autoBase   = input.bool(true, "Rango base automatico (primer impulso)", group = grpD,
+     tooltip = "Camina desde el minimo anual hasta el primer giro real.")
+manBase    = input.float(18294.0, "Rango base manual", step = 1, group = grpD)
+
+grpI = "2b - Deteccion del primer impulso"
+lookbackDays   = input.int(365, "Ventana del minimo anual (dias de calendario)",
+     minval = 30, maxval = 2000, group = grpI)
+retracePct     = input.float(50.0, "Retroceso que cierra el impulso (% del avance)",
+     minval = 5, maxval = 95, step = 5, group = grpI)
+minReversalPct = input.float(15.0, "Giro minimo para que ese retroceso cuente (% del techo)",
+     minval = 1, maxval = 50, step = 1, group = grpI,
+     tooltip = "Las dos condiciones se exigen juntas.")
+structAnchor = input.bool(true, "Ancla estructural (extender la ventana si el minimo es el borde)",
+     group = grpI)
+edgeDays = input.int(45, "Dias previos al corte a validar", minval = 5, maxval = 365, group = grpI)
+proximityPct = input.float(2.0, "Margen de validacion del piso (%)", minval = 0, maxval = 10,
+     step = 0.5, group = grpI)
+
+grpW = "3 - Fracciones macro"
+showMacro = input.bool(false, "Mostrar fracciones macro",  group = grpW)
+autoHigh  = input.bool(true,  "Techo de ciclo automatico", group = grpW)
+manHigh   = input.float(126207.0, "Techo de ciclo manual", step = 1, group = grpW)
+
+grpS = "4 - Eje semanal"
+showWeekly = input.bool(true, "Mostrar eje semanal", group = grpS)
+showWeeklyObj = input.bool(true, "Mostrar objetivos semanales", group = grpS,
+     tooltip = "Primer nivel de las capas 2/3 a cada lado del eje. HEURISTICA NO VERIFICADA.")
+
+grpEW = "5 - Ondas de Elliott"
+showWaves   = input.bool(true, "Mostrar conteo de ondas", group = grpEW,
+     tooltip = "Cuenta sobre la temporalidad DEL GRAFICO, no sobre el contexto diario. " +
+     "Cambiar de temporalidad cambia el grado de la onda, y eso es correcto en Elliott.")
+showZigzag  = input.bool(true, "Dibujar el zigzag que sostiene el conteo", group = grpEW)
+showWaveObj = input.bool(true, "Mostrar objetivos de la onda en curso", group = grpEW)
+showInvalid = input.bool(true, "Mostrar el precio que invalida el conteo", group = grpEW,
+     tooltip = "Es la parte objetiva de Elliott: no dice a donde va el precio, dice " +
+     "desde que precio la lectura actual deja de ser valida.")
+zzUseAtr    = input.bool(true, "Umbral del zigzag por ATR", group = grpEW,
+     tooltip = "El ATR se adapta al activo y al regimen de volatilidad. Desactivado: " +
+     "umbral porcentual fijo. Este umbral ES el conteo: cambiarlo cambia todo.")
+zzAtrLen    = input.int(14, "ATR del zigzag", minval = 2, maxval = 200, group = grpEW)
+zzAtrMult   = input.float(3.0, "Multiplo de ATR", minval = 0.5, maxval = 20, step = 0.5, group = grpEW)
+zzDevPct    = input.float(5.0, "Umbral porcentual (%)", minval = 0.1, maxval = 50, step = 0.1, group = grpEW)
+ewAllowOverlap = input.bool(false, "Permitir solapamiento de la onda 4 con la 1", group = grpEW,
+     tooltip = "Regla dura R3. Activalo solo si aceptas contar diagonales, donde la teoria " +
+     "si permite el solapamiento.")
+ewAllowTrunc   = input.bool(true, "Permitir quinta truncada", group = grpEW,
+     tooltip = "Quinta que no supera el techo de la tercera. Ocurre, pero relaja el filtro.")
+ewConfPct   = input.float(0.5, "Distancia para marcar confluencia con otras capas (%)",
+     minval = 0.05, maxval = 5, step = 0.05, group = grpEW)
+
+grpAL = "6 - Vigilancia (v3)"
+stabPct = input.float(17, "Test de estabilidad: variar el umbral del zigzag en (+/- %)",
+     minval = 1, maxval = 50, step = 1, group = grpAL,
+     tooltip = "El conteo se recalcula con el umbral del zigzag un poco mas chico y un poco " +
+     "mas grande. Si las tres lecturas coinciden, la tabla dice estable; si no, FRAGIL con " +
+     "las tres lecturas. 17% equivale a +/-0.5 sobre el multiplo 3 por defecto.")
+ladderAll = input.bool(true, "Escalera con todas las capas (las no dibujadas con *)", group = grpAL,
+     tooltip = "La escalera de la tabla incluye rejilla y macro completas y el eje semanal " +
+     "aunque la capa no este dibujada en el grafico. Los niveles de capas no dibujadas van " +
+     "marcados con *.")
+alertLadder = input.bool(true, "alert(): precio cerca de un nivel de la escalera", group = grpAL)
+alertAtrDist = input.float(0.5, "Cerca = a menos de (ATR diarios)", minval = 0.1, maxval = 5,
+     step = 0.1, group = grpAL,
+     tooltip = "Con histeresis: avisa una vez por nivel y se rearma recien cuando el precio " +
+     "se aleja al doble de esta distancia.")
+alertInvalidation = input.bool(true, "alert(): invalidacion del conteo cruzada", group = grpAL)
+alertCountChange = input.bool(true, "alert(): el conteo cambio (al cierre de barra)", group = grpAL)
+
+grpV = "Visual"
+lineLenPct = input.int(25, "Longitud de las lineas (% del ancho visible)",
+     minval = 5, maxval = 100, step = 5, group = grpV)
+startAtDay = input.bool(false, "Arrancar al inicio del dia en curso", group = grpV)
+showLbl    = input.bool(true,  "Mostrar etiquetas",        group = grpV)
+markNear   = input.bool(true,  "Resaltar los dos niveles que rodean al precio", group = grpV)
+lblSpreadPct = input.float(1.5, "Escalonar etiquetas de niveles a menos de (%)", minval = 0,
+     maxval = 20, step = 0.1, group = grpV,
+     tooltip = "Las etiquetas se anclan al precio, asi que no se pueden separar en vertical: " +
+     "los niveles mas juntos que esto se escalonan en HORIZONTAL. Depende del zoom (Pine no " +
+     "expone el rango de precios visible), por eso es un parametro y no un valor fijo. En 0 " +
+     "se apaga el escalonado.")
+showTable  = input.bool(true,  "Mostrar tabla de parametros", group = grpV)
+
+cBuy  = #3DD68C
+cSell = #F0616D
+cMid  = #B48CF2
+cGrid = #39C3D6
+cKey  = #F7931A
+cAxis = #E8EDF5
+cWave = #FFD166
+cZig  = #8A94A6
+
+// ------------------------------------------------------ capa por timeframe ---
+tfMin      = timeframe.in_seconds(timeframe.period) / 60.0
+isIntraday = tfMin < 1440
+isDaily    = tfMin >= 1440 and tfMin < 10080
+isHigher   = tfMin >= 10080
+
+envOn    = autoLayer ? isIntraday : showEnv
+weeklyOn = autoLayer ? not isHigher : showWeekly
+gridOn   = autoLayer ? (isDaily or isIntraday) : showGrid
+macroOn  = autoLayer ? isHigher : showMacro
+gridDim  = autoLayer and isIntraday
+
+layerName = autoLayer ? (isIntraday ? "envolvente de sesion" : isDaily ? "rejilla diaria 25%" : "fracciones macro 12.5%") : "manual"
+
+// ------------------------------------------- derivacion de las entradas -----
+// Identico a la v1: corre en CONTEXTO DIARIO, que es donde el metodo define sus
+// entradas, y devuelve una tupla al contexto del grafico.
+calcInputs() =>
+    var float allTimeHigh = na
+    allTimeHigh := na(allTimeHigh) ? high : math.max(allTimeHigh, high)
+    // ATR(14) DIARIO, para expresar distancias. Se calcula aca (contexto diario) y no en el
+    // grafico: en intradia el ATR de la temporalidad del chart mediria otra cosa, y las
+    // distancias de un plan se piensan en dias.
+    float dAtr14 = ta.atr(14)
+
+    float aAnchor  = na
+    float aBase    = na
+    bool  aOpen    = true
+    int   aSpan    = lookbackDays
+    bool  aExt     = false
+
+    if barstate.islast
+        int   maxScan = math.min(bar_index, 2000)
+        float minLow  = low
+        int   minOff  = 0
+
+        bool searching = true
+        while searching
+            int spanMs   = aSpan * 86400000
+            int startOff = 0
+            minLow := low
+            minOff := 0
+            for i = 0 to maxScan
+                if time - time[i] > spanMs
+                    break
+                startOff := i
+                if low[i] < minLow
+                    minLow := low[i]
+                    minOff := i
+            bool isFloor = true
+            if structAnchor and startOff < maxScan
+                float threshold = minLow * (1 + proximityPct / 100)
+                int   edgeMs    = edgeDays * 86400000
+                for j = (startOff + 1) to maxScan
+                    if time[startOff] - time[j] > edgeMs
+                        break
+                    if low[j] <= threshold
+                        isFloor := false
+                        break
+            if isFloor or startOff >= maxScan
+                searching := false
+            else
+                aSpan += lookbackDays
+                aExt  := true
+        aAnchor := minLow
+
+        float top = high[minOff]
+        if minOff > 0
+            for j = (minOff - 1) to 0
+                if high[j] > top
+                    top := high[j]
+                float advance = top - minLow
+                float c       = close[j]
+                if c <= top - advance * retracePct / 100 and c <= top * (1 - minReversalPct / 100)
+                    aOpen := false
+                    break
+        aBase := top - minLow
+
+    [aAnchor, aBase, allTimeHigh, aOpen ? 1 : 0, aSpan, aExt ? 1 : 0, dAtr14]
+
+[autoAnchorVal, autoBaseVal, autoCycleVal, impulseOpenFlag, anchorSpanDays, anchorExtFlag, dailyAtr] =
+     request.security(syminfo.tickerid, "D", calcInputs(), lookahead = barmerge.lookahead_on)
+
+dOpen  = request.security(syminfo.tickerid, "D", open,     lookahead = barmerge.lookahead_on)
+wOpen  = request.security(syminfo.tickerid, "W", open,     lookahead = barmerge.lookahead_on)
+dPrev  = request.security(syminfo.tickerid, "D", close[1], lookahead = barmerge.lookahead_on)
+center = useDOpen ? dOpen : dPrev
+
+anchor     = autoAnchor and not na(autoAnchorVal) ? autoAnchorVal : manAnchor
+baseRange  = autoBase   and not na(autoBaseVal)   ? math.max(autoBaseVal,  syminfo.mintick) : manBase
+cycleHigh  = autoHigh   and not na(autoCycleVal)  ? autoCycleVal : manHigh
+macroRange = math.max(cycleHigh - anchor, syminfo.mintick)
+
+var int dayStartBar = 0
+if ta.change(time("D")) != 0 or bar_index == 0
+    dayStartBar := bar_index
+
+dayBarMs = math.max(time - nz(time[1], time - 60000), 1)
+
+// ------------------------------------------------- contenedores persistentes --
+var array<line>  lines  = array.new<line>()
+var array<label> labels = array.new<label>()
+var array<float> near   = array.new<float>(2, na)
+
+// Precio de cada nivel YA dibujado en esta pasada, y su etiqueta, en el mismo orden.
+// Sirven para dos cosas en addLevel(): fundir el nivel que dos capas producen identico,
+// y escalonar los que quedan demasiado cerca como para leerse.
+var array<float> drawnPrice = array.new<float>()
+var array<label> drawnLabel = array.new<label>()
+var array<string> drawnTag  = array.new<string>()   // nombre corto del nivel, para la escalera de la tabla
+var array<string> drawnBase = array.new<string>()   // texto de la etiqueta SIN la distancia, para reconstruirla al fusionar
+
+clearAll() =>
+    while array.size(lines) > 0
+        line.delete(array.pop(lines))
+    while array.size(labels) > 0
+        label.delete(array.pop(labels))
+    array.clear(drawnPrice)
+    array.clear(drawnLabel)
+    array.clear(drawnTag)
+    array.clear(drawnBase)
+
+// Distancia del nivel al precio de AHORA, con signo: negativo = debajo. Reemplaza al texto
+// "bajo/sobre el precio" (que a su vez habia reemplazado a COMPRA/VENTA): el signo ya dice
+// el lado, y la magnitud es el dato que un plan necesita -- cuanto falta. Va en % y ademas
+// en ATR(14) DIARIOS, porque el % solo no viaja entre activos: 5% en SOL y 5% en BTC no son
+// la misma distancia en volatilidad, y el ATR dice si un nivel es alcanzable en dias o es
+// decorado. Dentro de +/-0.05% (la vieja zona muerta) no se muestra nada.
+distTxt(float lvl) =>
+    float pct = (lvl - close) / close * 100
+    // Solo ASCII en los textos de este archivo: viaja por el portapapeles de PowerShell
+    // 5.1, que lee UTF-8 sin BOM como ANSI y convierte cualquier multibyte en mojibake
+    // (el punto medio tipografico salio como "A-punto" en el grafico, visto en vivo).
+    string atrPart = na(dailyAtr) or dailyAtr <= 0 ? "" :
+         " (" + str.tostring(math.abs(lvl - close) / dailyAtr, "#.#") + " ATR)"
+    math.abs(pct) < 0.05 ? "" : "  " + (pct > 0 ? "+" : "") + str.tostring(pct, "#.#") + "%" + atrPart
+
+fmt(float p) =>
+    str.tostring(p, format.mintick)
+
+// `tag` es el nombre corto del nivel ("rejilla 75%", "eje semanal", "objetivo EW"):
+// no se dibuja en el grafico, alimenta la escalera de planificacion de la tabla. La
+// distancia (distTxt) se agrega ACA y no en cada llamada, para que ningun nivel pueda
+// quedarse sin ella ni llevarla dos veces.
+addLevel(float price, color col, string txt, int width, bool dashed, string tag) =>
+    if not na(price) and price > 0
+        visible = math.max(chart.right_visible_bar_time - chart.left_visible_bar_time, 1)
+        barsVis = math.max(math.round(visible / math.max(dayBarMs, 1)), 20)
+        segLen  = math.max(math.round(barsVis * lineLenPct / 100), 3)
+        x1 = startAtDay ? math.min(dayStartBar, bar_index) : bar_index
+        x2 = x1 + segLen
+
+        // Dos capas pueden producir el MISMO precio: los objetivos semanales son, por
+        // definicion, un nivel de las capas 2/3, y el 0% de la rejilla es el 0% macro.
+        // Eso dibujaba dos lineas encimadas con dos etiquetas apiladas e ilegibles.
+        // Ahora la segunda no se dibuja: su texto se anexa al de la primera, que es lo
+        // que el nivel realmente es (un solo precio, dos lecturas). La comparacion es
+        // por igualdad EXACTA a proposito, misma razon que en isNear: los dos precios
+        // salen de la misma expresion, asi que coinciden bit a bit.
+        int dup   = -1
+        int crowd = 0
+        string confNote = ""
+        // v3.4: confluencia generalizada. Antes solo los objetivos de Elliott anotaban que
+        // caian encima de otro nivel; ahora cualquier nivel nuevo anota con "~" al vecino
+        // mas cercano de OTRA capa dentro de la distancia de confluencia (ewConfPct). Los
+        // niveles EW quedan afuera de este camino porque ya llevan su propio confTxt() y
+        // duplicarian la anotacion.
+        bool selfEW = str.contains(tag, "EW")
+        // La guarda de tamano NO es decorativa: en Pine, `for i = 0 to size - 1` con el
+        // array VACIO no itera cero veces -- itera hacia atras, porque cuando `to` es
+        // menor que `from` el contador decrece. Con size 0 eso da `for i = 0 to -1`, que
+        // corre con i = 0 y revienta en el array.get (RE10045, visto en vivo: el primer
+        // nivel de cada pasada encuentra `drawnPrice` recien vaciado por clearAll).
+        if array.size(drawnPrice) > 0
+            for i = 0 to array.size(drawnPrice) - 1
+                float dp = array.get(drawnPrice, i)
+                if dp == price
+                    dup := i
+                else
+                    float dPct = math.abs(dp - price) / price * 100
+                    if lblSpreadPct > 0 and dPct <= lblSpreadPct
+                        crowd += 1
+                    if confNote == "" and not selfEW and dPct <= ewConfPct and not str.contains(array.get(drawnTag, i), "EW")
+                        confNote := "  ~ " + array.get(drawnTag, i)
+
+        if dup >= 0
+            if showLbl
+                // Reconstruye la etiqueta desde el texto base acumulado: la distancia va
+                // UNA sola vez y al final, aunque el nivel junte tres lecturas.
+                string merged = array.get(drawnBase, dup) + "   +   " + txt
+                array.set(drawnBase, dup, merged)
+                label.set_text(array.get(drawnLabel, dup), merged + distTxt(price))
+        else
+            // Los vecinos se escalonan en horizontal (la etiqueta esta anclada al precio,
+            // no se puede mover en vertical). La linea se alarga hasta su etiqueta para
+            // que se siga viendo cual es de cual. Tope de 3 carriles: mas que eso se sale
+            // de la zona visible y el remedio seria peor.
+            lane   = math.min(crowd, 3)
+            // Tope duro de Pine: con xloc.bar_index no se puede dibujar mas de 500 barras
+            // hacia el FUTURO (RE10020, visto en vivo). `segLen` es un 25% del ancho
+            // VISIBLE en barras, asi que el desborde no lo causa el escalonado: en diario
+            // con 6 meses a la vista son ~180 barras -> 45, pero en 2h esos mismos 6 meses
+            // son ~2160 velas -> 540, y se pasa el solo. La v1 arrastra esta misma cuenta.
+            xEnd   = math.min(x2 + lane * math.max(math.round(segLen * 0.55), 2), bar_index + 480)
+            isNear = markNear and (price == array.get(near, 0) or price == array.get(near, 1))
+            ln = line.new(x1, price, xEnd, price, xloc = xloc.bar_index,
+                 extend = extend.none, color = col, width = isNear ? width + 1 : width,
+                 style = dashed and not isNear ? line.style_dashed : line.style_solid)
+            array.push(lines, ln)
+            array.push(drawnPrice, price)
+            array.push(drawnTag, tag)
+            if showLbl
+                string base = (isNear ? "> " : "") + txt + confNote
+                lb = label.new(xEnd, price, base + distTxt(price), xloc = xloc.bar_index,
+                     style = label.style_label_left,
+                     color = color.new(color.black, 100),
+                     textcolor = col, size = size.small)
+                array.push(labels, lb)
+                array.push(drawnLabel, lb)
+                array.push(drawnBase, base)
+
+
+bandsArr   = array.from(b1, b2, b3, b4)
+gridSteps  = array.from(0.0, 25.0, 50.0, 62.5, 75.0, 100.0, 125.0, 150.0, 175.0, 200.0, 225.0, 250.0, 275.0)
+macroSteps = array.from(0.0, 12.5, 25.0, 37.5, 50.0, 62.5, 75.0, 87.5, 100.0)
+
+scanNear(float lvl) =>
+    if not na(lvl) and lvl > 0
+        float bb = array.get(near, 0)
+        float aa = array.get(near, 1)
+        if lvl <= close and (na(bb) or lvl > bb)
+            array.set(near, 0, lvl)
+        if lvl >= close and (na(aa) or lvl < aa)
+            array.set(near, 1, lvl)
+
+// =============================================================================
+//  CAPA 5 - ONDAS DE ELLIOTT
+// =============================================================================
+//  Paso 1: zigzag por umbral. Un pivote se confirma cuando el precio se aleja
+//  `zzDev` en sentido contrario al extremo vigente. Es lo que hace que el
+//  conteo repinte: el ultimo tramo no esta confirmado hasta ese giro.
+//  Nota de precision: al confirmar un pivote, el nuevo extremo arranca en la
+//  barra del giro y no en el minimo/maximo exacto de las barras intermedias;
+//  como el giro exige justamente un recorrido de `zzDev`, esa barra suele SER
+//  el extremo, y las barras siguientes lo corrigen si no lo era.
+
+var array<float> zzP = array.new<float>()
+var array<int>   zzB = array.new<int>()
+var array<int>   zzD = array.new<int>()   // 1 = pivote alto, -1 = pivote bajo
+
+var int   zDir    = 0
+var float zExt    = na
+var int   zExtBar = 0
+
+pushPivot(float p, int b, int d) =>
+    array.push(zzP, p)
+    array.push(zzB, b)
+    array.push(zzD, d)
+    if array.size(zzP) > 24
+        array.shift(zzP)
+        array.shift(zzB)
+        array.shift(zzD)
+
+float zzDev = zzUseAtr ? nz(ta.atr(zzAtrLen)) * zzAtrMult : close * zzDevPct / 100.0
+zzDev := math.max(zzDev, syminfo.mintick * 10)
+
+if na(zExt)
+    zExt := close
+    zExtBar := bar_index
+
+if zDir == 1
+    if high > zExt
+        zExt := high
+        zExtBar := bar_index
+    else if low < zExt - zzDev
+        pushPivot(zExt, zExtBar, 1)
+        zDir := -1
+        zExt := low
+        zExtBar := bar_index
+else if zDir == -1
+    if low < zExt
+        zExt := low
+        zExtBar := bar_index
+    else if high > zExt + zzDev
+        pushPivot(zExt, zExtBar, -1)
+        zDir := 1
+        zExt := high
+        zExtBar := bar_index
+else
+    // Todavia sin direccion: se define con el primer recorrido de `zzDev`, sin
+    // publicar pivote (el extremo inicial es un cierre arbitrario, no un giro).
+    if high > zExt + zzDev
+        zDir := 1
+        zExt := high
+        zExtBar := bar_index
+    else if low < zExt - zzDev
+        zDir := -1
+        zExt := low
+        zExtBar := bar_index
+
+// Un paso del MISMO zigzag, como funcion, para poder correr copias del conteo con otros
+// umbrales (test de estabilidad v3.2) sin triplicar la maquina de estados a mano. El estado
+// viaja en `st` = [dir, extremo, barra_del_extremo] (floats; dir na = todavia sin direccion).
+// PAREADO con el bloque de arriba: si se toca uno, se toca el otro.
+zzStep(array<float> zp, array<int> zb, array<int> zd, array<float> st, float dev) =>
+    if not na(dev)
+        float sDirRaw = array.get(st, 0)
+        float sDir    = na(sDirRaw) ? 0 : sDirRaw
+        float sExt    = array.get(st, 1)
+        float sBar    = array.get(st, 2)
+        if na(sExt)
+            sExt := close
+            sBar := bar_index
+        if sDir == 1
+            if high > sExt
+                sExt := high
+                sBar := bar_index
+            else if low < sExt - dev
+                array.push(zp, sExt)
+                array.push(zb, int(sBar))
+                array.push(zd, 1)
+                if array.size(zp) > 24
+                    array.shift(zp)
+                    array.shift(zb)
+                    array.shift(zd)
+                sDir := -1
+                sExt := low
+                sBar := bar_index
+        else if sDir == -1
+            if low < sExt
+                sExt := low
+                sBar := bar_index
+            else if high > sExt + dev
+                array.push(zp, sExt)
+                array.push(zb, int(sBar))
+                array.push(zd, -1)
+                if array.size(zp) > 24
+                    array.shift(zp)
+                    array.shift(zb)
+                    array.shift(zd)
+                sDir := 1
+                sExt := high
+                sBar := bar_index
+        else
+            if high > sExt + dev
+                sDir := 1
+                sExt := high
+                sBar := bar_index
+            else if low < sExt - dev
+                sDir := -1
+                sExt := low
+                sBar := bar_index
+        array.set(st, 0, sDir)
+        array.set(st, 1, sExt)
+        array.set(st, 2, sBar)
+
+// Los dos zigzags del test de estabilidad: el mismo calculo con el umbral +/- stabPct.
+var array<float> zzPLo = array.new<float>()
+var array<int>   zzBLo = array.new<int>()
+var array<int>   zzDLo = array.new<int>()
+var array<float> zzStLo = array.new<float>(3, na)
+var array<float> zzPHi = array.new<float>()
+var array<int>   zzBHi = array.new<int>()
+var array<int>   zzDHi = array.new<int>()
+var array<float> zzStHi = array.new<float>(3, na)
+zzStep(zzPLo, zzBLo, zzDLo, zzStLo, zzDev * (1 - stabPct / 100))
+zzStep(zzPHi, zzBHi, zzDHi, zzStHi, zzDev * (1 + stabPct / 100))
+
+pvP(int back) => array.get(zzP, array.size(zzP) - 1 - back)
+pvB(int back) => array.get(zzB, array.size(zzB) - 1 - back)
+pvD(int back) => array.get(zzD, array.size(zzD) - 1 - back)
+
+//  Paso 2: reglas. Todas se evaluan en "espacio transformado": los precios se
+//  multiplican por el signo del conteo (sg = +1 alcista, -1 bajista), asi un
+//  impulso bajista queda con la misma forma que uno alcista y hay UNA sola
+//  implementacion de las reglas en vez de dos espejadas que puedan divergir.
+//  Para volver a precio se multiplica otra vez por sg (sg = +/-1).
+
+impulseOk(float v0, float v1, float v2, float v3, float v4, float v5,
+     bool allowOverlap, bool allowTrunc) =>
+    float w1 = v1 - v0
+    float w3 = v3 - v2
+    float w5 = v5 - v4
+    bool shape = w1 > 0 and w3 > 0 and w5 > 0 and v2 < v1 and v4 < v3
+    bool r1 = v2 > v0                        // R1: la 2 no se come toda la 1
+    bool r2 = not (w3 < w1 and w3 < w5)      // R2: la 3 no es la mas corta
+    bool r3 = allowOverlap or v4 > v1        // R3: la 4 no invade a la 1
+    bool r4 = allowTrunc  or v5 > v3         // guia: la 5 supera el techo de la 3
+    shape and r1 and r2 and r3 and r4
+
+seed012Ok(float v0, float v1, float v2) =>
+    v1 > v0 and v2 < v1 and v2 > v0
+
+seed0123Ok(float v0, float v1, float v2, float v3) =>
+    seed012Ok(v0, v1, v2) and v3 > v1
+
+seed01234Ok(float v0, float v1, float v2, float v3, float v4, bool allowOverlap) =>
+    seed0123Ok(v0, v1, v2, v3) and v4 < v3 and (allowOverlap or v4 > v1)
+
+// Espejo CONDENSADO del conteo principal para el test de estabilidad (v3.2): mismas
+// condiciones y mismo orden, pero devuelve solo un codigo, sin objetivos ni etiquetas.
+// codigo = signo * N, con N: 2..5 = onda N en curso, 10 = impulso completo (onda A),
+// 11 = onda C de un ABC; 0 = sin conteo. PAREADO con el bloque grande de abajo -- y si
+// se desincronizan, el guardia de la tabla lo delata (el espejo se corre tambien con
+// el umbral principal y se compara contra el conteo real).
+waveCode(array<float> zp, array<int> zd, float live) =>
+    int n = array.size(zp)
+    int code = 0
+    if code == 0 and n >= 8
+        int   sgA = array.get(zd, n - 3)
+        float a0 = sgA * array.get(zp, n - 8)
+        float a1 = sgA * array.get(zp, n - 7)
+        float a2 = sgA * array.get(zp, n - 6)
+        float a3 = sgA * array.get(zp, n - 5)
+        float a4 = sgA * array.get(zp, n - 4)
+        float a5 = sgA * array.get(zp, n - 3)
+        float aA = sgA * array.get(zp, n - 2)
+        float aB = sgA * array.get(zp, n - 1)
+        float aL = sgA * live
+        if impulseOk(a0, a1, a2, a3, a4, a5, ewAllowOverlap, ewAllowTrunc) and aA < a5 and aB > aA and aB < a5 and aL < aB
+            code := sgA * 11
+    if code == 0 and n >= 6
+        int   sgB = array.get(zd, n - 1)
+        float c0 = sgB * array.get(zp, n - 6)
+        float c1 = sgB * array.get(zp, n - 5)
+        float c2 = sgB * array.get(zp, n - 4)
+        float c3 = sgB * array.get(zp, n - 3)
+        float c4 = sgB * array.get(zp, n - 2)
+        float c5 = sgB * array.get(zp, n - 1)
+        float cL = sgB * live
+        if impulseOk(c0, c1, c2, c3, c4, c5, ewAllowOverlap, ewAllowTrunc) and cL < c5
+            code := sgB * 10
+    if code == 0 and n >= 5
+        int   sgC = -array.get(zd, n - 1)
+        float d0 = sgC * array.get(zp, n - 5)
+        float d1 = sgC * array.get(zp, n - 4)
+        float d2 = sgC * array.get(zp, n - 3)
+        float d3 = sgC * array.get(zp, n - 2)
+        float d4 = sgC * array.get(zp, n - 1)
+        float dL = sgC * live
+        if seed01234Ok(d0, d1, d2, d3, d4, ewAllowOverlap) and dL > d4
+            code := sgC * 5
+    if code == 0 and n >= 4
+        int   sgD = array.get(zd, n - 1)
+        float e0 = sgD * array.get(zp, n - 4)
+        float e1 = sgD * array.get(zp, n - 3)
+        float e2 = sgD * array.get(zp, n - 2)
+        float e3 = sgD * array.get(zp, n - 1)
+        float eL = sgD * live
+        if seed0123Ok(e0, e1, e2, e3) and eL < e3 and (ewAllowOverlap or eL > e1)
+            code := sgD * 4
+    if code == 0 and n >= 3
+        int   sgE = -array.get(zd, n - 1)
+        float f0 = sgE * array.get(zp, n - 3)
+        float f1 = sgE * array.get(zp, n - 2)
+        float f2 = sgE * array.get(zp, n - 1)
+        float fL = sgE * live
+        if seed012Ok(f0, f1, f2) and fL > f2
+            code := sgE * 3
+    if code == 0 and n >= 2
+        int   sgF = array.get(zd, n - 1)
+        float g0 = sgF * array.get(zp, n - 2)
+        float g1 = sgF * array.get(zp, n - 1)
+        float gL = sgF * live
+        if g1 > g0 and gL < g1 and gL > g0
+            code := sgF * 2
+    code
+
+codeName(int c) =>
+    int a = math.abs(c)
+    string base = a == 11 ? "onda C" : a == 10 ? "onda A" : a >= 2 and a <= 5 ? "onda " + str.tostring(a) : "sin conteo"
+    a == 0 ? base : base + (c > 0 ? " alcista" : " bajista")
+
+// Resultado del conteo (se rearma entero en cada ultima barra).
+var array<float>  elP = array.new<float>()    // precio del objetivo
+var array<string> elT = array.new<string>()   // texto
+var array<int>    elK = array.new<int>()      // 0 = objetivo, 1 = invalidacion
+var array<float>  ewP = array.new<float>()    // pivotes etiquetados
+var array<int>    ewB = array.new<int>()
+var array<string> ewN = array.new<string>()
+var array<int>    ewU = array.new<int>()      // 1 = etiqueta arriba del pivote
+
+var string elPat  = "sin conteo"
+var string elWave = "-"
+var int    elConf = 0                          // ondas cerradas: 0 a 6
+var int    elCode = 0                          // mismo codigo que waveCode(), para comparar
+
+addTarget(float p, string txt, bool invalid) =>
+    if not na(p) and p > 0
+        array.push(elP, p)
+        array.push(elT, txt)
+        array.push(elK, invalid ? 1 : 0)
+
+pushWave(int b, float p, string nm, bool up) =>
+    array.push(ewB, b)
+    array.push(ewP, p)
+    array.push(ewN, nm)
+    array.push(ewU, up ? 1 : 0)
+
+// Confluencia contra las capas 1-4: es el unico punto donde la capa 5 se cruza
+// con el resto. No cambia ningun calculo, solo anota en la etiqueta cuando un
+// objetivo de Elliott cae encima de un nivel que ya existia por otra via.
+confTxt(float p) =>
+    string res  = ""
+    float  best = 999999999.0
+    if p > 0
+        if anchor > 0 and baseRange > 0
+            for i = 0 to array.size(gridSteps) - 1
+                float s  = array.get(gridSteps, i)
+                float lv = anchor + baseRange * s / 100
+                float d  = math.abs(p - lv) / p * 100
+                if d <= ewConfPct and d < best
+                    best := d
+                    res  := "  = rejilla " + str.tostring(s) + "%"
+        if anchor > 0 and macroRange > 0
+            for i = 0 to array.size(macroSteps) - 1
+                float s  = array.get(macroSteps, i)
+                float lv = anchor + macroRange * s / 100
+                float d  = math.abs(p - lv) / p * 100
+                if d <= ewConfPct and d < best
+                    best := d
+                    res  := "  = macro " + str.tostring(s) + "%"
+        if not na(center)
+            for i = 0 to array.size(bandsArr) - 1
+                float bd = array.get(bandsArr, i)
+                if bd > 0
+                    float lu = center * (1 + bd / 100)
+                    float ld = center * (1 - bd / 100)
+                    float du = math.abs(p - lu) / p * 100
+                    float dd = math.abs(p - ld) / p * 100
+                    if du <= ewConfPct and du < best
+                        best := du
+                        res  := "  = anillo +" + str.tostring(bd) + "%"
+                    if dd <= ewConfPct and dd < best
+                        best := dd
+                        res  := "  = anillo -" + str.tostring(bd) + "%"
+        if not na(wOpen)
+            float dw = math.abs(p - wOpen) / p * 100
+            if dw <= ewConfPct and dw < best
+                best := dw
+                res  := "  = eje semanal"
+    res
+
+// ------------------------------------------------------------------ dibujo ---
+if barstate.islast
+    clearAll()
+    array.set(near, 0, na)
+    array.set(near, 1, na)
+
+    // ---- capa 5, parte A: identificar el conteo -----------------------------
+    // Se prueban las estructuras de mas a menos confirmada y se toma la primera
+    // que valida. El orden importa: un conteo con 5 ondas cerradas dice mas que
+    // uno con 2, y los casos cortos siempre "encajan" si se los deja primero.
+    array.clear(elP)
+    array.clear(elT)
+    array.clear(elK)
+    array.clear(ewP)
+    array.clear(ewB)
+    array.clear(ewN)
+    array.clear(ewU)
+    elPat  := "sin conteo"
+    elWave := "-"
+    elConf := 0
+    elCode := 0
+
+    int   n     = array.size(zzP)
+    float liveP = close
+    bool  done  = false
+
+    // Caso 0 - impulso 1-5 cerrado + A y B cerradas, onda C en curso.
+    if not done and n >= 8
+        int   s0 = pvD(2)
+        float a0 = s0 * pvP(7)
+        float a1 = s0 * pvP(6)
+        float a2 = s0 * pvP(5)
+        float a3 = s0 * pvP(4)
+        float a4 = s0 * pvP(3)
+        float a5 = s0 * pvP(2)
+        float aA = s0 * pvP(1)
+        float aB = s0 * pvP(0)
+        float aL = s0 * liveP
+        if impulseOk(a0, a1, a2, a3, a4, a5, ewAllowOverlap, ewAllowTrunc) and aA < a5 and aB > aA and aB < a5 and aL < aB
+            done   := true
+            elPat  := "impulso 1-5 + correccion ABC"
+            elWave := "onda C en curso"
+            elConf := 6
+            elCode := s0 * 11
+            float legA = a5 - aA
+            addTarget(s0 * (aB - legA * 0.618), "C = 0.618 x A", false)
+            addTarget(s0 * (aB - legA * 1.0),   "C = A",         false)
+            addTarget(s0 * (aB - legA * 1.618), "C = 1.618 x A", false)
+            addTarget(s0 * a5, "invalida el ABC (extremo de la 5)", true)
+            bool up0 = s0 > 0
+            pushWave(pvB(7), pvP(7), "0", not up0)
+            pushWave(pvB(6), pvP(6), "1", up0)
+            pushWave(pvB(5), pvP(5), "2", not up0)
+            pushWave(pvB(4), pvP(4), "3", up0)
+            pushWave(pvB(3), pvP(3), "4", not up0)
+            pushWave(pvB(2), pvP(2), "5", up0)
+            pushWave(pvB(1), pvP(1), "A", not up0)
+            pushWave(pvB(0), pvP(0), "B", up0)
+
+    // Caso 1 - impulso 1-5 cerrado, correccion recien arrancando.
+    if not done and n >= 6
+        int   s1 = pvD(0)
+        float c0 = s1 * pvP(5)
+        float c1 = s1 * pvP(4)
+        float c2 = s1 * pvP(3)
+        float c3 = s1 * pvP(2)
+        float c4 = s1 * pvP(1)
+        float c5 = s1 * pvP(0)
+        float cL = s1 * liveP
+        // cL < c5: si el precio ya paso el extremo de la onda 5, la 5 se esta
+        // extendiendo y esto no es una correccion en curso, es otro conteo.
+        if impulseOk(c0, c1, c2, c3, c4, c5, ewAllowOverlap, ewAllowTrunc) and cL < c5
+            done   := true
+            elPat  := "impulso 1-5 completo"
+            elWave := "onda A en curso (correccion)"
+            elConf := 5
+            elCode := s1 * 10
+            float tot = c5 - c0
+            addTarget(s1 * (c5 - tot * 0.382), "correccion 0.382 del 1-5", false)
+            addTarget(s1 * (c5 - tot * 0.5),   "correccion 0.5 del 1-5",   false)
+            addTarget(s1 * (c5 - tot * 0.618), "correccion 0.618 del 1-5", false)
+            addTarget(s1 * c4, "extremo de la onda 4 (objetivo clasico)", false)
+            addTarget(s1 * c5, "invalida el fin del impulso", true)
+            bool up1 = s1 > 0
+            pushWave(pvB(5), pvP(5), "0", not up1)
+            pushWave(pvB(4), pvP(4), "1", up1)
+            pushWave(pvB(3), pvP(3), "2", not up1)
+            pushWave(pvB(2), pvP(2), "3", up1)
+            pushWave(pvB(1), pvP(1), "4", not up1)
+            pushWave(pvB(0), pvP(0), "5", up1)
+
+    // Caso 2 - 0-1-2-3-4 cerradas, onda 5 en curso.
+    if not done and n >= 5
+        int   s2 = -pvD(0)
+        float d0 = s2 * pvP(4)
+        float d1 = s2 * pvP(3)
+        float d2 = s2 * pvP(2)
+        float d3 = s2 * pvP(1)
+        float d4 = s2 * pvP(0)
+        float dL = s2 * liveP
+        if seed01234Ok(d0, d1, d2, d3, d4, ewAllowOverlap) and dL > d4
+            done   := true
+            elPat  := "impulso en curso"
+            elWave := "onda 5 en curso"
+            elConf := 4
+            elCode := s2 * 5
+            float w1a = d1 - d0
+            addTarget(s2 * (d4 + w1a * 0.618), "5 = 0.618 x 1", false)
+            addTarget(s2 * (d4 + w1a),         "5 = 1 x 1",     false)
+            addTarget(s2 * (d4 + w1a * 1.618), "5 = 1.618 x 1", false)
+            addTarget(s2 * (d0 + (d3 - d0) * 1.236), "5 = 1.236 x (1-3)", false)
+            addTarget(s2 * d4, "invalida el conteo (extremo de la 4)", true)
+            bool up2 = s2 > 0
+            pushWave(pvB(4), pvP(4), "0", not up2)
+            pushWave(pvB(3), pvP(3), "1", up2)
+            pushWave(pvB(2), pvP(2), "2", not up2)
+            pushWave(pvB(1), pvP(1), "3", up2)
+            pushWave(pvB(0), pvP(0), "4", not up2)
+
+    // Caso 3 - 0-1-2-3 cerradas, onda 4 en curso.
+    if not done and n >= 4
+        int   s3 = pvD(0)
+        float e0 = s3 * pvP(3)
+        float e1 = s3 * pvP(2)
+        float e2 = s3 * pvP(1)
+        float e3 = s3 * pvP(0)
+        float eL = s3 * liveP
+        // `eL > e1` es la R3 aplicada al precio de AHORA: mientras la onda 4 sigue
+        // abierta, el propio precio ya puede haber invadido a la onda 1, y en ese
+        // caso el conteo esta roto aunque los 4 pivotes cerrados encajen. Sin esta
+        // condicion, BTC diario (ATR14 x 5) devolvia una "onda 4" cuyo precio
+        // estaba 19000 USD por encima de su propio nivel de invalidacion.
+        if seed0123Ok(e0, e1, e2, e3) and eL < e3 and (ewAllowOverlap or eL > e1)
+            done   := true
+            elPat  := "impulso en curso"
+            elWave := "onda 4 en curso"
+            elConf := 3
+            elCode := s3 * 4
+            float w3a = e3 - e2
+            addTarget(s3 * (e3 - w3a * 0.236), "4 = 0.236 de la 3", false)
+            addTarget(s3 * (e3 - w3a * 0.382), "4 = 0.382 de la 3", false)
+            addTarget(s3 * (e3 - w3a * 0.5),   "4 = 0.5 de la 3",   false)
+            addTarget(s3 * e1, "invalida el conteo (solapa con la 1)", true)
+            bool up3 = s3 > 0
+            pushWave(pvB(3), pvP(3), "0", not up3)
+            pushWave(pvB(2), pvP(2), "1", up3)
+            pushWave(pvB(1), pvP(1), "2", not up3)
+            pushWave(pvB(0), pvP(0), "3", up3)
+
+    // Caso 4 - 0-1-2 cerradas, onda 3 en curso.
+    if not done and n >= 3
+        int   s4 = -pvD(0)
+        float f0 = s4 * pvP(2)
+        float f1 = s4 * pvP(1)
+        float f2 = s4 * pvP(0)
+        float fL = s4 * liveP
+        if seed012Ok(f0, f1, f2) and fL > f2
+            done   := true
+            elPat  := "impulso en curso"
+            elWave := "onda 3 en curso"
+            elConf := 2
+            elCode := s4 * 3
+            float w1b = f1 - f0
+            addTarget(s4 * (f2 + w1b * 1.0),   "3 = 1 x 1",     false)
+            addTarget(s4 * (f2 + w1b * 1.618), "3 = 1.618 x 1", false)
+            addTarget(s4 * (f2 + w1b * 2.618), "3 = 2.618 x 1", false)
+            addTarget(s4 * f2, "invalida el conteo (extremo de la 2)", true)
+            bool up4 = s4 > 0
+            pushWave(pvB(2), pvP(2), "0", not up4)
+            pushWave(pvB(1), pvP(1), "1", up4)
+            pushWave(pvB(0), pvP(0), "2", not up4)
+
+    // Caso 5 - solo 0-1 cerradas, onda 2 en curso. Es el conteo mas debil:
+    // dos pivotes cualesquiera lo cumplen, por eso queda ultimo y la tabla
+    // muestra "confianza baja".
+    if not done and n >= 2
+        int   s5 = pvD(0)
+        float g0 = s5 * pvP(1)
+        float g1 = s5 * pvP(0)
+        float gL = s5 * liveP
+        if g1 > g0 and gL < g1 and gL > g0
+            done   := true
+            elPat  := "impulso en curso"
+            elWave := "onda 2 en curso"
+            elConf := 1
+            elCode := s5 * 2
+            float w1c = g1 - g0
+            addTarget(s5 * (g1 - w1c * 0.5),   "2 = 0.5 de la 1",   false)
+            addTarget(s5 * (g1 - w1c * 0.618), "2 = 0.618 de la 1", false)
+            addTarget(s5 * (g1 - w1c * 0.786), "2 = 0.786 de la 1", false)
+            addTarget(s5 * g0, "invalida el conteo (arranque de la 1)", true)
+            bool up5 = s5 > 0
+            pushWave(pvB(1), pvP(1), "0", not up5)
+            pushWave(pvB(0), pvP(0), "1", up5)
+
+    // ---- resaltado: los dos niveles que rodean al precio --------------------
+    if markNear
+        if envOn and not na(center)
+            scanNear(center)
+            for i = 0 to array.size(bandsArr) - 1
+                b = array.get(bandsArr, i)
+                if b > 0
+                    scanNear(center * (1 + b / 100))
+                    scanNear(center * (1 - b / 100))
+        if gridOn and anchor > 0 and baseRange > 0
+            for i = 0 to array.size(gridSteps) - 1
+                p = array.get(gridSteps, i)
+                isKey = p == 62.5 or p == 125.0 or p == 175.0 or p == 225.0 or p == 250.0 or p == 275.0
+                if not gridDim or isKey
+                    scanNear(anchor + baseRange * p / 100)
+        if macroOn and anchor > 0 and macroRange > 0
+            for i = 0 to array.size(macroSteps) - 1
+                scanNear(anchor + macroRange * array.get(macroSteps, i) / 100)
+        if weeklyOn and not na(wOpen)
+            scanNear(wOpen)
+        if array.size(elP) > 0
+            for i = 0 to array.size(elP) - 1
+                bool isInv = array.get(elK, i) == 1
+                if (showWaveObj and not isInv) or (showInvalid and isInv)
+                    scanNear(array.get(elP, i))
+
+    // ---- capa 1: envolvente de sesion --------------------------------------
+    if envOn and not na(center)
+        addLevel(center, cMid, "centro  " + fmt(center), 2, false, "centro sesion")
+        for i = 0 to array.size(bandsArr) - 1
+            b = array.get(bandsArr, i)
+            if b > 0
+                up = center * (1 + b / 100)
+                dn = center * (1 - b / 100)
+                addLevel(up, up > close ? cSell : cBuy,
+                     "+" + str.tostring(b) + "%  " + fmt(up), b == b1 ? 2 : 1, false,
+                     "anillo +" + str.tostring(b) + "%")
+                addLevel(dn, dn > close ? cSell : cBuy,
+                     "-" + str.tostring(b) + "%  " + fmt(dn), b == b1 ? 2 : 1, false,
+                     "anillo -" + str.tostring(b) + "%")
+
+    // ---- capa 2: rejilla diaria --------------------------------------------
+    if gridOn and anchor > 0 and baseRange > 0
+        for i = 0 to array.size(gridSteps) - 1
+            p     = array.get(gridSteps, i)
+            lvl   = anchor + baseRange * p / 100
+            isKey = p == 62.5 or p == 125.0 or p == 175.0 or p == 225.0 or p == 250.0 or p == 275.0
+            if not gridDim or isKey
+                // A diferencia de la distancia (distTxt), esto es POSICION ESTRUCTURAL, no relativa al
+                // precio: <=75% esta dentro del rango base, >=125% ya lo excedio.
+                rol  = p <= 75.0 ? "  en la base" : p >= 125.0 ? "  sobre la base" : ""
+                base = p <= 75.0 ? cBuy : p == 125.0 ? cKey : p >= 150.0 ? cSell : cGrid
+                col  = gridDim ? color.new(base, 55) : base
+                addLevel(lvl, col, str.tostring(p) + "%  " + fmt(lvl) + rol,
+                     isKey and not gridDim ? 2 : 1, not isKey or gridDim,
+                     "rejilla " + str.tostring(p) + "%")
+
+    // ---- capa 3: fracciones macro ------------------------------------------
+    if macroOn and anchor > 0 and macroRange > 0
+        for i = 0 to array.size(macroSteps) - 1
+            p   = array.get(macroSteps, i)
+            lvl = anchor + macroRange * p / 100
+            addLevel(lvl, cGrid, "macro " + str.tostring(p) + "%  " + fmt(lvl),
+                 p == 37.5 ? 2 : 1, p != 37.5, "macro " + str.tostring(p) + "%")
+
+    // ---- capa 4: eje semanal -----------------------------------------------
+    if weeklyOn and not na(wOpen)
+        addLevel(wOpen, cAxis, "eje semanal  " + fmt(wOpen), 2, false, "eje semanal")
+        if showWeeklyObj and anchor > 0
+            float  objUp    = na
+            float  objDn    = na
+            string objUpTxt = ""
+            string objDnTxt = ""
+            if baseRange > 0
+                for i = 0 to array.size(gridSteps) - 1
+                    p   = array.get(gridSteps, i)
+                    lvl = anchor + baseRange * p / 100
+                    if lvl >= wOpen and (na(objUp) or lvl < objUp)
+                        objUp    := lvl
+                        objUpTxt := "rejilla " + str.tostring(p) + "%"
+                    if lvl <= wOpen and (na(objDn) or lvl > objDn)
+                        objDn    := lvl
+                        objDnTxt := "rejilla " + str.tostring(p) + "%"
+            if macroRange > 0
+                for i = 0 to array.size(macroSteps) - 1
+                    p   = array.get(macroSteps, i)
+                    lvl = anchor + macroRange * p / 100
+                    if lvl >= wOpen and (na(objUp) or lvl < objUp)
+                        objUp    := lvl
+                        objUpTxt := "macro " + str.tostring(p) + "%"
+                    if lvl <= wOpen and (na(objDn) or lvl > objDn)
+                        objDn    := lvl
+                        objDnTxt := "macro " + str.tostring(p) + "%"
+            if not na(objUp)
+                addLevel(objUp, cSell, "1er obj alcista semanal (" + objUpTxt + ")  " + fmt(objUp), 1, true,
+                     "obj semanal alcista")
+            if not na(objDn)
+                addLevel(objDn, cBuy, "1er obj bajista semanal (" + objDnTxt + ")  " + fmt(objDn), 1, true,
+                     "obj semanal bajista")
+
+    // ---- capa 5, parte B: dibujar el conteo y sus objetivos ------------------
+    if showZigzag and array.size(ewB) > 1
+        for i = 1 to array.size(ewB) - 1
+            lz = line.new(array.get(ewB, i - 1), array.get(ewP, i - 1),
+                 array.get(ewB, i), array.get(ewP, i), xloc = xloc.bar_index,
+                 color = cZig, width = 1, style = line.style_dotted)
+            array.push(lines, lz)
+        // Tramo en curso: del ultimo pivote confirmado al precio de ahora. Va
+        // aparte y punteado porque ES la parte que repinta.
+        lc = line.new(array.get(ewB, array.size(ewB) - 1), array.get(ewP, array.size(ewP) - 1),
+             bar_index, close, xloc = xloc.bar_index,
+             color = color.new(cZig, 40), width = 1, style = line.style_dashed)
+        array.push(lines, lc)
+
+    if showWaves and array.size(ewN) > 0
+        for i = 0 to array.size(ewN) - 1
+            bool lblUp = array.get(ewU, i) == 1
+            lw = label.new(array.get(ewB, i), array.get(ewP, i), array.get(ewN, i),
+                 xloc = xloc.bar_index,
+                 style = lblUp ? label.style_label_down : label.style_label_up,
+                 color = color.new(cWave, 80), textcolor = cWave, size = size.small)
+            array.push(labels, lw)
+
+    if array.size(elP) > 0
+        for i = 0 to array.size(elP) - 1
+            float pt    = array.get(elP, i)
+            bool  isInv = array.get(elK, i) == 1
+            if (showWaveObj and not isInv) or (showInvalid and isInv)
+                // Para la invalidacion, decir donde esta respecto del precio se queda corto:
+                // ese precio no es un nivel mas, es donde la lectura entera deja de valer.
+                // La etiqueta dice entonces por que lado se rompe el conteo -- en indicativo
+                // ("si lo pierde"), no en imperativo: es una condicion del conteo, no una
+                // instruccion. El conteo siempre se muestra con el precio del lado valido (lo
+                // verifica scripts/elliott_check.py), asi que comparar contra `close` alcanza
+                // para saber cual de los dos lados es.
+                string suf = isInv ? (pt < close ? "  si lo pierde" : "  si lo supera") : confTxt(pt)
+                addLevel(pt, isInv ? cSell : cWave,
+                     (isInv ? "X " : "EW ") + array.get(elT, i) + "  " + fmt(pt) + suf,
+                     isInv ? 1 : 2, isInv,
+                     isInv ? "invalidacion EW" : "objetivo EW")
+
+// ------------------------------------------------- vigilancia y escalera (v3) ---
+var string stabTxt  = "-"
+var string pivotTxt = "-"
+var string turnTxt  = "-"
+var int up1 = -1
+var int up2 = -1
+var int up3 = -1
+var int dn1 = -1
+var int dn2 = -1
+var int dn3 = -1
+var array<float>  ladderP = array.new<float>()
+var array<string> ladderT = array.new<string>()
+// anti-spam de alertas: un aviso por nivel, rearmado recien al alejarse al doble
+var float armedUp = na
+var float armedDn = na
+var float lastInvPrice = na
+var bool  lastInvBelow = false
+var int   lastCode = -999
+
+// Una fila de la escalera: nombre corto + precio + distancia. -1 = escalon vacio.
+ladderTxt(int idx) =>
+    idx < 0 ? "-" : array.get(ladderT, idx) + "  " + fmt(array.get(ladderP, idx)) + distTxt(array.get(ladderP, idx))
+
+// Agrega un nivel a la escalera si ese precio no esta ya (igualdad exacta: los niveles
+// dibujados y los de ladderAll salen de las MISMAS formulas, asi que coinciden bit a bit
+// y el que ya se dibujo gana -- su tag no lleva asterisco).
+ladderPush(float priceL, string tagL) =>
+    if not na(priceL) and priceL > 0
+        bool dupL = false
+        if array.size(ladderP) > 0
+            for i = 0 to array.size(ladderP) - 1
+                if array.get(ladderP, i) == priceL
+                    dupL := true
+                    break
+        if not dupL
+            array.push(ladderP, priceL)
+            array.push(ladderT, tagL)
+
+if barstate.islast
+    // ---- v3.2: estabilidad del conteo. El espejo waveCode() corre con el umbral
+    // principal (guardia de coherencia contra el conteo real) y con el umbral +/-
+    // stabPct. Tres lecturas iguales = estable; si no, se muestran las tres.
+    int mirrorMain = waveCode(zzP, zzD, close)
+    int codeLo     = waveCode(zzPLo, zzDLo, close)
+    int codeHi     = waveCode(zzPHi, zzDHi, close)
+    stabTxt := mirrorMain != elCode ? "n/d (espejo desincronizado)" :
+         codeLo == elCode and codeHi == elCode ? "estable (umbral +/-" + str.tostring(stabPct, "#") + "%)" :
+         "FRAGIL: " + codeName(codeLo) + " | " + codeName(elCode) + " | " + codeName(codeHi)
+
+    // ---- v3.3: estado del pivote. El ultimo confirmado, y el precio exacto que
+    // confirmaria el giro del tramo en curso (la parte que repinta, hecha explicita).
+    pivotTxt := array.size(zzB) > 0 ? "hace " + str.tostring(bar_index - array.get(zzB, array.size(zzB) - 1)) + " barras" : "-"
+    turnTxt := na(zExt) ? "-" :
+         zDir == 1 ? "si pierde " + fmt(zExt - zzDev) + distTxt(zExt - zzDev) :
+         zDir == -1 ? "si supera " + fmt(zExt + zzDev) + distTxt(zExt + zzDev) : "-"
+
+    // ---- v3.5: escalera = niveles dibujados + (opcional) capas apagadas, con * ----
+    array.clear(ladderP)
+    array.clear(ladderT)
+    if array.size(drawnPrice) > 0
+        for i = 0 to array.size(drawnPrice) - 1
+            ladderPush(array.get(drawnPrice, i), array.get(drawnTag, i))
+    if ladderAll
+        if anchor > 0 and baseRange > 0
+            for i = 0 to array.size(gridSteps) - 1
+                float pgs = array.get(gridSteps, i)
+                ladderPush(anchor + baseRange * pgs / 100, "rejilla " + str.tostring(pgs) + "%*")
+        if anchor > 0 and macroRange > 0
+            for i = 0 to array.size(macroSteps) - 1
+                float pms = array.get(macroSteps, i)
+                ladderPush(anchor + macroRange * pms / 100, "macro " + str.tostring(pms) + "%*")
+        if not na(wOpen)
+            ladderPush(wOpen, "eje semanal*")
+
+    // los 3 mas cercanos a cada lado del precio
+    up1 := -1
+    up2 := -1
+    up3 := -1
+    dn1 := -1
+    dn2 := -1
+    dn3 := -1
+    if array.size(ladderP) > 0
+        float ref = close
+        for k = 1 to 3
+            float best = na
+            int   bi   = -1
+            for i = 0 to array.size(ladderP) - 1
+                float pl = array.get(ladderP, i)
+                if pl > ref and (na(best) or pl < best)
+                    best := pl
+                    bi   := i
+            if bi == -1
+                break
+            if k == 1
+                up1 := bi
+            else if k == 2
+                up2 := bi
+            else
+                up3 := bi
+            ref := best
+        ref := close
+        for k = 1 to 3
+            float best = na
+            int   bi   = -1
+            for i = 0 to array.size(ladderP) - 1
+                float pl = array.get(ladderP, i)
+                if pl < ref and (na(best) or pl > best)
+                    best := pl
+                    bi   := i
+            if bi == -1
+                break
+            if k == 1
+                dn1 := bi
+            else if k == 2
+                dn2 := bi
+            else
+                dn3 := bi
+            ref := best
+
+    // ---- v3.1: alertas. Requieren crear en TradingView UNA alerta sobre este
+    // indicador con la condicion "Any alert() function call"; despues cada aviso
+    // sale de aca. Ninguna alerta es una senal: avisan que un precio del PLAN
+    // (un nivel de la escalera, la invalidacion, el conteo) quedo al alcance.
+    if not na(dailyAtr) and dailyAtr > 0
+        if alertLadder and up1 >= 0
+            float puA = array.get(ladderP, up1)
+            float duA = (puA - close) / dailyAtr
+            if duA <= alertAtrDist
+                if na(armedUp) or armedUp != puA
+                    alert(syminfo.ticker + ": a " + str.tostring(duA, "#.##") + " ATR de " + array.get(ladderT, up1) + " " + fmt(puA), alert.freq_once_per_bar)
+                    armedUp := puA
+            else if duA > alertAtrDist * 2
+                armedUp := na
+        if alertLadder and dn1 >= 0
+            float pdA = array.get(ladderP, dn1)
+            float ddA = (close - pdA) / dailyAtr
+            if ddA <= alertAtrDist
+                if na(armedDn) or armedDn != pdA
+                    alert(syminfo.ticker + ": a " + str.tostring(ddA, "#.##") + " ATR de " + array.get(ladderT, dn1) + " " + fmt(pdA), alert.freq_once_per_bar)
+                    armedDn := pdA
+            else if ddA > alertAtrDist * 2
+                armedDn := na
+    if alertInvalidation and not na(lastInvPrice)
+        if (lastInvBelow and close < lastInvPrice) or (not lastInvBelow and close > lastInvPrice)
+            alert(syminfo.ticker + ": invalidacion del conteo cruzada en " + fmt(lastInvPrice), alert.freq_once_per_bar)
+            lastInvPrice := na
+    // la invalidacion vigente se guarda DESPUES del chequeo, para comparar contra la previa
+    float curInv = na
+    if array.size(elP) > 0
+        for i = 0 to array.size(elP) - 1
+            if array.get(elK, i) == 1
+                curInv := array.get(elP, i)
+                break
+    if not na(curInv)
+        lastInvPrice := curInv
+        lastInvBelow := curInv < close
+    // cambio de conteo: solo al CIERRE de barra, para que el repintado intrabarra no spamee
+    if alertCountChange and barstate.isconfirmed
+        if lastCode != -999 and elCode != lastCode
+            alert(syminfo.ticker + ": el conteo cambio de " + codeName(lastCode) + " a " + codeName(elCode), alert.freq_once_per_bar)
+        lastCode := elCode
+
+// ------------------------------------------------------------- diagnostico ---
+var table t = table.new(position.top_right, 2, 19, border_width = 1,
+     frame_color = color.new(color.gray, 70), frame_width = 1)
+
+if barstate.islast and showTable
+    impulsoTxt = autoBase ? (impulseOpenFlag == 1 ? "abierto" : "cerrado") : "manual"
+    table.cell(t, 0, 0, "capa",       text_color = color.gray, text_size = size.tiny)
+    table.cell(t, 1, 0, layerName,    text_color = color.new(color.white, 20), text_size = size.tiny)
+    anclaTxt = fmt(anchor) + (autoAnchor ? "  (" + str.tostring(anchorSpanDays) + "d" +
+         (anchorExtFlag == 1 ? ", extendida" : "") + ")" : "")
+    table.cell(t, 0, 1, "ancla",      text_color = color.gray, text_size = size.tiny)
+    table.cell(t, 1, 1, anclaTxt,     text_color = cBuy, text_size = size.tiny)
+    table.cell(t, 0, 2, "rango base", text_color = color.gray, text_size = size.tiny)
+    table.cell(t, 1, 2, fmt(baseRange) + " (" + impulsoTxt + ")", text_color = cKey, text_size = size.tiny)
+    table.cell(t, 0, 3, "caida macro", text_color = color.gray, text_size = size.tiny)
+    table.cell(t, 1, 3, fmt(macroRange), text_color = cGrid, text_size = size.tiny)
+    table.cell(t, 0, 4, "centro",     text_color = color.gray, text_size = size.tiny)
+    table.cell(t, 1, 4, fmt(center),  text_color = cMid, text_size = size.tiny)
+    table.cell(t, 0, 5, "eje semanal", text_color = color.gray, text_size = size.tiny)
+    table.cell(t, 1, 5, na(wOpen) ? "-" : fmt(wOpen), text_color = cAxis, text_size = size.tiny)
+    table.cell(t, 0, 6, "125%",       text_color = color.gray, text_size = size.tiny)
+    table.cell(t, 1, 6, fmt(anchor + baseRange * 1.25), text_color = cKey, text_size = size.tiny)
+
+    // ---- escalera (v3: calculada en el bloque de vigilancia, sobre ladderP/ladderT,
+    // que incluye las capas apagadas si ladderAll esta activo) ----
+    table.cell(t, 0, 7,  "arriba 3",  text_color = color.gray, text_size = size.tiny)
+    table.cell(t, 1, 7,  ladderTxt(up3), text_color = cSell, text_size = size.tiny)
+    table.cell(t, 0, 8,  "arriba 2",  text_color = color.gray, text_size = size.tiny)
+    table.cell(t, 1, 8,  ladderTxt(up2), text_color = cSell, text_size = size.tiny)
+    table.cell(t, 0, 9,  "arriba 1",  text_color = color.gray, text_size = size.tiny)
+    table.cell(t, 1, 9,  ladderTxt(up1), text_color = cSell, text_size = size.tiny)
+    table.cell(t, 0, 10, "abajo 1",   text_color = color.gray, text_size = size.tiny)
+    table.cell(t, 1, 10, ladderTxt(dn1), text_color = cBuy, text_size = size.tiny)
+    table.cell(t, 0, 11, "abajo 2",   text_color = color.gray, text_size = size.tiny)
+    table.cell(t, 1, 11, ladderTxt(dn2), text_color = cBuy, text_size = size.tiny)
+    table.cell(t, 0, 12, "abajo 3",   text_color = color.gray, text_size = size.tiny)
+    table.cell(t, 1, 12, ladderTxt(dn3), text_color = cBuy, text_size = size.tiny)
+
+    // Capa 5. "confianza" = cuantas ondas quedaron CERRADAS, no calidad del
+    // pronostico: un conteo de 2 pivotes encaja casi siempre y vale poco.
+    confTab = elConf >= 5 ? "alta (" + str.tostring(elConf) + " ondas)" :
+         elConf >= 3 ? "media (" + str.tostring(elConf) + " ondas)" :
+         elConf >= 1 ? "baja (" + str.tostring(elConf) + " ondas)" : "-"
+    zzTxt = (zzUseAtr ? "ATR " + str.tostring(zzAtrLen) + " x " + str.tostring(zzAtrMult) :
+         str.tostring(zzDevPct) + "%") + " = " + fmt(zzDev)
+    table.cell(t, 0, 13, "Elliott",   text_color = color.gray, text_size = size.tiny)
+    table.cell(t, 1, 13, elPat + " / " + elWave, text_color = cWave, text_size = size.tiny)
+    table.cell(t, 0, 14, "confianza", text_color = color.gray, text_size = size.tiny)
+    table.cell(t, 1, 14, confTab,     text_color = cWave, text_size = size.tiny)
+    table.cell(t, 0, 15, "zigzag",    text_color = color.gray, text_size = size.tiny)
+    table.cell(t, 1, 15, zzTxt + "  (repinta)", text_color = cZig, text_size = size.tiny)
+    // v3: estabilidad del conteo y estado del pivote, calculados en el bloque de vigilancia
+    table.cell(t, 0, 16, "estabilidad", text_color = color.gray, text_size = size.tiny)
+    table.cell(t, 1, 16, stabTxt,     text_color = cWave, text_size = size.tiny)
+    table.cell(t, 0, 17, "ult. pivote", text_color = color.gray, text_size = size.tiny)
+    table.cell(t, 1, 17, pivotTxt,    text_color = cZig, text_size = size.tiny)
+    table.cell(t, 0, 18, "confirma giro", text_color = color.gray, text_size = size.tiny)
+    table.cell(t, 1, 18, turnTxt,     text_color = cZig, text_size = size.tiny)
