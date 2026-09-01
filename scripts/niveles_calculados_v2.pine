@@ -66,8 +66,11 @@
 //     descriptivo. Nadie midio aca si el conteo aporta retorno esperado. Ademas
 //     hereda el problema de la rejilla: mas lineas dibujadas = mas "aciertos"
 //     por construccion. Ninguna etiqueta sugiere una accion: describen DONDE esta cada
-//     nivel (respecto del precio o del rango base) y de que calculo sale. Esa es toda la
-//     intencion de la herramienta - ver la accion del precio, no anticiparla.
+//     nivel, A QUE DISTANCIA (en % y en ATR diarios, que es lo que un plan necesita
+//     saber: cuanto falta y si es alcanzable) y de que calculo sale. La tabla ademas
+//     lista los 3 niveles mas cercanos a cada lado del precio, con nombre y distancia.
+//     Esa es toda la intencion de la herramienta - ver la accion del precio para poder
+//     planear sobre ella, no anticiparla.
 //     Esto no es asesoramiento de inversion.
 // =============================================================================
 
@@ -189,6 +192,10 @@ layerName = autoLayer ? (isIntraday ? "envolvente de sesion" : isDaily ? "rejill
 calcInputs() =>
     var float allTimeHigh = na
     allTimeHigh := na(allTimeHigh) ? high : math.max(allTimeHigh, high)
+    // ATR(14) DIARIO, para expresar distancias. Se calcula aca (contexto diario) y no en el
+    // grafico: en intradia el ATR de la temporalidad del chart mediria otra cosa, y las
+    // distancias de un plan se piensan en dias.
+    float dAtr14 = ta.atr(14)
 
     float aAnchor  = na
     float aBase    = na
@@ -243,9 +250,9 @@ calcInputs() =>
                     break
         aBase := top - minLow
 
-    [aAnchor, aBase, allTimeHigh, aOpen ? 1 : 0, aSpan, aExt ? 1 : 0]
+    [aAnchor, aBase, allTimeHigh, aOpen ? 1 : 0, aSpan, aExt ? 1 : 0, dAtr14]
 
-[autoAnchorVal, autoBaseVal, autoCycleVal, impulseOpenFlag, anchorSpanDays, anchorExtFlag] =
+[autoAnchorVal, autoBaseVal, autoCycleVal, impulseOpenFlag, anchorSpanDays, anchorExtFlag, dailyAtr] =
      request.security(syminfo.tickerid, "D", calcInputs(), lookahead = barmerge.lookahead_on)
 
 dOpen  = request.security(syminfo.tickerid, "D", open,     lookahead = barmerge.lookahead_on)
@@ -274,6 +281,8 @@ var array<float> near   = array.new<float>(2, na)
 // y escalonar los que quedan demasiado cerca como para leerse.
 var array<float> drawnPrice = array.new<float>()
 var array<label> drawnLabel = array.new<label>()
+var array<string> drawnTag  = array.new<string>()   // nombre corto del nivel, para la escalera de la tabla
+var array<string> drawnBase = array.new<string>()   // texto de la etiqueta SIN la distancia, para reconstruirla al fusionar
 
 clearAll() =>
     while array.size(lines) > 0
@@ -282,19 +291,32 @@ clearAll() =>
         label.delete(array.pop(labels))
     array.clear(drawnPrice)
     array.clear(drawnLabel)
+    array.clear(drawnTag)
+    array.clear(drawnBase)
 
-// Ubicacion del nivel respecto del precio de AHORA. Decia "COMPRA"/"VENTA", heredado de la
-// v1: describia el rol dentro del metodo, pero leido suelto en el grafico sonaba a
-// recomendacion, que es exactamente lo contrario de para que existe esto (mirar la accion
-// del precio, no anticiparla). El dato que aporta la etiqueta es el mismo; lo que cambia es
-// que ahora dice lo que es.
-roleTxt(float lvl) =>
-    lvl > close * 1.0005 ? "  sobre el precio" : lvl < close * 0.9995 ? "  bajo el precio" : ""
+// Distancia del nivel al precio de AHORA, con signo: negativo = debajo. Reemplaza al texto
+// "bajo/sobre el precio" (que a su vez habia reemplazado a COMPRA/VENTA): el signo ya dice
+// el lado, y la magnitud es el dato que un plan necesita -- cuanto falta. Va en % y ademas
+// en ATR(14) DIARIOS, porque el % solo no viaja entre activos: 5% en SOL y 5% en BTC no son
+// la misma distancia en volatilidad, y el ATR dice si un nivel es alcanzable en dias o es
+// decorado. Dentro de +/-0.05% (la vieja zona muerta) no se muestra nada.
+distTxt(float lvl) =>
+    float pct = (lvl - close) / close * 100
+    // Solo ASCII en los textos de este archivo: viaja por el portapapeles de PowerShell
+    // 5.1, que lee UTF-8 sin BOM como ANSI y convierte cualquier multibyte en mojibake
+    // (el punto medio tipografico salio como "A-punto" en el grafico, visto en vivo).
+    string atrPart = na(dailyAtr) or dailyAtr <= 0 ? "" :
+         " (" + str.tostring(math.abs(lvl - close) / dailyAtr, "#.#") + " ATR)"
+    math.abs(pct) < 0.05 ? "" : "  " + (pct > 0 ? "+" : "") + str.tostring(pct, "#.#") + "%" + atrPart
 
 fmt(float p) =>
     str.tostring(p, format.mintick)
 
-addLevel(float price, color col, string txt, int width, bool dashed) =>
+// `tag` es el nombre corto del nivel ("rejilla 75%", "eje semanal", "objetivo EW"):
+// no se dibuja en el grafico, alimenta la escalera de planificacion de la tabla. La
+// distancia (distTxt) se agrega ACA y no en cada llamada, para que ningun nivel pueda
+// quedarse sin ella ni llevarla dos veces.
+addLevel(float price, color col, string txt, int width, bool dashed, string tag) =>
     if not na(price) and price > 0
         visible = math.max(chart.right_visible_bar_time - chart.left_visible_bar_time, 1)
         barsVis = math.max(math.round(visible / math.max(dayBarMs, 1)), 20)
@@ -312,7 +334,7 @@ addLevel(float price, color col, string txt, int width, bool dashed) =>
         int dup   = -1
         int crowd = 0
         // La guarda de tamano NO es decorativa: en Pine, `for i = 0 to size - 1` con el
-        // array VACIO no itera cero veces — itera hacia atras, porque cuando `to` es
+        // array VACIO no itera cero veces -- itera hacia atras, porque cuando `to` es
         // menor que `from` el contador decrece. Con size 0 eso da `for i = 0 to -1`, que
         // corre con i = 0 y revienta en el array.get (RE10045, visto en vivo: el primer
         // nivel de cada pasada encuentra `drawnPrice` recien vaciado por clearAll).
@@ -326,8 +348,11 @@ addLevel(float price, color col, string txt, int width, bool dashed) =>
 
         if dup >= 0
             if showLbl
-                lbDup = array.get(drawnLabel, dup)
-                label.set_text(lbDup, label.get_text(lbDup) + "   +   " + txt)
+                // Reconstruye la etiqueta desde el texto base acumulado: la distancia va
+                // UNA sola vez y al final, aunque el nivel junte tres lecturas.
+                string merged = array.get(drawnBase, dup) + "   +   " + txt
+                array.set(drawnBase, dup, merged)
+                label.set_text(array.get(drawnLabel, dup), merged + distTxt(price))
         else
             // Los vecinos se escalonan en horizontal (la etiqueta esta anclada al precio,
             // no se puede mover en vertical). La linea se alarga hasta su etiqueta para
@@ -346,13 +371,21 @@ addLevel(float price, color col, string txt, int width, bool dashed) =>
                  style = dashed and not isNear ? line.style_dashed : line.style_solid)
             array.push(lines, ln)
             array.push(drawnPrice, price)
+            array.push(drawnTag, tag)
             if showLbl
-                lb = label.new(xEnd, price, (isNear ? "> " : "") + txt, xloc = xloc.bar_index,
+                string base = (isNear ? "> " : "") + txt
+                lb = label.new(xEnd, price, base + distTxt(price), xloc = xloc.bar_index,
                      style = label.style_label_left,
                      color = color.new(color.black, 100),
                      textcolor = col, size = size.small)
                 array.push(labels, lb)
                 array.push(drawnLabel, lb)
+                array.push(drawnBase, base)
+
+// Una fila de la escalera de la tabla: nombre corto + precio + distancia. -1 = no hay
+// nivel en ese escalon (menos de 3 dibujados de ese lado del precio).
+ladderTxt(int idx) =>
+    idx < 0 ? "-" : array.get(drawnTag, idx) + "  " + fmt(array.get(drawnPrice, idx)) + distTxt(array.get(drawnPrice, idx))
 
 bandsArr   = array.from(b1, b2, b3, b4)
 gridSteps  = array.from(0.0, 25.0, 50.0, 62.5, 75.0, 100.0, 125.0, 150.0, 175.0, 200.0, 225.0, 250.0, 275.0)
@@ -748,16 +781,18 @@ if barstate.islast
 
     // ---- capa 1: envolvente de sesion --------------------------------------
     if envOn and not na(center)
-        addLevel(center, cMid, "centro  " + fmt(center), 2, false)
+        addLevel(center, cMid, "centro  " + fmt(center), 2, false, "centro sesion")
         for i = 0 to array.size(bandsArr) - 1
             b = array.get(bandsArr, i)
             if b > 0
                 up = center * (1 + b / 100)
                 dn = center * (1 - b / 100)
                 addLevel(up, up > close ? cSell : cBuy,
-                     "+" + str.tostring(b) + "%  " + fmt(up) + roleTxt(up), b == b1 ? 2 : 1, false)
+                     "+" + str.tostring(b) + "%  " + fmt(up), b == b1 ? 2 : 1, false,
+                     "anillo +" + str.tostring(b) + "%")
                 addLevel(dn, dn > close ? cSell : cBuy,
-                     "-" + str.tostring(b) + "%  " + fmt(dn) + roleTxt(dn), b == b1 ? 2 : 1, false)
+                     "-" + str.tostring(b) + "%  " + fmt(dn), b == b1 ? 2 : 1, false,
+                     "anillo -" + str.tostring(b) + "%")
 
     // ---- capa 2: rejilla diaria --------------------------------------------
     if gridOn and anchor > 0 and baseRange > 0
@@ -766,25 +801,26 @@ if barstate.islast
             lvl   = anchor + baseRange * p / 100
             isKey = p == 62.5 or p == 125.0 or p == 175.0 or p == 225.0 or p == 250.0 or p == 275.0
             if not gridDim or isKey
-                // Igual que en roleTxt, pero esto es POSICION ESTRUCTURAL, no relativa al
+                // A diferencia de la distancia (distTxt), esto es POSICION ESTRUCTURAL, no relativa al
                 // precio: <=75% esta dentro del rango base, >=125% ya lo excedio.
                 rol  = p <= 75.0 ? "  en la base" : p >= 125.0 ? "  sobre la base" : ""
                 base = p <= 75.0 ? cBuy : p == 125.0 ? cKey : p >= 150.0 ? cSell : cGrid
                 col  = gridDim ? color.new(base, 55) : base
                 addLevel(lvl, col, str.tostring(p) + "%  " + fmt(lvl) + rol,
-                     isKey and not gridDim ? 2 : 1, not isKey or gridDim)
+                     isKey and not gridDim ? 2 : 1, not isKey or gridDim,
+                     "rejilla " + str.tostring(p) + "%")
 
     // ---- capa 3: fracciones macro ------------------------------------------
     if macroOn and anchor > 0 and macroRange > 0
         for i = 0 to array.size(macroSteps) - 1
             p   = array.get(macroSteps, i)
             lvl = anchor + macroRange * p / 100
-            addLevel(lvl, cGrid, "macro " + str.tostring(p) + "%  " + fmt(lvl) + roleTxt(lvl),
-                 p == 37.5 ? 2 : 1, p != 37.5)
+            addLevel(lvl, cGrid, "macro " + str.tostring(p) + "%  " + fmt(lvl),
+                 p == 37.5 ? 2 : 1, p != 37.5, "macro " + str.tostring(p) + "%")
 
     // ---- capa 4: eje semanal -----------------------------------------------
     if weeklyOn and not na(wOpen)
-        addLevel(wOpen, cAxis, "eje semanal  " + fmt(wOpen) + roleTxt(wOpen), 2, false)
+        addLevel(wOpen, cAxis, "eje semanal  " + fmt(wOpen), 2, false, "eje semanal")
         if showWeeklyObj and anchor > 0
             float  objUp    = na
             float  objDn    = na
@@ -811,9 +847,11 @@ if barstate.islast
                         objDn    := lvl
                         objDnTxt := "macro " + str.tostring(p) + "%"
             if not na(objUp)
-                addLevel(objUp, cSell, "1er obj alcista semanal (" + objUpTxt + ")  " + fmt(objUp), 1, true)
+                addLevel(objUp, cSell, "1er obj alcista semanal (" + objUpTxt + ")  " + fmt(objUp), 1, true,
+                     "obj semanal alcista")
             if not na(objDn)
-                addLevel(objDn, cBuy, "1er obj bajista semanal (" + objDnTxt + ")  " + fmt(objDn), 1, true)
+                addLevel(objDn, cBuy, "1er obj bajista semanal (" + objDnTxt + ")  " + fmt(objDn), 1, true,
+                     "obj semanal bajista")
 
     // ---- capa 5, parte B: dibujar el conteo y sus objetivos ------------------
     if showZigzag and array.size(ewB) > 1
@@ -845,18 +883,19 @@ if barstate.islast
             if (showWaveObj and not isInv) or (showInvalid and isInv)
                 // Para la invalidacion, decir donde esta respecto del precio se queda corto:
                 // ese precio no es un nivel mas, es donde la lectura entera deja de valer.
-                // La etiqueta dice entonces por que lado se rompe el conteo — en indicativo
+                // La etiqueta dice entonces por que lado se rompe el conteo -- en indicativo
                 // ("si lo pierde"), no en imperativo: es una condicion del conteo, no una
                 // instruccion. El conteo siempre se muestra con el precio del lado valido (lo
                 // verifica scripts/elliott_check.py), asi que comparar contra `close` alcanza
                 // para saber cual de los dos lados es.
-                string suf = isInv ? (pt < close ? "  si lo pierde" : "  si lo supera") : roleTxt(pt) + confTxt(pt)
+                string suf = isInv ? (pt < close ? "  si lo pierde" : "  si lo supera") : confTxt(pt)
                 addLevel(pt, isInv ? cSell : cWave,
                      (isInv ? "X " : "EW ") + array.get(elT, i) + "  " + fmt(pt) + suf,
-                     isInv ? 1 : 2, isInv)
+                     isInv ? 1 : 2, isInv,
+                     isInv ? "invalidacion EW" : "objetivo EW")
 
 // ------------------------------------------------------------- diagnostico ---
-var table t = table.new(position.top_right, 2, 12, border_width = 1,
+var table t = table.new(position.top_right, 2, 16, border_width = 1,
      frame_color = color.new(color.gray, 70), frame_width = 1)
 
 if barstate.islast and showTable
@@ -877,10 +916,68 @@ if barstate.islast and showTable
     table.cell(t, 1, 5, na(wOpen) ? "-" : fmt(wOpen), text_color = cAxis, text_size = size.tiny)
     table.cell(t, 0, 6, "125%",       text_color = color.gray, text_size = size.tiny)
     table.cell(t, 1, 6, fmt(anchor + baseRange * 1.25), text_color = cKey, text_size = size.tiny)
-    table.cell(t, 0, 7, "resistencia", text_color = color.gray, text_size = size.tiny)
-    table.cell(t, 1, 7, na(array.get(near, 1)) ? "-" : fmt(array.get(near, 1)), text_color = cSell, text_size = size.tiny)
-    table.cell(t, 0, 8, "soporte",    text_color = color.gray, text_size = size.tiny)
-    table.cell(t, 1, 8, na(array.get(near, 0)) ? "-" : fmt(array.get(near, 0)), text_color = cBuy, text_size = size.tiny)
+
+    // ---- escalera de planificacion: los 3 niveles dibujados mas cercanos a cada lado ----
+    // Reemplaza a las viejas filas "resistencia"/"soporte" (que eran solo el primer escalon
+    // de cada lado, sin nombre ni distancia). Sale de drawnPrice/drawnTag, o sea SOLO de lo
+    // efectivamente dibujado: sin duplicados y sin capas apagadas. Orden visual: de arriba
+    // hacia abajo, como en el grafico.
+    int up1 = -1
+    int up2 = -1
+    int up3 = -1
+    int dn1 = -1
+    int dn2 = -1
+    int dn3 = -1
+    if array.size(drawnPrice) > 0
+        float ref = close
+        for k = 1 to 3
+            float best = na
+            int   bi   = -1
+            for i = 0 to array.size(drawnPrice) - 1
+                float pl = array.get(drawnPrice, i)
+                if pl > ref and (na(best) or pl < best)
+                    best := pl
+                    bi   := i
+            if bi == -1
+                break
+            if k == 1
+                up1 := bi
+            else if k == 2
+                up2 := bi
+            else
+                up3 := bi
+            ref := best
+        ref := close
+        for k = 1 to 3
+            float best = na
+            int   bi   = -1
+            for i = 0 to array.size(drawnPrice) - 1
+                float pl = array.get(drawnPrice, i)
+                if pl < ref and (na(best) or pl > best)
+                    best := pl
+                    bi   := i
+            if bi == -1
+                break
+            if k == 1
+                dn1 := bi
+            else if k == 2
+                dn2 := bi
+            else
+                dn3 := bi
+            ref := best
+    table.cell(t, 0, 7,  "arriba 3",  text_color = color.gray, text_size = size.tiny)
+    table.cell(t, 1, 7,  ladderTxt(up3), text_color = cSell, text_size = size.tiny)
+    table.cell(t, 0, 8,  "arriba 2",  text_color = color.gray, text_size = size.tiny)
+    table.cell(t, 1, 8,  ladderTxt(up2), text_color = cSell, text_size = size.tiny)
+    table.cell(t, 0, 9,  "arriba 1",  text_color = color.gray, text_size = size.tiny)
+    table.cell(t, 1, 9,  ladderTxt(up1), text_color = cSell, text_size = size.tiny)
+    table.cell(t, 0, 10, "abajo 1",   text_color = color.gray, text_size = size.tiny)
+    table.cell(t, 1, 10, ladderTxt(dn1), text_color = cBuy, text_size = size.tiny)
+    table.cell(t, 0, 11, "abajo 2",   text_color = color.gray, text_size = size.tiny)
+    table.cell(t, 1, 11, ladderTxt(dn2), text_color = cBuy, text_size = size.tiny)
+    table.cell(t, 0, 12, "abajo 3",   text_color = color.gray, text_size = size.tiny)
+    table.cell(t, 1, 12, ladderTxt(dn3), text_color = cBuy, text_size = size.tiny)
+
     // Capa 5. "confianza" = cuantas ondas quedaron CERRADAS, no calidad del
     // pronostico: un conteo de 2 pivotes encaja casi siempre y vale poco.
     confTab = elConf >= 5 ? "alta (" + str.tostring(elConf) + " ondas)" :
@@ -888,9 +985,9 @@ if barstate.islast and showTable
          elConf >= 1 ? "baja (" + str.tostring(elConf) + " ondas)" : "-"
     zzTxt = (zzUseAtr ? "ATR " + str.tostring(zzAtrLen) + " x " + str.tostring(zzAtrMult) :
          str.tostring(zzDevPct) + "%") + " = " + fmt(zzDev)
-    table.cell(t, 0, 9,  "Elliott",   text_color = color.gray, text_size = size.tiny)
-    table.cell(t, 1, 9,  elPat + " / " + elWave, text_color = cWave, text_size = size.tiny)
-    table.cell(t, 0, 10, "confianza", text_color = color.gray, text_size = size.tiny)
-    table.cell(t, 1, 10, confTab,     text_color = cWave, text_size = size.tiny)
-    table.cell(t, 0, 11, "zigzag",    text_color = color.gray, text_size = size.tiny)
-    table.cell(t, 1, 11, zzTxt + "  (repinta)", text_color = cZig, text_size = size.tiny)
+    table.cell(t, 0, 13, "Elliott",   text_color = color.gray, text_size = size.tiny)
+    table.cell(t, 1, 13, elPat + " / " + elWave, text_color = cWave, text_size = size.tiny)
+    table.cell(t, 0, 14, "confianza", text_color = color.gray, text_size = size.tiny)
+    table.cell(t, 1, 14, confTab,     text_color = cWave, text_size = size.tiny)
+    table.cell(t, 0, 15, "zigzag",    text_color = color.gray, text_size = size.tiny)
+    table.cell(t, 1, 15, zzTxt + "  (repinta)", text_color = cZig, text_size = size.tiny)

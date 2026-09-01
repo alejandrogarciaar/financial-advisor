@@ -874,3 +874,22 @@ wiring it:
   So: do NOT add a `*_VALIDATED_*` constant for Elliott, an `st.success`, or wire wave targets
   into the DCA box or the Zone Engine. Re-running later with more history is fine; loosening the
   threshold, dropping the placebo, or promoting a single-symbol result is not.
+
+- **2026-08-31, later: v2 labels reworked for PLANNING, not signaling — distance everywhere and a
+  ladder in the table.** The user's stated purpose ("no quiero predicción, quiero información para
+  definir planes") reframed what the labels should carry: not roles, not even position words, but
+  DISTANCE. `roleTxt()` ("bajo/sobre el precio") was replaced by `distTxt()`: every level now shows
+  its signed distance to the current price in % AND in DAILY ATR(14) — e.g. `-19.1% (4.4 ATR)`.
+  The % alone doesn't travel between assets (5% in SOL and 5% in BTC are different distances in
+  volatility); the ATR multiple says whether a level is reachable in days or is decoration. The ATR
+  is computed in the DAILY security context (returned from `calcInputs()`'s tuple), deliberately
+  not the chart timeframe's ATR — plans are thought in days. Distance is appended centrally in
+  `addLevel()` so no level can miss it or carry it twice (merged labels rebuild from a stored base
+  text, `drawnBase`). The table replaced its `resistencia`/`soporte` rows (nearest price each side,
+  no name, no distance) with a 6-row planning ladder — the 3 nearest DRAWN levels each side, each
+  with a short tag (`drawnTag`, passed per call site), price, and distance, ordered top-to-bottom
+  like the chart. Two operational lessons recorded: (1) the .pine must stay PURE ASCII — it travels
+  through PowerShell 5.1's clipboard, which reads UTF-8-without-BOM as ANSI, and a typographic
+  middle dot in `distTxt` rendered as mojibake on the chart (seen live, replaced with ASCII
+  parens); (2) the user granted standing authorization to update the saved "Niveles Calculados v2"
+  script in TradingView on every iteration, so the paste-update-verify loop needs no per-step ask.
