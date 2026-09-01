@@ -841,3 +841,36 @@ wiring it:
   whatever that script name held in the account. The repo copy is the source of truth, and
   TradingView keeps per-script version history, but rename before testing if the saved version
   matters.
+
+- **2026-08-31, the OOS study for layer 5 was actually run (`scripts/elliott_oos_validate.py`):
+  0 robust variants. Elliott stays descriptive, like layers 1-4.** The repaint that makes this
+  layer awkward to test is precisely what makes the test honest: `zigzag_states()` returns the
+  pivots confirmed as of each bar, so bar `i`'s count is built from bar `i`'s information only.
+  A naive backtest that projects today's finished count backwards would look spectacular by
+  construction; this one cannot.
+  Design: (A) DIRECTION — each wave state implies a direction (3 and 5 impulsive with the
+  structure, 2/4/A/C against it), times the count's sign, giving a pre-registered expected sign
+  per bar; (B) LEVELS — touches within θ·ATR(14) of the Fibonacci targets or the invalidation,
+  split by side, θ ∈ {0.25, 0.5, 1.0}, with the same K=40 density placebo as
+  `niveles_oos_validate.py`. Plus a stage-2 redundancy check against `classify_regime_series`,
+  the same control that excluded a VWAP combo and declared Fear & Greed redundant. **The zigzag
+  threshold is FIXED at the indicator's default (ATR14×3)** — sweeping it and keeping whatever
+  validated would be fabricating the result, since the threshold *is* the count; ×2 and ×5 are
+  reported as sensitivity only.
+  Results: the pre-registered headline (aggregate direction) validates **only for SOL**, in both
+  directions, and fails for BTC and ETH — a signal that works on one coin of three is a
+  coincidence. The only variant validating on all three is "onda 2 en curso / esperado bajista"
+  (mean test gaps −3.19% BTC, −5.18% ETH, −4.85% SOL, surviving stage 2 in at least one regime
+  each, all three for SOL) — but it is **threshold-fragile**: at ATR×2 it fails on BTC and ETH,
+  and ETH's gap **flips sign** (+3.56%). Same data, a parameter the theory does not pin down,
+  opposite conclusion. On levels, only SOL validated, and only at θ=0.25 and θ=1.0 while failing
+  at θ=0.5 — the isolated-cell fragility the envolvente study already rejects — and the two
+  placebo-tested cells landed at percentile 72 and 52, i.e. what is being measured is the density
+  of drawn lines, not Fibonacci.
+  An interpretive note worth keeping: what came closest ("a bullish structure's wave-2 correction
+  in progress precedes below-average returns") is, read plainly, "price is pulling back and keeps
+  pulling back" — short-term momentum, which stage 2 flagged as redundant with the trend regime
+  in most cells. That is a reason to be less impressed by it, not more.
+  So: do NOT add a `*_VALIDATED_*` constant for Elliott, an `st.success`, or wire wave targets
+  into the DCA box or the Zone Engine. Re-running later with more history is fine; loosening the
+  threshold, dropping the placebo, or promoting a single-symbol result is not.

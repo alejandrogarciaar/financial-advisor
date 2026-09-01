@@ -73,41 +73,57 @@ def atr(highs: list[float], lows: list[float], closes: list[float], n: int = 14)
     return out
 
 
-def zigzag(highs, lows, closes, dev_series) -> list[tuple[float, int, int]]:
-    """Misma máquina de estados que el `.pine`, barra a barra.
+def zigzag_states(highs, lows, closes, dev_series) -> list[list[tuple[float, int, int]]]:
+    """Máquina de estados del zigzag del `.pine`, devolviendo los pivotes VIGENTES en CADA barra.
 
-    Devuelve (precio, índice de barra, dirección) con dirección 1 = pivote alto,
-    -1 = pivote bajo. Un pivote se confirma recién cuando el precio se alejó `dev` en
-    sentido contrario: eso es lo que hace que el conteo repinte, y no tiene arreglo.
+    El elemento `i` contiene exactamente los pivotes que el indicador habría tenido confirmados
+    al cerrar la barra `i`, sin una sola barra de información futura. La máquina ya era causal
+    (avanza barra a barra y solo confirma un pivote cuando el precio YA se alejó el umbral en
+    sentido contrario); esto nada más expone los estados intermedios en vez de descartarlos, que
+    es lo que hace posible el estudio fuera de muestra (`elliott_oos_validate.py`).
+
+    Un pivote se confirma tarde, por definición: eso es lo que hace que el conteo repinte en
+    vivo, y también lo que evita que este walk-forward mire el futuro.
     """
+    states: list[list[tuple[float, int, int]]] = []
     piv: list[tuple[float, int, int]] = []
     z_dir, z_ext, z_bar = 0, None, 0
     for i in range(len(closes)):
         dev = dev_series[i]
-        if dev is None:
-            continue
-        if z_ext is None:
-            z_ext, z_bar = closes[i], i
-        if z_dir == 1:
-            if highs[i] > z_ext:
-                z_ext, z_bar = highs[i], i
-            elif lows[i] < z_ext - dev:
-                piv.append((z_ext, z_bar, 1))
-                z_dir, z_ext, z_bar = -1, lows[i], i
-        elif z_dir == -1:
-            if lows[i] < z_ext:
-                z_ext, z_bar = lows[i], i
-            elif highs[i] > z_ext + dev:
-                piv.append((z_ext, z_bar, -1))
-                z_dir, z_ext, z_bar = 1, highs[i], i
-        else:
-            # Todavía sin dirección: se define con el primer recorrido de `dev`, sin
-            # publicar pivote (el extremo inicial es un cierre arbitrario, no un giro).
-            if highs[i] > z_ext + dev:
-                z_dir, z_ext, z_bar = 1, highs[i], i
-            elif lows[i] < z_ext - dev:
-                z_dir, z_ext, z_bar = -1, lows[i], i
-    return piv[-MAX_PIVOTS:]
+        if dev is not None:
+            if z_ext is None:
+                z_ext, z_bar = closes[i], i
+            if z_dir == 1:
+                if highs[i] > z_ext:
+                    z_ext, z_bar = highs[i], i
+                elif lows[i] < z_ext - dev:
+                    piv.append((z_ext, z_bar, 1))
+                    z_dir, z_ext, z_bar = -1, lows[i], i
+            elif z_dir == -1:
+                if lows[i] < z_ext:
+                    z_ext, z_bar = lows[i], i
+                elif highs[i] > z_ext + dev:
+                    piv.append((z_ext, z_bar, -1))
+                    z_dir, z_ext, z_bar = 1, highs[i], i
+            else:
+                # Todavía sin dirección: se define con el primer recorrido de `dev`, sin
+                # publicar pivote (el extremo inicial es un cierre arbitrario, no un giro).
+                if highs[i] > z_ext + dev:
+                    z_dir, z_ext, z_bar = 1, highs[i], i
+                elif lows[i] < z_ext - dev:
+                    z_dir, z_ext, z_bar = -1, lows[i], i
+        states.append(list(piv[-MAX_PIVOTS:]))
+    return states
+
+
+def zigzag(highs, lows, closes, dev_series) -> list[tuple[float, int, int]]:
+    """Los pivotes vigentes en la ÚLTIMA barra — que es lo único que el indicador dibuja.
+
+    Envoltorio sobre `zigzag_states()` a propósito: una segunda copia de la máquina de estados
+    se desincronizaría de la primera en cuanto alguien tocara una.
+    """
+    states = zigzag_states(highs, lows, closes, dev_series)
+    return states[-1] if states else []
 
 
 def impulse_ok(v, allow_overlap: bool = False, allow_trunc: bool = True) -> bool:
