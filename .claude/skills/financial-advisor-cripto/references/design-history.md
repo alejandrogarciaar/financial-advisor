@@ -804,3 +804,40 @@ wiring it:
   fractality caveat above, made visible; the table always shows which threshold produced the
   count on screen. **This is a standalone TradingView indicator; nothing in `src/` or the app
   shows Elliott waves, and the app's own "📐 Niveles calculados" section was not touched.**
+
+- **2026-08-31, same day, compiled and run in TradingView for the first time — label fixes and two
+  real runtime errors.** The v2 above was verified only by the Python harness; actually loading it
+  on a BTCUSDT chart confirmed the count and every Fibonacci target **to the cent** (onda 3 en
+  curso, confianza baja (2 ondas), targets 71,691.20 / 77,349.5x / 86,505.54, invalidation
+  62,535.24 — matching `elliott_check.py`'s prediction from Binance's API against TradingView's own
+  feed), and surfaced three things worth recording:
+  - **The invalidation level was labelled COMPRA** (the generic role tag, applied because it sits
+    below price). That says the opposite of what the level means — it is not a zone to buy, it is
+    where the reading stops being valid. Now it carries `NO PERDER` / `NO SUPERAR` instead,
+    derived from the side (safe because the count is never shown with its invalidation already
+    breached — that is exactly what `elliott_check.py` asserts).
+  - **Labels piled up illegibly, from two different causes.** Exact duplicates: the weekly
+    objectives ARE, by construction, a level of layers 2/3, so with those layers visible the same
+    price was drawn twice with two stacked labels (81,478.87 and 75,559.20 in the session's
+    screenshots). Now the second one draws nothing and its text is appended to the first
+    (`100%  81478.87  COMPRA   +   1er obj alcista semanal (rejilla 100%)`), compared by exact
+    equality — same bit-identical-expression reasoning as `isNear`. Near-but-distinct prices are
+    staggered HORIZONTALLY instead (labels anchor to price, they cannot move vertically), with the
+    line extended to its label; the threshold is an input (`lblSpreadPct`, 1.5% default) rather
+    than a constant because it depends on the chart's zoom, which Pine does not expose.
+  - **`RE10045` — `for i = 0 to array.size(x) - 1` on an EMPTY array iterates BACKWARDS in Pine**
+    (when `to < from` the counter decreases), so size 0 gives `for i = 0 to -1`, which runs with
+    i = 0 and throws on `array.get`. Introduced by the new duplicate-detection loop; the rest of
+    the file already guarded this pattern (`if array.size(elP) > 0`). Guard added.
+  - **`RE10020` — objects positioned with `xloc.bar_index` cannot be drawn more than 500 bars into
+    the future, and THIS ONE v1 HAS TOO.** `segLen` is 25% of the visible width **in bars**: on a
+    daily chart with 6 months visible that is ~45 bars, but the same 6 months on a 2h chart is
+    ~2160 candles → 540, over the limit without any help from the staggering. v2 clamps the total
+    forward extent to `bar_index + 480`. `scripts/niveles_calculados.pine` (frozen) carries the
+    same arithmetic and would break identically on an intraday chart zoomed out — not fixed there,
+    by the freeze rule; v2 is where layer 1-4 fixes go.
+  Operational note for whoever drives this next: TradingView's **"Update on chart" also SAVES the
+  script** (the console logs `"<name>" saved`), so testing a paste against a chart overwrites
+  whatever that script name held in the account. The repo copy is the source of truth, and
+  TradingView keeps per-script version history, but rename before testing if the saved version
+  matters.

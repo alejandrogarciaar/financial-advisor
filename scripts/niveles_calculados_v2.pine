@@ -150,6 +150,12 @@ lineLenPct = input.int(25, "Longitud de las lineas (% del ancho visible)",
 startAtDay = input.bool(false, "Arrancar al inicio del dia en curso", group = grpV)
 showLbl    = input.bool(true,  "Mostrar etiquetas",        group = grpV)
 markNear   = input.bool(true,  "Resaltar los dos niveles que rodean al precio", group = grpV)
+lblSpreadPct = input.float(1.5, "Escalonar etiquetas de niveles a menos de (%)", minval = 0,
+     maxval = 20, step = 0.1, group = grpV,
+     tooltip = "Las etiquetas se anclan al precio, asi que no se pueden separar en vertical: " +
+     "los niveles mas juntos que esto se escalonan en HORIZONTAL. Depende del zoom (Pine no " +
+     "expone el rango de precios visible), por eso es un parametro y no un valor fijo. En 0 " +
+     "se apaga el escalonado.")
 showTable  = input.bool(true,  "Mostrar tabla de parametros", group = grpV)
 
 cBuy  = #3DD68C
@@ -261,11 +267,19 @@ var array<line>  lines  = array.new<line>()
 var array<label> labels = array.new<label>()
 var array<float> near   = array.new<float>(2, na)
 
+// Precio de cada nivel YA dibujado en esta pasada, y su etiqueta, en el mismo orden.
+// Sirven para dos cosas en addLevel(): fundir el nivel que dos capas producen identico,
+// y escalonar los que quedan demasiado cerca como para leerse.
+var array<float> drawnPrice = array.new<float>()
+var array<label> drawnLabel = array.new<label>()
+
 clearAll() =>
     while array.size(lines) > 0
         line.delete(array.pop(lines))
     while array.size(labels) > 0
         label.delete(array.pop(labels))
+    array.clear(drawnPrice)
+    array.clear(drawnLabel)
 
 roleTxt(float lvl) =>
     lvl > close * 1.0005 ? "  VENTA" : lvl < close * 0.9995 ? "  COMPRA" : ""
@@ -280,17 +294,58 @@ addLevel(float price, color col, string txt, int width, bool dashed) =>
         segLen  = math.max(math.round(barsVis * lineLenPct / 100), 3)
         x1 = startAtDay ? math.min(dayStartBar, bar_index) : bar_index
         x2 = x1 + segLen
-        isNear = markNear and (price == array.get(near, 0) or price == array.get(near, 1))
-        ln = line.new(x1, price, x2, price, xloc = xloc.bar_index,
-             extend = extend.none, color = col, width = isNear ? width + 1 : width,
-             style = dashed and not isNear ? line.style_dashed : line.style_solid)
-        array.push(lines, ln)
-        if showLbl
-            lb = label.new(x2, price, (isNear ? "> " : "") + txt, xloc = xloc.bar_index,
-                 style = label.style_label_left,
-                 color = color.new(color.black, 100),
-                 textcolor = col, size = size.small)
-            array.push(labels, lb)
+
+        // Dos capas pueden producir el MISMO precio: los objetivos semanales son, por
+        // definicion, un nivel de las capas 2/3, y el 0% de la rejilla es el 0% macro.
+        // Eso dibujaba dos lineas encimadas con dos etiquetas apiladas e ilegibles.
+        // Ahora la segunda no se dibuja: su texto se anexa al de la primera, que es lo
+        // que el nivel realmente es (un solo precio, dos lecturas). La comparacion es
+        // por igualdad EXACTA a proposito, misma razon que en isNear: los dos precios
+        // salen de la misma expresion, asi que coinciden bit a bit.
+        int dup   = -1
+        int crowd = 0
+        // La guarda de tamano NO es decorativa: en Pine, `for i = 0 to size - 1` con el
+        // array VACIO no itera cero veces — itera hacia atras, porque cuando `to` es
+        // menor que `from` el contador decrece. Con size 0 eso da `for i = 0 to -1`, que
+        // corre con i = 0 y revienta en el array.get (RE10045, visto en vivo: el primer
+        // nivel de cada pasada encuentra `drawnPrice` recien vaciado por clearAll).
+        if array.size(drawnPrice) > 0
+            for i = 0 to array.size(drawnPrice) - 1
+                float dp = array.get(drawnPrice, i)
+                if dp == price
+                    dup := i
+                else if lblSpreadPct > 0 and math.abs(dp - price) / price * 100 <= lblSpreadPct
+                    crowd += 1
+
+        if dup >= 0
+            if showLbl
+                lbDup = array.get(drawnLabel, dup)
+                label.set_text(lbDup, label.get_text(lbDup) + "   +   " + txt)
+        else
+            // Los vecinos se escalonan en horizontal (la etiqueta esta anclada al precio,
+            // no se puede mover en vertical). La linea se alarga hasta su etiqueta para
+            // que se siga viendo cual es de cual. Tope de 3 carriles: mas que eso se sale
+            // de la zona visible y el remedio seria peor.
+            lane   = math.min(crowd, 3)
+            // Tope duro de Pine: con xloc.bar_index no se puede dibujar mas de 500 barras
+            // hacia el FUTURO (RE10020, visto en vivo). `segLen` es un 25% del ancho
+            // VISIBLE en barras, asi que el desborde no lo causa el escalonado: en diario
+            // con 6 meses a la vista son ~180 barras -> 45, pero en 2h esos mismos 6 meses
+            // son ~2160 velas -> 540, y se pasa el solo. La v1 arrastra esta misma cuenta.
+            xEnd   = math.min(x2 + lane * math.max(math.round(segLen * 0.55), 2), bar_index + 480)
+            isNear = markNear and (price == array.get(near, 0) or price == array.get(near, 1))
+            ln = line.new(x1, price, xEnd, price, xloc = xloc.bar_index,
+                 extend = extend.none, color = col, width = isNear ? width + 1 : width,
+                 style = dashed and not isNear ? line.style_dashed : line.style_solid)
+            array.push(lines, ln)
+            array.push(drawnPrice, price)
+            if showLbl
+                lb = label.new(xEnd, price, (isNear ? "> " : "") + txt, xloc = xloc.bar_index,
+                     style = label.style_label_left,
+                     color = color.new(color.black, 100),
+                     textcolor = col, size = size.small)
+                array.push(labels, lb)
+                array.push(drawnLabel, lb)
 
 bandsArr   = array.from(b1, b2, b3, b4)
 gridSteps  = array.from(0.0, 25.0, 50.0, 62.5, 75.0, 100.0, 125.0, 150.0, 175.0, 200.0, 225.0, 250.0, 275.0)
@@ -779,9 +834,16 @@ if barstate.islast
             float pt    = array.get(elP, i)
             bool  isInv = array.get(elK, i) == 1
             if (showWaveObj and not isInv) or (showInvalid and isInv)
+                // El rol COMPRA/VENTA NO aplica a la invalidacion: ese precio no es una
+                // zona donde operar, es donde la lectura entera deja de valer, y
+                // etiquetarlo "COMPRA" por estar debajo del precio decia justo lo
+                // contrario de lo que significa. En su lugar va el lado que hay que
+                // vigilar. El conteo siempre se muestra con el precio del lado valido
+                // (lo verifica scripts/elliott_check.py), asi que comparar contra
+                // `close` alcanza para saber cual de los dos es.
+                string suf = isInv ? (pt < close ? "  NO PERDER" : "  NO SUPERAR") : roleTxt(pt) + confTxt(pt)
                 addLevel(pt, isInv ? cSell : cWave,
-                     (isInv ? "X " : "EW ") + array.get(elT, i) + "  " + fmt(pt) +
-                     roleTxt(pt) + confTxt(pt),
+                     (isInv ? "X " : "EW ") + array.get(elT, i) + "  " + fmt(pt) + suf,
                      isInv ? 1 : 2, isInv)
 
 // ------------------------------------------------------------- diagnostico ---
