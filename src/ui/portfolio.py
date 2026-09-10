@@ -130,16 +130,41 @@ def render_portfolio_total_hero(
         )
 
 
-def render_realized_gains_hero(cost_basis_cop: float, gross_proceeds_cop: float, sale_commission_cop: float) -> None:
+def format_holding_period(days: float | None) -> str:
+    """Días de tenencia como texto legible: días sueltos por debajo de dos meses, meses (con los
+    días entre paréntesis) de ahí en adelante — 196 días se lee peor que "~6 meses"."""
+    if days is None or pd.isna(days):
+        return "—"
+    days = round(float(days))
+    if days < 60:
+        return f"{days} días"
+    return f"~{days / 30.44:.1f} meses ({days} días)"
+
+
+def render_realized_gains_hero(
+    cost_basis_cop: float,
+    gross_proceeds_cop: float,
+    sale_commission_cop: float,
+    avg_holding_days: float | None = None,
+) -> None:
     """Misma forma que `render_portfolio_total_hero` (hero grande + tiles de apoyo), pero para
     lo YA VENDIDO — plata que ya se realizó, no una posición que sigue fluctuando. La comisión de
     venta se muestra como tile propio (no solo restada adentro del número final) porque el pedido
-    puntual que originó esta sección fue justamente poder ver ese costo, no solo el neto."""
+    puntual que originó esta sección fue justamente poder ver ese costo, no solo el neto.
+    `avg_holding_days` (opcional) es en cuánto tiempo se generó esa ganancia — el promedio de
+    tenencia de todo lo vendido, ponderado por base de costo — y se muestra como línea de contexto
+    debajo del monto, no como métrica propia: la ganancia sigue siendo el titular."""
     net_proceeds_cop = gross_proceeds_cop - sale_commission_cop
     gain_cop = net_proceeds_cop - cost_basis_cop
     gain_pct = gain_cop / cost_basis_cop if cost_basis_cop else 0.0
     color = ZONE_COLOR["Acumulación"] if gain_cop >= 0 else ZONE_COLOR["Sobrevalorado"]
     sign = "+" if gain_cop >= 0 else "-"
+    holding_line = (
+        f'<div style="font-size:0.85rem;color:{color};opacity:0.75;margin-top:8px;">'
+        f"generada en {format_holding_period(avg_holding_days)} de tenencia promedio</div>"
+        if avg_holding_days is not None and not pd.isna(avg_holding_days)
+        else ""
+    )
     st.markdown(
         f"""
         <div style="background:{color}15;border:1px solid {color}55;border-radius:16px;
@@ -152,6 +177,7 @@ def render_realized_gains_hero(cost_basis_cop: float, gross_proceeds_cop: float,
             <div style="font-size:1.05rem;font-weight:600;color:{color};opacity:0.85;margin-top:2px;">
                 {sign}${abs(gain_cop):,.0f} COP
             </div>
+            {holding_line}
         </div>
         """,
         unsafe_allow_html=True,
@@ -456,8 +482,17 @@ def _render_portfolio_analysis(purchases: pd.DataFrame, sales: pd.DataFrame) -> 
         total_cost_basis_cop = float(gains["cost_basis_cop"].sum())
         total_gross_proceeds_cop = float(gains["gross_proceeds_cop"].sum())
         total_sale_commission_cop = float(gains["sale_commission_cop"].sum())
+        # Ponderado por base de costo, no por acciones: 25 acciones de NUCO a 46k no deberían
+        # pesar más que 1 de CSPXCO a 2.7M en "cuánto tiempo estuvo trabajando la plata".
+        avg_holding_days = (
+            float((gains["avg_holding_days"] * gains["cost_basis_cop"]).sum() / total_cost_basis_cop)
+            if total_cost_basis_cop
+            else None
+        )
 
-        render_realized_gains_hero(total_cost_basis_cop, total_gross_proceeds_cop, total_sale_commission_cop)
+        render_realized_gains_hero(
+            total_cost_basis_cop, total_gross_proceeds_cop, total_sale_commission_cop, avg_holding_days
+        )
 
         st.write("")
         gains_display = pd.DataFrame(
@@ -469,6 +504,8 @@ def _render_portfolio_analysis(purchases: pd.DataFrame, sales: pd.DataFrame) -> 
                 "Comisión de venta (COP)": gains["sale_commission_cop"],
                 "Ganancia (COP)": gains["realized_gain_cop"],
                 "Ganancia (%)": gains["realized_gain_pct"],
+                "Tiempo en cartera": gains["avg_holding_days"],
+                "Última venta": gains["last_sale_date"],
             }
         )
 
@@ -491,9 +528,17 @@ def _render_portfolio_analysis(purchases: pd.DataFrame, sales: pd.DataFrame) -> 
                 "Comisión de venta (COP)": "${:,.0f}",
                 "Ganancia (COP)": "${:+,.0f}",
                 "Ganancia (%)": _format_gain_pct,
+                "Tiempo en cartera": format_holding_period,
+                "Última venta": lambda v: v.isoformat() if hasattr(v, "isoformat") else str(v),
             }
         ).map(_color_gain, subset=["Ganancia (COP)", "Ganancia (%)"])
         st.dataframe(gains_styled, hide_index=True, use_container_width=True)
+        st.caption(
+            "\"Tiempo en cartera\" es cuántos días llevaban compradas, en promedio, las acciones que "
+            "vendiste (fecha de venta menos fecha promedio de compra ponderada por acciones — la misma "
+            "lógica de costo promedio, aplicada a la fecha). Con compras en fechas muy distintas es un "
+            "promedio, no el tiempo de cada lote."
+        )
 
     held_tickers, summary = _compute_held_summary(purchases, sales)
 

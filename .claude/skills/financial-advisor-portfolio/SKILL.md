@@ -145,7 +145,14 @@ config + tab wiring). This tab's code lives in `src/ui/portfolio.py`:
 - `summarize_by_ticker(purchases, sales, current_prices_cop)` — one row per ticker with net
   shares (purchased − sold) > 0 only; a fully-sold ticker doesn't appear.
   `realized_gains_summary(purchases, sales)` — one row per ticker with ≥1 sale: average-cost
-  basis (not FIFO lots) vs. net-of-commission sale proceeds. `commission_summary(purchases,
+  basis (not FIFO lots) vs. net-of-commission sale proceeds. Since 2026-09-10 also
+  `avg_holding_days` / `last_sale_date` ("¿en cuánto tiempo se generó esa ganancia?"): the
+  ledger tracks a share-weighted average acquisition date alongside the average cost — mixed on
+  every buy exactly like the cost, untouched by a sell — so each sale's holding period is
+  sale date minus that running average date, the one definition consistent with average-cost
+  (no lots to match). Rendered as the "Tiempo en cartera" column and, cost-weighted across
+  all tickers, as a context line under the hero's COP figure (`format_holding_period()`). Purely
+  additive — no existing gain figure moved (the read-only rule above still holds). `commission_summary(purchases,
   sales)` — now sums both legs' commissions. `simulate_additional_purchase(purchases, sales,
   ...)` — `current_shares` is net-held, but `current_avg_price_cop` still comes from ALL
   purchases (a partial sale doesn't change the average cost of what's left, only how many
