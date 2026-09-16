@@ -68,5 +68,12 @@
     "price_cop": 45800.0,
     "commission_cop": 7438.0,
     "date": "2026-08-18"
+  },
+  {
+    "ticker": "NUCO",
+    "shares": 25,
+    "price_cop": 43220.0,
+    "commission_cop": 7438.0,
+    "date": "2026-09-16"
   }
 ]
