@@ -79,6 +79,55 @@ Por defecto usa el proveedor de datos `yfinance`, que no requiere API key. Si qu
 No hay suite de tests formal; `scripts/verify_app.py` corre un smoke test de las 6 pestañas vía
 `streamlit.testing.v1.AppTest` (sin navegador). No hay herramientas de lint/build configuradas.
 
+### Actualizar el portafolio desde Telegram
+
+`scripts/telegram_portfolio_bot.py` deja registrar una compra o venta de Portafolio con un menú
+de botones en Telegram, sin abrir el navegador. Es agnóstico a la máquina: corre en cualquier
+Windows que ya cumpla lo mismo que hace falta para `streamlit run app.py` (repo clonado, paquete
+`portfolio` instalado — ver arriba —, acceso SSH de push al `origin` de este repo), más dos
+variables nuevas en `.env`:
+
+```
+TELEGRAM_TOKEN=...
+TELEGRAM_CHAT_ID=...
+```
+
+`TELEGRAM_TOKEN` se puede copiar tal cual del `.env` de `market-signals-telegram` (ese bot solo
+envía alertas y nunca escucha comandos, así que no hay conflicto por reusar el mismo token).
+`TELEGRAM_CHAT_ID` en cambio **no** — tiene que ser el chat privado (1 a 1) de este bot con el
+usuario, nunca el ID de un grupo (aunque sea el mismo grupo donde ese otro bot ya postea alertas).
+Motivo: el "modo privacidad de grupo" de Telegram hace que un bot en un grupo reciba comandos
+(`/algo`) y toques de botón, pero **no** mensajes de texto sueltos como "1" o "250000" — el menú
+de este bot depende de esas respuestas de texto libre (cantidad, precio, fecha/comisión manual),
+así que en un grupo se traba justo ahí, sin ningún error visible (Telegram ni siquiera reenvía
+ese mensaje). Se puede evitar desactivando el modo privacidad del bot vía `@BotFather` →
+`/setprivacy` → `Disable`, pero lo más simple es directamente hablarle al bot por privado.
+
+Cómo conseguir el `chat_id` correcto la primera vez (o en una máquina nueva): arrancá el bot con
+cualquier valor en `TELEGRAM_CHAT_ID` (incluso el placeholder de `.env.example`), mandale `/start`
+al bot **por mensaje privado** desde Telegram, y en la consola del bot va a aparecer una línea
+`Ignorado: mensaje de chat_id no autorizado <NÚMERO> (private): '/start'` — ese `<NÚMERO>` (sin
+signo, a diferencia de los IDs de grupo que empiezan con `-`) es el que va en `TELEGRAM_CHAT_ID`.
+Reiniciar el bot después de corregirlo.
+
+Arrancarlo (se deja corriendo; `Ctrl+C` para pararlo):
+
+```
+./venv/Scripts/python.exe scripts/telegram_portfolio_bot.py
+```
+
+Uso: `/start` **en el chat privado con el bot** → elegir Compra o Venta → ticker → cantidad →
+precio → comisión (por defecto o manual) → fecha (hoy o manual) → confirmar. A diferencia de la
+UI, cada carga por Telegram hace `git pull` antes de validar y **commit + push automático** de
+`portfolio_data/*.json` al `origin` de este repo al confirmar — así el dato llega solo a otras
+máquinas y al deploy público, sin volver a la PC a pushear a mano.
+
+Cosas a tener en cuenta:
+
+- Solo responde al chat de `TELEGRAM_CHAT_ID`; cualquier otro se ignora en silencio.
+- No correrlo en dos máquinas al mismo tiempo — Telegram solo permite un proceso haciendo
+  polling por token a la vez y rechaza al segundo con `409` (el script lo detecta y avisa).
+
 ### Backtest
 
 Para chequear el veredicto de triangulación contra retornos históricos reales (no forma parte
@@ -179,6 +228,7 @@ mapa es solo para ubicarse rápido, no para reemplazar esa lectura.
 | `run_app.sh` / `stop_app.sh` | Arrancar/parar el servidor Streamlit local (puerto libre, health check, kill confiable por línea de comando). Corren igual en Windows (git-bash) y macOS/Linux. |
 | `_platform.sh` | Lo único que sabe en qué sistema operativo corre (venv `Scripts/` vs `bin/`, sondeo de puerto, match de procesos) — se hace `source` desde los dos scripts de arriba, no se ejecuta solo. |
 | `add_sale.py` | Agrega una venta a `portfolio_data/sales.json` desde la terminal, validada igual que la tabla "Tus ventas" de la UI — para registrar una venta dictada por chat sin abrir el navegador. |
+| `telegram_portfolio_bot.py` | Bot de Telegram (menú de botones) para registrar compras/ventas de Portafolio sin abrir el navegador — misma validación que la UI, más `git pull`/`push` automático del propio repo al confirmar (a diferencia de `add_sale.py` y la UI, donde ese paso sigue siendo manual). Agnóstico a la máquina: mismos requisitos que `streamlit run app.py`. |
 | `niveles_calculados.pine` | El mismo cálculo como indicador de TradingView (Pine v6). Corrige el modo automático de una versión previa: ventana anual en días de calendario (no barras), rango base = primer impulso (no el rango del año) y rol de la envolvente contra el precio. Lógica verificada contra el `.py` en los 11 tickers; la sintaxis hay que compilarla en TradingView. Incluye los dos fixes del 2026-08-30 (capa 4 — eje semanal, con objetivos como heurística no verificada — y ancla estructural desactivable). |
 | `niveles_calculados_abanico.pine` | Variante del anterior: abanico simétrico de anillos alrededor del precio actual (paso configurable), filtros de dibujo (rango visible / distancia % / tope de niveles por capa) y atenuación de la rejilla en intradía. **No reemplaza al de arriba**: su modo automático vuelve al rango del año en vez del primer impulso, que es justo lo que el otro corrige, y viene con los modos automáticos apagados por defecto. Sin verificar contra el `.py`. También recibió los dos fixes del 2026-08-30 (eje semanal + ancla estructural, esta última ahora en días de calendario como ya decía su etiqueta). |
 | `niveles_calculados_v2.pine` | **v2 del indicador de TradingView: las mismas 4 capas de `niveles_calculados.pine` (copiadas sin tocar una fórmula) + una capa 5 de ondas de Elliott.** La v1 queda congelada; cualquier cambio a las capas 1-4 va acá. La capa 5 arma un zigzag por umbral (ATR×mult o %), valida las 3 reglas duras del impulso (la 2 no se come la 1, la 3 no es la más corta, la 4 no invade la 1), identifica la onda en curso entre 6 casos y proyecta objetivos por proporciones de Fibonacci + el precio exacto que **invalida** el conteo. **Repinta por construcción** (un pivote se confirma recién cuando el precio giró el umbral) y **no está validado fuera de muestra** — mismo estándar descriptivo que las capas 1-4, que ya dieron 0/24 y 0/18 en sus propios estudios. Marca confluencias con las otras capas en la etiqueta. Lógica verificada con `elliott_check.py`; la sintaxis Pine hay que compilarla en TradingView. |
