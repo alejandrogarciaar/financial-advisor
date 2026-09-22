@@ -75,5 +75,12 @@
     "price_cop": 43220.0,
     "commission_cop": 7438.0,
     "date": "2026-09-16"
+  },
+  {
+    "ticker": "CSPXCO",
+    "shares": 1,
+    "price_cop": 2710000.0,
+    "commission_cop": 7438.0,
+    "date": "2026-09-22"
   }
 ]
