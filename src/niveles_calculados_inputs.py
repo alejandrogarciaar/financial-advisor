@@ -29,6 +29,9 @@ __all__ = [
     "impulse_thresholds_for",
     "CALIBRATED_DAILY_STEPS",
     "CALIBRATED_DAILY_VERIFIED",
+    "MinorInputs",
+    "infer_minor_inputs",
+    "minor_thresholds_for",
 ]
 
 # Umbrales genericos del "primer impulso" (ver `infer_inputs`).
@@ -152,6 +155,32 @@ def _structural_window_start(
             break
         start = new_start
     return start, span, extended
+
+
+def _first_impulse(
+    candles: Sequence[dict],
+    anchor_idx: int,
+    anchor_low: float,
+    retracement_pct: float,
+    min_reversal_pct: float,
+) -> tuple[float, int, bool]:
+    """Techo del primer impulso desde `anchor_idx`: (precio, indice, sigue_abierto).
+
+    La regla es la de `infer_inputs` (ver su docstring); la comparte la rejilla de grado menor.
+    """
+    top = float(candles[anchor_idx]["high"])
+    top_idx = anchor_idx
+    for i in range(anchor_idx + 1, len(candles)):
+        high_i = float(candles[i]["high"])
+        if high_i > top:
+            top, top_idx = high_i, i
+        advance = top - anchor_low
+        close_i = float(candles[i]["close"])
+        retraced_enough = close_i <= top - advance * retracement_pct / 100.0
+        real_reversal = close_i <= top * (1 - min_reversal_pct / 100.0)
+        if retraced_enough and real_reversal:
+            return top, top_idx, False
+    return top, top_idx, True
 
 
 @dataclass(frozen=True)
@@ -280,20 +309,9 @@ def infer_inputs(
     anchor_idx = len(candles) - len(window) + low_rel
 
     # Capa 2: primer impulso desde el ancla.
-    top = float(candles[anchor_idx]["high"])
-    top_idx = anchor_idx
-    impulse_open = True
-    for i in range(anchor_idx + 1, len(candles)):
-        high_i = float(candles[i]["high"])
-        if high_i > top:
-            top, top_idx = high_i, i
-        advance = top - year_low
-        close_i = float(candles[i]["close"])
-        retraced_enough = close_i <= top - advance * impulse_retracement_pct / 100.0
-        real_reversal = close_i <= top * (1 - min_reversal_pct / 100.0)
-        if retraced_enough and real_reversal:
-            impulse_open = False
-            break
+    top, top_idx, impulse_open = _first_impulse(
+        candles, anchor_idx, year_low, impulse_retracement_pct, min_reversal_pct
+    )
 
     base_range = top - year_low
     base_range_estimated = base_range <= 0
@@ -346,4 +364,83 @@ def infer_inputs(
         weekly_open_date=weekly_open_date,
         anchor_window_days=anchor_window_days,
         anchor_extended=anchor_extended,
+    )
+
+
+# ------------------------------------------------------------ grado menor (4h) --
+#
+# Misma formula que la capa 2 (ancla + n * paso * rango), un grado mas abajo. Lo que cambia NO es
+# la formula sino de donde salen sus dos entradas. Son matices inferidos, NO verificados contra un
+# grafico del canal en 4h (todavia no hay uno):
+#
+# 1. Ancla: el minimo posterior al techo del impulso MAYOR (el piso de la Fase 2 en diario), no el
+#    minimo anual. En el grado mayor pasa lo mismo: el ancla es el inicio de la fase que se mide, y
+#    hoy coincide con el minimo anual solo porque la Fase 1 arranco ahi. Si el impulso mayor sigue
+#    abierto no hay Fase 2 todavia, y no hay rejilla menor que trazar.
+# 2. Primer impulso medido en velas de 4h, con la misma regla de dos condiciones. El retroceso en %
+#    del avance es adimensional y se conserva; el giro minimo en % del techo NO: la volatilidad de
+#    una vela crece ~ raiz del tiempo, asi que se escala por 1/sqrt(6) (6 velas de 4h por dia):
+#    7.5% diario -> 3.06% en 4h. BTC 26-sep-2026: el techo resultante (87373.64, 21-sep 20:00) es
+#    el mismo con giro 3.06% o 3.75% y con retroceso 25% o 50%, asi que el corte no depende
+#    finamente de este escalado. Con 2% ya corta en ruido, dentro de las primeras velas.
+# 3. Pasos: la misma escalera calibrada del diario (`CALIBRATED_DAILY_STEPS`).
+
+MINOR_BARS_PER_DAY: int = 6
+
+
+def minor_thresholds_for(ticker: str) -> tuple[float, float]:
+    """Umbrales del impulso de grado menor: los del diario, con el giro escalado por 1/sqrt(6)."""
+    retracement, reversal = impulse_thresholds_for(ticker)
+    return retracement, reversal / MINOR_BARS_PER_DAY**0.5
+
+
+@dataclass(frozen=True)
+class MinorInputs:
+    """Entradas de la rejilla de grado menor. Si `available` es False, `reason` dice por que."""
+
+    available: bool
+    reason: str = ""
+    anchor: float = 0.0
+    anchor_date: str = ""
+    base_range: float = 0.0
+    top: float = 0.0
+    top_date: str = ""
+    impulse_open: bool = True
+
+
+def infer_minor_inputs(
+    candles_4h: Sequence[dict],
+    major: InferredInputs,
+    *,
+    impulse_retracement_pct: float,
+    min_reversal_pct: float,
+) -> MinorInputs:
+    """Ancla y rango de la rejilla de grado menor desde velas de 4h (ver notas de arriba)."""
+    if major.impulse_open or major.base_range_estimated:
+        return MinorInputs(
+            available=False,
+            reason=(
+                "el impulso mayor (diario) sigue abierto: todavía no hay un retroceso de Fase 2 "
+                "desde el cual anclar el grado menor"
+            ),
+        )
+    major_top_day = str(major.base_range_top_date)[:10]
+    after = [i for i, c in enumerate(candles_4h) if str(c.get("date", ""))[:10] > major_top_day]
+    if len(after) < 2:
+        return MinorInputs(available=False, reason="no hay velas de 4h posteriores al techo del impulso mayor")
+    anchor_idx = min(after, key=lambda i: float(candles_4h[i]["low"]))
+    anchor = float(candles_4h[anchor_idx]["low"])
+    top, top_idx, impulse_open = _first_impulse(
+        candles_4h, anchor_idx, anchor, impulse_retracement_pct, min_reversal_pct
+    )
+    if anchor <= 0 or top <= anchor:
+        return MinorInputs(available=False, reason="todavía no hay avance desde el ancla de grado menor")
+    return MinorInputs(
+        available=True,
+        anchor=anchor,
+        anchor_date=str(candles_4h[anchor_idx].get("date", "")),
+        base_range=top - anchor,
+        top=top,
+        top_date=str(candles_4h[top_idx].get("date", "")),
+        impulse_open=impulse_open,
     )

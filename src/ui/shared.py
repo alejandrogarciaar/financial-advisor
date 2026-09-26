@@ -24,6 +24,8 @@ from src.niveles_calculados_inputs import (
     CALIBRATED_DAILY_VERIFIED,
     impulse_thresholds_for,
     infer_inputs,
+    MINOR_BARS_PER_DAY,
+    infer_minor_inputs,
 )
 from src.data import fear_greed_client
 from src.valuation.etf_analysis import evaluate_etf
@@ -493,10 +495,19 @@ def render_advanced_levels_chart(
 # mismo trade-off que ya arrastra toda la app con este set de hues, no algo nuevo de esta sección;
 # cambiarlo solo acá rompería la consistencia con las otras secciones de la pestaña.
 NIVELES_PRICE_COLOR = "#2a78d6"
-NIVELES_LAYER_COLOR = {"envelope": "#eb6834", "weekly": "#2f7fd4", "daily": "#1baf7a", "macro": "#8a2be2"}
+# "minor" reusa el verde de "daily": es la misma fórmula un grado más abajo, y el gráfico muestra
+# una capa por vez, así que no hace falta un quinto tono para distinguirlas.
+NIVELES_LAYER_COLOR = {
+    "envelope": "#eb6834",
+    "weekly": "#2f7fd4",
+    "daily": "#1baf7a",
+    "minor": "#1baf7a",
+    "macro": "#8a2be2",
+}
 NIVELES_LAYER_LABEL = {
     "envelope": "Envolvente de sesión",
     "weekly": "Eje semanal",
+    "minor": "Rejilla 4h (grado menor)",
     "daily": "Rejilla diaria",
     "macro": "Fracciones macro",
 }
@@ -561,6 +572,17 @@ NIV_LAYER_TABS = {
         "no algoritmizables.",
     ),
 }
+# Solo cripto: necesita velas de 4h de Bitstamp, y Especulación (acciones) no las tiene.
+NIV_MINOR_TAB = (
+    "4h",
+    (
+        "minor",
+        "Rejilla de grado menor: la misma fórmula que el diario (ancla + paso × rango), un grado "
+        "más abajo. Ancla = el mínimo posterior al techo del impulso diario (piso de la Fase 2); "
+        "rango = el primer impulso desde ahí, medido en velas de 4h con el giro mínimo escalado "
+        "por 1/√6. Inferido, NO verificado contra un gráfico de 4h del canal.",
+    ),
+)
 
 NIV_ROW_HEIGHT_PX = 44
 # Altura máxima de la escalera antes de que scrollee sola. 10 filas: la capa diaria tiene 13
@@ -615,6 +637,9 @@ def _niv_level_color(layer: str, lv: Level) -> str:
         return NIV_C["purple"] if lv.layer == "weekly" else NIV_C["cyan"]
     if layer == "macro":
         return NIV_C["cyan"] if lv.verified else NIV_C["dim"]
+    if layer == "minor":
+        # Nada verificado en 4h: se pinta con la escalera del diario para que se lean igual.
+        lv = _dc_replace(lv, verified=lv.pct in CALIBRATED_DAILY_VERIFIED)
     if lv.pct in (175.0, 225.0):
         return NIV_C["cyan"]
     if lv.pct >= 250.0:
@@ -631,6 +656,8 @@ def _niv_is_key(layer: str, lv: Level) -> bool:
         return lv.label == "centro" or abs(lv.pct) == 0.382
     if layer == "daily":
         return lv.verified or lv.pct == 0.0
+    if layer == "minor":
+        return lv.pct == 0.0 or lv.pct in CALIBRATED_DAILY_VERIFIED
     return lv.verified
 
 
@@ -697,8 +724,12 @@ def render_niveles_calculados(
     current_price: float,
     *,
     is_crypto: bool,
+    minor_prices: list[dict] | None = None,
 ) -> None:
     """Sección "📐 Niveles calculados" — pestaña interna de cada cripto Y de cada acción.
+
+    `minor_prices` (velas de 4h, hoy solo Cripto vía Bitstamp) habilita la capa "4h" de grado
+    menor; sin él esa opción no aparece.
 
     Reproduce las 3 capas de `src/niveles_calculados.py` (envolvente de sesión, rejilla diaria anclada
     al mínimo anual, fracciones de 1/8 de la caída macro) sobre la serie diaria que la pestaña
@@ -807,6 +838,27 @@ def render_niveles_calculados(
             f"{inferred.history_days} velas diarias."
         )
 
+        minor = None
+        if minor_prices:
+            # Mismo retroceso que el slider del diario; el giro, escalado por 1/√6 (ver
+            # `minor_thresholds_for`, que hace lo mismo con los defaults del ticker).
+            minor_reversal_pct = min_reversal_pct / MINOR_BARS_PER_DAY**0.5
+            minor = infer_minor_inputs(
+                minor_prices,
+                inferred,
+                impulse_retracement_pct=retracement_pct,
+                min_reversal_pct=minor_reversal_pct,
+            )
+            if minor.available:
+                st.caption(
+                    f"**Grado menor (4h):** ancla ${minor.anchor:,.2f} ({minor.anchor_date} UTC) · "
+                    f"techo del primer impulso ${minor.top:,.2f} ({minor.top_date} UTC"
+                    + (", impulso todavía abierto" if minor.impulse_open else "")
+                    + f") · giro mínimo {minor_reversal_pct:.2f}% (el del diario ÷ √6)."
+                )
+            else:
+                st.caption(f"**Grado menor (4h):** no disponible — {minor.reason}.")
+
         manual = st.checkbox(
             "Ajustar las entradas a mano",
             value=False,
@@ -843,6 +895,16 @@ def render_niveles_calculados(
             weekly_open = man_col1.number_input(
                 "Apertura semanal (eje central)", value=float(inferred.weekly_open), min_value=0.0, format="%.2f"
             )
+            if minor is not None and minor.available:
+                minor = _dc_replace(
+                    minor,
+                    anchor=man_col2.number_input(
+                        "Ancla de grado menor (4h)", value=float(minor.anchor), min_value=0.0, format="%.2f"
+                    ),
+                    base_range=man_col1.number_input(
+                        "Rango de grado menor (4h)", value=float(minor.base_range), min_value=0.0, format="%.2f"
+                    ),
+                )
 
     if year_low <= 0 or base_range <= 0 or macro_range <= 0 or daily_open <= 0 or weekly_open <= 0:
         st.caption(
@@ -860,17 +922,36 @@ def render_niveles_calculados(
         macro_range=macro_range,
     )
 
+    layer_tabs = dict(NIV_LAYER_TABS)
+    if minor is not None:
+        # Después de "Intradía": de la temporalidad más fina a la más gruesa.
+        items = list(layer_tabs.items())
+        layer_tabs = dict(items[:1] + [NIV_MINOR_TAB] + items[1:])
     tab_label = st.segmented_control(
         "Capa",
-        list(NIV_LAYER_TABS.keys()),
+        list(layer_tabs.keys()),
         default="Diario",
         key=f"{key_prefix}_niv_layer",
         label_visibility="collapsed",
     )
-    if tab_label is None:  # segmented_control permite deseleccionar
+    if tab_label is None or tab_label not in layer_tabs:  # segmented_control permite deseleccionar
         tab_label = "Diario"
-    layer, layer_desc = NIV_LAYER_TABS[tab_label]
+    layer, layer_desc = layer_tabs[tab_label]
     st.caption(layer_desc)
+
+    minor_levels: list[Level] = []
+    if minor is not None and minor.available and minor.anchor > 0 and minor.base_range > 0:
+        minor_levels = [
+            _dc_replace(lv, layer="minor", verified=False, note=f"{lv.note} (grado menor)")
+            for lv in daily_grid(minor.anchor, minor.base_range, steps=CALIBRATED_DAILY_STEPS)
+        ]
+    if layer == "minor" and not minor_levels:
+        st.info(
+            "La rejilla de grado menor no está disponible: "
+            + (minor.reason if minor is not None and minor.reason else "revisá los campos manuales")
+            + "."
+        )
+        return
 
     if layer == "envelope":
         center_choice = st.radio(
@@ -911,6 +992,26 @@ def render_niveles_calculados(
                 "1er nivel a cada lado",
                 "de las capas Diario y Mensual — heurística no verificada",
                 NIV_C["cyan"],
+            ),
+        ]
+    elif layer == "minor":
+        levels = minor_levels
+        params = [
+            (
+                "Ancla de grado menor",
+                f"${minor.anchor:,.2f}",
+                f"piso de la Fase 2 — {minor.anchor_date} UTC" if not manual else "valor cargado a mano",
+                NIV_C["green"],
+            ),
+            (
+                "Rango (primer impulso 4h)",
+                f"${minor.base_range:,.2f}",
+                (
+                    ("impulso abierto — techo de hoy" if minor.impulse_open else f"impulso hasta {minor.top_date} UTC")
+                    if not manual
+                    else "valor cargado a mano"
+                ),
+                NIV_C["btc"],
             ),
         ]
     elif layer == "daily":
@@ -1130,6 +1231,13 @@ def render_niveles_calculados(
         )
 
     confluences = engine.confluences()
+    # El motor congelado no conoce el grado menor: sus cruces con las otras capas se agregan acá,
+    # con la misma tolerancia de 0.15% que usa `LevelEngine.confluences()`.
+    for m_lv in minor_levels:
+        for o_lv in engine.all_levels():
+            if abs(m_lv.price - o_lv.price) / m_lv.price * 100.0 <= 0.15:
+                confluences.append((m_lv, o_lv))
+    confluences.sort(key=lambda pair: pair[0].price, reverse=True)
     if confluences:
         with st.expander(f"🔗 Confluencias entre capas ({len(confluences)})"):
             st.caption(

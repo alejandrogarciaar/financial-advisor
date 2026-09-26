@@ -9,6 +9,8 @@ niveles publicados (67553 / 70008 / 72463 / 82281 / 88418 / 94554) con diferenci
 El resto de la pestaña (indicadores, Zone Engine, VWAP...) sigue en Binance, que es sobre lo que
 se validó todo lo que tiene validación.
 
+Además de las diarias, baja velas de 4h para la rejilla de grado menor de esa misma sección.
+
 Mismo patrón de caché que `binance_client.py`: la última respuesta buena queda en `.cache/` y se
 usa como fallback si la llamada en vivo falla.
 """
@@ -27,12 +29,13 @@ _NAMESPACE = "bitstamp"
 # Bitstamp limita cada respuesta a 1000 velas: 5 años de diario (~1825) requieren paginar.
 _MAX_CANDLES_PER_REQUEST = 1000
 _DAY_SECONDS = 86400
+_4H_SECONDS = 14400
 
 # Ticker de la app → par de Bitstamp.
 BITSTAMP_PAIRS = {"BTC": "btcusd", "ETH": "ethusd", "SOL": "solusd"}
 
 
-def _fetch_daily(pair: str, start_s: int, end_s: int) -> list[dict]:
+def _fetch_ohlc(pair: str, step_s: int, start_s: int, end_s: int) -> list[dict]:
     # Con `start` y `end` juntos Bitstamp ignora `start` y devuelve las ULTIMAS `limit` velas
     # antes de `end` (verificado 26-sep-2026: pedir 5 anos devolvia 1000 velas desde 2024). Por
     # eso se pagina hacia atras moviendo solo `end`.
@@ -41,7 +44,7 @@ def _fetch_daily(pair: str, start_s: int, end_s: int) -> list[dict]:
     while cursor_end > start_s:
         resp = _session.get(
             _OHLC_URL.format(pair=pair),
-            params={"step": _DAY_SECONDS, "end": cursor_end, "limit": _MAX_CANDLES_PER_REQUEST},
+            params={"step": step_s, "end": cursor_end, "limit": _MAX_CANDLES_PER_REQUEST},
             timeout=15,
         )
         if resp.status_code != 200:
@@ -53,27 +56,28 @@ def _fetch_daily(pair: str, start_s: int, end_s: int) -> list[dict]:
         first_ts = min(int(c["timestamp"]) for c in batch)
         if len(batch) < _MAX_CANDLES_PER_REQUEST or first_ts >= cursor_end:
             break
-        cursor_end = first_ts - _DAY_SECONDS
+        cursor_end = first_ts - step_s
     # Las paginas pueden solaparse en el borde: dedupe por timestamp, en orden, y recorte a `start`.
     unique = {int(c["timestamp"]): c for c in candles if int(c["timestamp"]) >= start_s}
     return [unique[t] for t in sorted(unique)]
 
 
-def get_historical_prices(ticker: str, years_back: float = 5.0) -> tuple[list[dict], dict]:
-    """Velas diarias (00:00 UTC) — mismo shape que `binance_client.get_historical_prices()`."""
+def _get_ohlc(ticker: str, step_s: int, date_fmt: str, years_back: float) -> tuple[list[dict], dict]:
     if ticker not in BITSTAMP_PAIRS:
         raise ValueError(f"'{ticker}' no está en BITSTAMP_PAIRS: {sorted(BITSTAMP_PAIRS)}")
     pair = BITSTAMP_PAIRS[ticker]
-    cache_file = cache.file_for(_NAMESPACE, "ohlc-1d", {"pair": pair, "years": years_back})
+    # La clave de caché del diario se mantiene igual que antes de agregar el 4h.
+    path = "ohlc-1d" if step_s == _DAY_SECONDS else f"ohlc-{step_s}s"
+    cache_file = cache.file_for(_NAMESPACE, path, {"pair": pair, "years": years_back})
     try:
         end = datetime.now(timezone.utc)
         start = end - timedelta(days=int(years_back * 365))
-        raw = _fetch_daily(pair, int(start.timestamp()), int(end.timestamp()))
+        raw = _fetch_ohlc(pair, step_s, int(start.timestamp()), int(end.timestamp()))
         if not raw:
             raise DataError(f"Bitstamp no devolvió velas para {pair}")
         data = [
             {
-                "date": datetime.fromtimestamp(int(c["timestamp"]), tz=timezone.utc).strftime("%Y-%m-%d"),
+                "date": datetime.fromtimestamp(int(c["timestamp"]), tz=timezone.utc).strftime(date_fmt),
                 "open": float(c["open"]),
                 "high": float(c["high"]),
                 "low": float(c["low"]),
@@ -86,7 +90,18 @@ def get_historical_prices(ticker: str, years_back: float = 5.0) -> tuple[list[di
         cached = cache.read(cache_file)
         if cached is not None:
             return cached["data"], {"from_cache": True, "fetched_at": cached["fetched_at"], "error": str(exc)}
-        raise DataError(f"Bitstamp falló en ohlc {pair}: {exc}") from exc
+        raise DataError(f"Bitstamp falló en ohlc {pair}/{step_s}s: {exc}") from exc
 
     fetched_at = cache.write(cache_file, data)
     return data, {"from_cache": False, "fetched_at": fetched_at, "error": None}
+
+
+def get_historical_prices(ticker: str, years_back: float = 5.0) -> tuple[list[dict], dict]:
+    """Velas diarias (00:00 UTC) — mismo shape que `binance_client.get_historical_prices()`."""
+    return _get_ohlc(ticker, _DAY_SECONDS, "%Y-%m-%d", years_back)
+
+
+def get_historical_prices_4h(ticker: str, years_back: float = 1.0) -> tuple[list[dict], dict]:
+    """Velas de 4h para la rejilla de grado menor; "date" lleva hora ("YYYY-MM-DD HH:MM:SS").
+    Un año alcanza: el ancla de grado menor es posterior al techo del impulso diario."""
+    return _get_ohlc(ticker, _4H_SECONDS, "%Y-%m-%d %H:%M:%S", years_back)

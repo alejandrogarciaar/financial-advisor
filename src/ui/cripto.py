@@ -626,6 +626,12 @@ def _cached_bitstamp_historical_prices(ticker: str):
     return bitstamp_client.get_historical_prices(ticker)
 
 
+@st.cache_data(ttl=900, show_spinner=False)
+def _cached_bitstamp_historical_prices_4h(ticker: str):
+    # Velas de 4h para la rejilla de grado menor de "📐 Niveles calculados".
+    return bitstamp_client.get_historical_prices_4h(ticker)
+
+
 # TTL de 24h, no 900s como el precio: SoSoValue solo actualiza AUM/flujos una vez por día (el
 # snapshot trae la fecha de la última sesión liquidada), y un TTL corto solo gastaría cuota del
 # free tier (20 req/min, 100k/mes) sin traer nada distinto. Mismo criterio que el TTL de 86400s
@@ -1002,4 +1008,14 @@ def render_crypto():
             niveles_prices, niveles_source = historical_prices, "Binance"
             st.caption(f"No se pudo consultar Bitstamp ({exc}); se usa la serie de Binance.")
         st.caption(f"Serie diaria: **{niveles_source}** (el feed `BTCUSD` de TradingView es Bitstamp).")
-        render_niveles_calculados("crypto", ticker, niveles_prices, current_price, is_crypto=True)
+        # Sin 4h de Bitstamp (o sin su diario, en cuyo caso el ancla mayor ya es de Binance) la
+        # capa de grado menor simplemente no aparece: mezclar fuentes corre los niveles.
+        minor_prices = None
+        if niveles_source == "Bitstamp":
+            try:
+                minor_prices, _ = _cached_bitstamp_historical_prices_4h(ticker)
+            except DataError as exc:
+                st.caption(f"Sin velas de 4h de Bitstamp ({exc}): no se muestra la rejilla de grado menor.")
+        render_niveles_calculados(
+            "crypto", ticker, niveles_prices, current_price, is_crypto=True, minor_prices=minor_prices
+        )

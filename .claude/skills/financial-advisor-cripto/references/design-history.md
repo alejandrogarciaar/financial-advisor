@@ -944,3 +944,22 @@ app, all fixed WITHOUT touching the frozen `src/niveles_calculados.py`:
 Result (Bitstamp, 2026-09-26): all six within $0.88 of the chart (the chart rounds its inputs).
 Still descriptive, still not validated OOS — this reproduces the drawing, nothing more.
 
+### Minor-degree grid on 4h (2026-09-26, same day)
+
+User asked for a "rejilla de grado menor en 4h" and whether it's the same formula. It IS the same
+formula (`daily_grid(anchor, range, steps=CALIBRATED_DAILY_STEPS)`); what changes is where its two
+inputs come from — inferred, NOT verified against any 4h chart from the channel:
+- **Anchor** = lowest 4h low AFTER the major impulse top (the Fase 2 floor), not the yearly low.
+  Same principle as the major degree (anchor = start of the phase being measured). No minor grid
+  while the major impulse is still open (no Fase 2 yet) — the UI says so.
+- **Range** = first impulse from that anchor on Bitstamp 4h candles, same two-condition rule
+  (`_first_impulse()`, extracted from `infer_inputs()`, behavior identical). Retracement % is
+  dimensionless and kept; min reversal % scales with volatility ~ sqrt(time), so /sqrt(6):
+  7.5% -> 3.06%. BTC today: anchor 74913.43 (09-15 16:00), top 87373.64 (09-21 20:00), and that top
+  is the same for reversal 3.06-3.75% and retracement 25 or 50% — not threshold-fragile (2%
+  already cuts on noise).
+- UI: a "4h" option in the layer selector, Cripto only (`minor_prices=` param; Especulación has
+  no 4h series and doesn't show it). Levels carry `layer="minor"`; the frozen engine doesn't know
+  that layer, so minor-vs-other-layer confluences are computed in `render_niveles_calculados()`.
+  Notable today: minor 60% (82390) sits on the major 100% breakout (82281) and minor 50% (81144)
+  on the weekly axis (81152).
