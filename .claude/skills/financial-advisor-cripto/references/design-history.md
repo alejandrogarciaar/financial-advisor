@@ -920,3 +920,27 @@ wiring it:
   draw them. Seen live: `arriba 3: macro 25%* 119.10 +15.5% (3.6 ATR)`.
   Compiled first try (1,314 lines). The NC2 chart instance was removed and NC3 added; the saved
   scripts "Niveles Calculados v2" and "Niveles Calculados v3" both exist in the account.
+
+### Calibration to the BTC 1D chart of 2026-09-26 ("Fases de grado mayor en diario")
+
+User asked to calibrate so the app reproduces a published BTCUSD 1D chart 100%: 94554 / 88418 /
+82281 (breakout) / 72463 / 70008 / 67553. All six are ONE daily grid: anchor = 2026-07-01 low,
+base range = Fase 1 (up to the 2026-09-03 high), steps 150/125/100/60/50/40%. Three gaps vs. the
+app, all fixed WITHOUT touching the frozen `src/niveles_calculados.py`:
+1. **Data source.** TradingView's `BTCUSD` is Bitstamp; Binance's anchor/top were $20-65 off.
+   New `src/data/bitstamp_client.py`, used ONLY by the Niveles section in Cripto (falls back to
+   the Binance series with a caption if Bitstamp fails). Gotcha: Bitstamp's OHLC endpoint ignores
+   `start` when `end` is also sent (returns the last `limit` bars before `end`), so it paginates
+   backwards by `end`. The rest of the tab stays on Binance (what all the validations used).
+2. **Impulse cut.** Fase 2 retraced only 27.3% of the advance / 8.15% of the top, so 50%/15%
+   left the impulse open and jumped to the Fase 3 high (87373). `CALIBRATED_IMPULSE_THRESHOLDS
+   = {"BTC": (25.0, 7.5)}` in `niveles_calculados_inputs.py` (UI slider defaults via
+   `impulse_thresholds_for(ticker)`). BTC-only on purpose: as a global default it shrank the base
+   range of SOL/AAPL/AMZN/GOOGL by 70-92% with no reference chart to justify it. Thin margin: the
+   2026-09-10 pullback was 23.4%/7.0% and must NOT cut.
+3. **Steps 40/60** aren't in the frozen `DAILY_STEPS`; `CALIBRATED_DAILY_STEPS` adds them and the
+   UI calls `daily_grid(..., steps=CALIBRATED_DAILY_STEPS)` instead of `engine.grid()`.
+   `engine.confluences()`/`weekly_objectives()` still use the frozen steps (untouched).
+Result (Bitstamp, 2026-09-26): all six within $0.88 of the chart (the chart rounds its inputs).
+Still descriptive, still not validated OOS — this reproduces the drawing, nothing more.
+

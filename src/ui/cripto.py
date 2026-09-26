@@ -15,7 +15,7 @@ import plotly.graph_objects as go
 import streamlit as st
 
 from src.config import CRYPTO_BINANCE_SYMBOLS, SOSOVALUE_API_KEY
-from src.data import binance_client, sosovalue_client
+from src.data import binance_client, bitstamp_client, sosovalue_client
 from src.data.errors import DataError
 from src.speculation import (
     VWAP_REACTION_ATR_THRESHOLD,
@@ -619,6 +619,13 @@ def _cached_binance_historical_prices_1h(binance_symbol: str):
     return binance_client.get_historical_prices_intraday_1h(binance_symbol)
 
 
+@st.cache_data(ttl=900, show_spinner=False)
+def _cached_bitstamp_historical_prices(ticker: str):
+    # Solo para "📐 Niveles calculados": es el feed (BTCUSD de TradingView) sobre el que
+    # Crecetrader dibuja sus niveles — ver el docstring de src/data/bitstamp_client.py.
+    return bitstamp_client.get_historical_prices(ticker)
+
+
 # TTL de 24h, no 900s como el precio: SoSoValue solo actualiza AUM/flujos una vez por día (el
 # snapshot trae la fecha de la última sesión liquidada), y un TTL corto solo gastaría cuota del
 # free tier (20 req/min, 100k/mes) sin traer nada distinto. Mismo criterio que el TTL de 86400s
@@ -985,4 +992,14 @@ def render_crypto():
         render_etf_flows(ticker)
 
     with tab_niveles:
-        render_niveles_calculados("crypto", ticker, historical_prices, current_price, is_crypto=True)
+        # Bitstamp y no Binance: es la fuente de los gráficos que esta sección reproduce. Si
+        # Bitstamp falla sin caché previa, cae a la serie de Binance que ya está en mano (los
+        # niveles quedan corridos unos dólares, no rotos) y lo dice.
+        try:
+            niveles_prices, _ = _cached_bitstamp_historical_prices(ticker)
+            niveles_source = "Bitstamp"
+        except DataError as exc:
+            niveles_prices, niveles_source = historical_prices, "Binance"
+            st.caption(f"No se pudo consultar Bitstamp ({exc}); se usa la serie de Binance.")
+        st.caption(f"Serie diaria: **{niveles_source}** (el feed `BTCUSD` de TradingView es Bitstamp).")
+        render_niveles_calculados("crypto", ticker, niveles_prices, current_price, is_crypto=True)

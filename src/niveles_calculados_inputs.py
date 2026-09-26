@@ -18,9 +18,51 @@ from dataclasses import dataclass
 from datetime import date, timedelta
 from typing import Optional, Sequence
 
-from src.niveles_calculados import FALLBACK_BASE_RATIO, FALLBACK_MACRO_RATIO
+from src.niveles_calculados import DAILY_STEPS, DAILY_VERIFIED, FALLBACK_BASE_RATIO, FALLBACK_MACRO_RATIO
 
-__all__ = ["InferredInputs", "infer_inputs"]
+__all__ = [
+    "InferredInputs",
+    "infer_inputs",
+    "DEFAULT_IMPULSE_RETRACEMENT_PCT",
+    "DEFAULT_MIN_REVERSAL_PCT",
+    "CALIBRATED_IMPULSE_THRESHOLDS",
+    "impulse_thresholds_for",
+    "CALIBRATED_DAILY_STEPS",
+    "CALIBRATED_DAILY_VERIFIED",
+]
+
+# Umbrales genericos del "primer impulso" (ver `infer_inputs`).
+DEFAULT_IMPULSE_RETRACEMENT_PCT: float = 50.0
+DEFAULT_MIN_REVERSAL_PCT: float = 15.0
+
+# Calibracion por ticker contra graficos publicados de Crecetrader.
+#
+# BTC, 26-sep-2026 (BTCUSD 1D, "Fases de grado mayor en diario"): Fase 1 = minimo del 1-jul
+# (57734.63 en Bitstamp) al techo del 3-sep (82280.62), y la Fase 2 que la cierra retrocedio apenas
+# 27.3% del avance y 8.15% del techo (cierre del 15-sep). Con 50% / 15% el impulso seguia "abierto"
+# y el techo saltaba al pico de la Fase 3 (87373, 21-sep). 25% / 7.5% cortan en la Fase 1 y no en
+# ninguno de los retrocesos previos: el de fines de julio (45% del avance pero solo 6.2% del techo)
+# ni el del 10-sep (23.4% / 7.0%). Margen estrecho: reproduce ESE grafico, no es un optimo general.
+#
+# Solo BTC a proposito: aplicados como default global, 25% / 7.5% achicaban el rango base de SOL,
+# AAPL, AMZN y GOOGL entre 70% y 92% (cortaban en retrocesos chicos al inicio del impulso), sin
+# ningun grafico de referencia que respalde ese cambio para ellos.
+CALIBRATED_IMPULSE_THRESHOLDS: dict[str, tuple[float, float]] = {"BTC": (25.0, 7.5)}
+
+
+def impulse_thresholds_for(ticker: str) -> tuple[float, float]:
+    """(retroceso % del avance, giro minimo % del techo) para `ticker`."""
+    return CALIBRATED_IMPULSE_THRESHOLDS.get(
+        ticker, (DEFAULT_IMPULSE_RETRACEMENT_PCT, DEFAULT_MIN_REVERSAL_PCT)
+    )
+
+# Escalera de la rejilla diaria (capa 2). `src/niveles_calculados.py` esta congelado y su
+# DAILY_STEPS no trae 40% ni 60%, pero el mismo grafico marca la "zona de compras con 3 precios
+# calculados" en 40 / 50 / 60% del rango base (67553 / 70008 / 72463). `daily_grid()` ya acepta
+# `steps=`, asi que se agregan aca sin tocar el modulo congelado. 100% (el breakout, 82281) y 150%
+# (94554) tambien quedan verificados con ese grafico.
+CALIBRATED_DAILY_STEPS: tuple[float, ...] = tuple(sorted(set(DAILY_STEPS) | {40.0, 60.0}))
+CALIBRATED_DAILY_VERIFIED: frozenset[float] = DAILY_VERIFIED | {40.0, 50.0, 60.0, 100.0, 150.0}
 
 
 def _parse_date(raw) -> Optional[date]:
@@ -165,8 +207,8 @@ def infer_inputs(
     candles: Sequence[dict],
     *,
     year_days: int = 365,
-    impulse_retracement_pct: float = 50.0,
-    min_reversal_pct: float = 15.0,
+    impulse_retracement_pct: float = DEFAULT_IMPULSE_RETRACEMENT_PCT,
+    min_reversal_pct: float = DEFAULT_MIN_REVERSAL_PCT,
     structural_anchor: bool = True,
 ) -> InferredInputs:
     """Deriva las entradas del motor desde velas diarias.
@@ -181,7 +223,9 @@ def infer_inputs(
     50% de un avance del 13% son apenas 6.5% de precio: en cripto eso pasa en
     dos dias y cerraria el impulso con una amplitud que no representa la
     estructura que se ve en el grafico. Exigir ademas un retroceso absoluto
-    (default 15%) obliga a que el corte sea un giro real, no ruido.
+    (default 15%) obliga a que el corte sea un giro real, no ruido. Para los
+    tickers con un grafico de referencia (hoy solo BTC: 25% / 7.5%), usar
+    `impulse_thresholds_for(ticker)` — ver `CALIBRATED_IMPULSE_THRESHOLDS`.
 
     El retroceso se mide con cierres y no con minimos intradia por la misma
     razon (una sola mecha rompe cualquier umbral razonable); el techo, en

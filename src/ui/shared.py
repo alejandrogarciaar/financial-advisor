@@ -16,8 +16,15 @@ import plotly.graph_objects as go
 import streamlit as st
 
 from src.config import ETF_TICKERS, PORTFOLIO_CDI_TICKERS, RISK_FREE_RATE
-from src.niveles_calculados import Level, LevelEngine, Role, nearest_levels, session_envelope
-from src.niveles_calculados_inputs import infer_inputs
+from dataclasses import replace as _dc_replace
+
+from src.niveles_calculados import Level, LevelEngine, Role, daily_grid, nearest_levels, session_envelope
+from src.niveles_calculados_inputs import (
+    CALIBRATED_DAILY_STEPS,
+    CALIBRATED_DAILY_VERIFIED,
+    impulse_thresholds_for,
+    infer_inputs,
+)
 from src.data import fear_greed_client
 from src.valuation.etf_analysis import evaluate_etf
 from src.valuation.fair_value import PROVIDERS, evaluate_ticker
@@ -718,7 +725,7 @@ def render_niveles_calculados(
     st.warning(
         "⚠️ **Es descriptivo, no una señal de trading, y no está validado fuera de muestra.** "
         "Reproduce CÓMO se generan los niveles; no implica que tengan poder predictivo. Una "
-        "rejilla densa acierta toques por construcción: con 31 niveles repartidos en el mapa, que "
+        "rejilla densa acierta toques por construcción: con más de 30 niveles repartidos en el mapa, que "
         "el precio reaccione cerca de alguno no es evidencia de nada. A diferencia del VWAP o del "
         "régimen del Plan de DCA, acá no se corrió ningún estudio fuera de muestra."
     )
@@ -744,11 +751,12 @@ def render_niveles_calculados(
             "estos dos controles la definen, y abajo se puede sobrescribir todo a mano."
         )
         niv_col1, niv_col2 = st.columns(2)
+        default_retracement_pct, default_min_reversal_pct = impulse_thresholds_for(ticker)
         retracement_pct = niv_col1.slider(
             "Retroceso que cierra el impulso (% del avance)",
             min_value=25.0,
             max_value=75.0,
-            value=50.0,
+            value=default_retracement_pct,
             step=5.0,
             key=f"{key_prefix}_niv_retracement_pct",
             help=(
@@ -760,13 +768,15 @@ def render_niveles_calculados(
             "Giro mínimo para que ese retroceso cuente (% del techo)",
             min_value=5.0,
             max_value=30.0,
-            value=15.0,
-            step=1.0,
+            value=default_min_reversal_pct,
+            step=0.5,
             key=f"{key_prefix}_niv_min_reversal_pct",
             help=(
                 "Segunda condición, simultánea con la anterior: sin esto, en cripto el 50% de un "
                 "avance del 13% son 6.5% de precio y el impulso se cerraría a los dos días del "
-                "mínimo, con una amplitud que no representa la estructura del gráfico."
+                "mínimo, con una amplitud que no representa la estructura del gráfico. Por "
+                "defecto 50% / 15%, salvo BTC: 25% / 7.5%, que reproducen el gráfico 1D de "
+                "Crecetrader del 26-sep-2026."
             ),
         )
 
@@ -904,7 +914,12 @@ def render_niveles_calculados(
             ),
         ]
     elif layer == "daily":
-        levels = engine.grid()
+        # Escalera calibrada (con 40% y 60%) en vez de `engine.grid()`, que usa el DAILY_STEPS del
+        # módulo congelado — ver CALIBRATED_DAILY_STEPS en src/niveles_calculados_inputs.py.
+        levels = [
+            _dc_replace(lv, verified=lv.pct in CALIBRATED_DAILY_VERIFIED)
+            for lv in daily_grid(year_low, base_range, steps=CALIBRATED_DAILY_STEPS)
+        ]
         params = [
             ("Ancla", f"${year_low:,.2f}", f"onda V — {inferred.year_low_date}", NIV_C["green"]),
             (
