@@ -55,6 +55,8 @@ PORTFOLIO_CDI_TICKERS = {
     "MSFTCO": "MSFTCO.CL",
     "METACO": "METACO.CL",
     "NUCO": "NUCO.CL",
+    "UBERCO": "UBERCO.CL",
+    "TSLACO": "TSLACO.CL",
 }
 
 # Para el Portafolio: qué evaluación de la pestaña Acciones/ETFs reusar como contexto de cada
@@ -71,6 +73,8 @@ PORTFOLIO_CDI_UNDERLYING = {
     # acá: este mapeo solo alimenta _cached_historical_prices(symbol) para precio histórico
     # (yfinance, sin estados financieros), no la evaluación de 6 fórmulas de Acciones.
     "NUCO": ("stock", "NU"),
+    "UBERCO": ("stock", "UBER"),
+    "TSLACO": ("stock", "TSLA"),
 }
 
 # Clasificación GICS aproximada de cada subyacente, para la sección de diversificación del
@@ -87,6 +91,8 @@ PORTFOLIO_CDI_SECTOR = {
     "CSPXCO": "Diversificado (ETF S&P 500)",
     "METACO": "Comunicación",
     "NUCO": "Financiero",  # Nubank: banco digital (GICS Financials)
+    "UBERCO": "Industriales",  # Uber: GICS Industrials (Ground Transportation)
+    "TSLACO": "Consumo discrecional",  # Tesla: GICS Consumer Discretionary (Automobiles)
 }
 
 # Cripto para la pestaña "🪙 Cripto" (no participa en Acciones/Portafolio: no tiene estados
