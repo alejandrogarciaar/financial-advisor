@@ -232,8 +232,13 @@ If no clone is found in either candidate location it returns early and does noth
 which is how moving the clone out to `../portfolio` on 2026-08-29 disabled this without any error
 until it was noticed; that's what `_SYNC_REPO_CANDIDATES` accepting both paths now prevents.
 Skips the commit entirely when the copied file is byte-identical to what's already staged (via
-`git diff --cached --quiet`), so a re-save with no real change doesn't create empty commits. A
-sync failure (network down, remote rejects the push) is caught and only printed to console — it
+`git diff --cached --quiet`), so a re-save with no real change doesn't create empty commits. Each
+sync starts with `git pull --rebase --autostash -X theirs` (and retries that + push once if the
+push still loses a race) — added 2026-10-28 after the clone silently fell 9 commits behind
+other machines' syncs and every push got rejected non-fast-forward; `-X theirs` in a rebase
+keeps *our* replayed commit on conflict, correct because what's synced is a copy of this repo's
+`portfolio_data/`, the source of truth; a rebase that still fails is aborted, never left
+half-applied. A sync failure (network down, remote rejects the push) is caught and only printed to console — it
 must never fail the actual save, which already succeeded in `portfolio_data/` (the real source of
 truth) before sync is attempted. This closes the gap the `portfolio` package's own README calls
 out under "Keeping this in sync" (previously a fully manual copy+commit); the gap that

@@ -89,6 +89,9 @@ def _sync_to_portfolio_repo(filename: str) -> None:
         return
     sync_data_dir = repo_dir / "portfolio" / "portfolio_data"
     try:
+        # Otras máquinas también empujan syncs a ese remoto: sin traerlos primero, el push de
+        # abajo se rechaza (non-fast-forward) y el clone queda divergiendo en silencio.
+        _pull_rebase(repo_dir)
         sync_data_dir.mkdir(parents=True, exist_ok=True)
         (sync_data_dir / filename).write_text(
             (DATA_DIR / filename).read_text(encoding="utf-8"), encoding="utf-8"
@@ -110,8 +113,29 @@ def _sync_to_portfolio_repo(filename: str) -> None:
             check=True,
             capture_output=True,
         )
-        subprocess.run(
-            ["git", "push"], cwd=repo_dir, check=True, capture_output=True
-        )
+        push = subprocess.run(["git", "push"], cwd=repo_dir, capture_output=True)
+        if push.returncode != 0:
+            # Carrera: otra máquina empujó entre nuestro pull y nuestro push. Un reintento.
+            _pull_rebase(repo_dir)
+            subprocess.run(
+                ["git", "push"], cwd=repo_dir, check=True, capture_output=True
+            )
     except Exception as exc:
         print(f"[portfolio sync] No se pudo sincronizar {filename} con el repo portfolio: {exc}")
+
+
+def _pull_rebase(repo_dir: Path) -> None:
+    """`git pull --rebase` que, ante conflicto, se queda con la versión local de cada commit
+    reaplicado (`-X theirs`, que en un rebase es el commit propio, no el remoto): lo que se
+    sincroniza es una copia de `portfolio_data/` de este repo, la fuente de verdad. Si el rebase
+    igual falla, lo aborta para no dejar el clone a medio rebasear."""
+    result = subprocess.run(
+        ["git", "pull", "--rebase", "--autostash", "-X", "theirs"],
+        cwd=repo_dir,
+        capture_output=True,
+    )
+    if result.returncode != 0:
+        subprocess.run(["git", "rebase", "--abort"], cwd=repo_dir, capture_output=True)
+        raise subprocess.CalledProcessError(
+            result.returncode, result.args, result.stdout, result.stderr
+        )
