@@ -124,5 +124,12 @@
     "price_cop": 38460.0,
     "commission_cop": 37186.0,
     "date": "2026-10-28"
+  },
+  {
+    "ticker": "METACO",
+    "shares": 5,
+    "price_cop": 2034680.0,
+    "commission_cop": 15133.0,
+    "date": "2026-10-29"
   }
 ]
