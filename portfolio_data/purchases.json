@@ -131,5 +131,12 @@
     "price_cop": 2034680.0,
     "commission_cop": 15133.0,
     "date": "2026-10-29"
+  },
+  {
+    "ticker": "UBERCO",
+    "shares": 10,
+    "price_cop": 218500.0,
+    "commission_cop": 7438.0,
+    "date": "2026-10-30"
   }
 ]
