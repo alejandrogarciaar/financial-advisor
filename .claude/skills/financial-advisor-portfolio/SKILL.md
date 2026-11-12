@@ -172,7 +172,7 @@ config + tab wiring). This tab's code lives in `src/ui/portfolio.py`:
   debajo de lo que vendí"). Only tickers held at 0 shares TODAY are listed — once bought back,
   the ticker drops out (user request, same day); a new full exit brings it back. Purely derived from `sales.json` — no new persisted state. Shown as
   "🔁 Tope de recompra" (after "Ganancias realizadas"), as a caption above the purchase form, and
-  in the Telegram bot (`/balance` and the purchase confirmation warning).
+  in the Telegram bot (`/balance`, private chat only — never the alerts group — and the purchase confirmation warning).
   `format_balance_message()` (also in the package) is the ONE balance text shared by the bot's
   `/balance` and market-signals-telegram's scheduled portfolio digest — change the format there.
 
