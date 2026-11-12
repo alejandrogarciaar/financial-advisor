@@ -186,7 +186,7 @@ def handle_text(chat_id: int, text: str) -> None:
             send_message(
                 chat_id,
                 "/start — registrar una compra o venta\n"
-                "/balance — ver el balance actual del portafolio\n"
+                "/balance — ver tu balance aquí\n"
                 "/cancelar — cancelar la carga en curso",
             )
         return
@@ -486,7 +486,7 @@ def main() -> int:
             "setMyCommands",
             commands=[
                 {"command": "start", "description": "Registrar compra/venta o ver balance"},
-                {"command": "balance", "description": "Ver el balance actual del portafolio"},
+                {"command": "balance", "description": "Ver tu balance aquí"},
                 {"command": "cancelar", "description": "Cancelar la carga en curso"},
             ],
         )
