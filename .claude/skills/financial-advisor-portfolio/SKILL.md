@@ -166,6 +166,16 @@ config + tab wiring). This tab's code lives in `src/ui/portfolio.py`:
   compounded monthly) for "🎯 Proyección de meta". Pure deterministic arithmetic; the caller
   decides what rate to feed it.
 
+- `rebuy_ceiling_summary(purchases, sales)` (re-exported from the `portfolio` package, like the rest; added 2026-11-12, user's own discipline rule, not
+  OOS-validated) — for each ticker sold down to 0 shares, the LAST closed cycle's share-weighted
+  sale price net of sale commission is the max price to buy back ("reinvertir comprando por
+  debajo de lo que vendí"). Only tickers held at 0 shares TODAY are listed — once bought back,
+  the ticker drops out (user request, same day); a new full exit brings it back. Purely derived from `sales.json` — no new persisted state. Shown as
+  "🔁 Tope de recompra" (after "Ganancias realizadas"), as a caption above the purchase form, and
+  in the Telegram bot (`/balance` and the purchase confirmation warning).
+  `format_balance_message()` (also in the package) is the ONE balance text shared by the bot's
+  `/balance` and market-signals-telegram's scheduled portfolio digest — change the format there.
+
 ## `src/drawdown_dca.py`
 
 - `current_drawdown_from_high()` (bare %, used internally by `current_bucket_reaction()`),

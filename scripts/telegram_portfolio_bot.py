@@ -27,6 +27,7 @@ import os
 import subprocess
 import sys
 import time
+from concurrent.futures import ThreadPoolExecutor
 from datetime import date as date_cls
 from pathlib import Path
 from typing import Optional
@@ -49,6 +50,8 @@ from src.portfolio import (
     DEFAULT_COMMISSION_COP,
     load_purchases,
     load_sales,
+    format_balance_message,
+    rebuy_ceiling_summary,
     save_purchases,
     save_sales,
     validate_purchases,
@@ -60,6 +63,10 @@ TICKERS = list(PORTFOLIO_CDI_TICKERS.keys())
 
 TELEGRAM_TOKEN = os.environ.get("TELEGRAM_TOKEN")
 TELEGRAM_CHAT_ID = os.environ.get("TELEGRAM_CHAT_ID")
+# Chat de alertas del portafolio (el mismo grupo donde `market-signals-telegram` postea sus
+# alertas de Portafolio — ahí el secret se llama igual, TELEGRAM_CHAT_ID_PORTFOLIO). Opcional:
+# solo lo usa /balance para saber a dónde mandar el reporte.
+TELEGRAM_CHAT_ID_PORTFOLIO = os.environ.get("TELEGRAM_CHAT_ID_PORTFOLIO")
 API_BASE = f"https://api.telegram.org/bot{TELEGRAM_TOKEN}"
 
 ACTION_LABEL = {"compra": "COMPRA", "venta": "VENTA"}
@@ -164,7 +171,10 @@ def start_menu(chat_id: int) -> None:
     send_message(
         chat_id,
         "¿Qué querés registrar?",
-        buttons=[[("➕ Compra", "action:compra"), ("➖ Venta", "action:venta")]],
+        buttons=[
+            [("➕ Compra", "action:compra"), ("➖ Venta", "action:venta")],
+            [("📊 Balance", "balance")],
+        ],
     )
 
 
@@ -179,8 +189,14 @@ def handle_text(chat_id: int, text: str) -> None:
         else:
             send_message(
                 chat_id,
-                "/start — registrar una compra o venta\n/cancelar — cancelar la carga en curso",
+                "/start — registrar una compra o venta\n"
+                "/balance — enviar el balance actual del portafolio al chat de alertas\n"
+                "/cancelar — cancelar la carga en curso",
             )
+        return
+
+    if text.split("@", 1)[0] == "/balance":
+        send_balance(chat_id)
         return
 
     if text == "/cancelar":
@@ -268,11 +284,37 @@ def _ask_confirm(chat_id: int, session: dict) -> None:
         f"Fecha: {session['date']}\n"
         f"Total: {_fmt_cop(total)}"
     )
+    if session["action"] == "compra":
+        ceiling = _rebuy_ceiling(session["ticker"])
+        if ceiling is not None:
+            effective = session["price_cop"] + session["commission_cop"] / session["shares"]
+            if effective >= ceiling:
+                resumen += (
+                    f"\n\n⚠️ Por encima de tu tope de recompra de {session['ticker']} "
+                    f"({_fmt_cop(ceiling)}, tu precio de salida neto). Con comisión pagarías "
+                    f"{_fmt_cop(effective)} por acción."
+                )
+            else:
+                resumen += f"\n\n🟢 Por debajo de tu tope de recompra ({_fmt_cop(ceiling)})."
     send_message(
         chat_id,
         resumen,
         buttons=[[("✅ Confirmar", "confirm"), ("❌ Cancelar", "cancel")]],
     )
+
+
+def _rebuy_ceiling(ticker: str) -> Optional[float]:
+    """Tope de recompra vigente del ticker (ver `rebuy_ceiling_summary()`), o None si nunca se
+    vendió completo."""
+    try:
+        ceilings = rebuy_ceiling_summary(load_purchases(), load_sales())
+    except Exception as exc:
+        print(f"No se pudo calcular el tope de recompra de {ticker}: {exc}")
+        return None
+    if ceilings.empty:
+        return None
+    match = ceilings[ceilings["ticker"] == ticker]
+    return float(match["ceiling_cop"].iloc[0]) if not match.empty else None
 
 
 def _save_movement(chat_id: int, session: dict) -> None:
@@ -342,6 +384,11 @@ def handle_callback(chat_id: int, callback_id: str, data: str) -> None:
         send_message(chat_id, "Operación cancelada.")
         return
 
+    if data == "balance":
+        _reset(chat_id)
+        send_balance(chat_id)
+        return
+
     if data.startswith("action:"):
         session = {"step": "ticker", "action": data.split(":", 1)[1]}
         _sessions[chat_id] = session
@@ -383,6 +430,67 @@ def handle_callback(chat_id: int, callback_id: str, data: str) -> None:
         return
 
 
+# --- /balance -------------------------------------------------------------------------------------
+
+
+def _fetch_cdi_price(ticker: str) -> Optional[float]:
+    """Mismo origen que `_cached_portfolio_price()` de la UI (cotización nativa en COP del CDI en
+    la BVC vía yfinance), sin Streamlit. None si no hay precio ahora."""
+    from src.data import yfinance_client
+
+    try:
+        quote, _ = yfinance_client.get_quote(PORTFOLIO_CDI_TICKERS[ticker])
+        return quote.get("price")
+    except Exception as exc:
+        print(f"/balance: no se pudo obtener precio de {ticker}: {exc}")
+        return None
+
+
+def build_balance_text() -> str:
+    """Formato compartido con el digest programado de market-signals-telegram:
+    `format_balance_message()` vive en el paquete `portfolio` para que los dos manden el mismo
+    mensaje. Acá solo se traen los precios en vivo (posiciones abiertas + acciones vendidas
+    completas, para "Recompras")."""
+    purchases = load_purchases()
+    sales = load_sales()
+    tickers = sorted(set(purchases["ticker"]) if not purchases.empty else set())
+    with ThreadPoolExecutor(max_workers=8) as pool:
+        prices = dict(zip(tickers, pool.map(_fetch_cdi_price, tickers)))
+    return format_balance_message(purchases, sales, prices)
+
+
+def send_balance(chat_id: int) -> None:
+    """/balance: calcula el balance y lo manda al chat de alertas del portafolio
+    (TELEGRAM_CHAT_ID_PORTFOLIO). Si no está configurado, lo responde en el chat donde se pidió."""
+    pull_error = _pull_latest()  # mismo motivo que al guardar: no reportar con datos locales viejos
+    try:
+        text = build_balance_text()
+    except Exception as exc:
+        print(f"/balance: no se pudo calcular el balance: {exc}")
+        send_message(chat_id, "No se pudo calcular el balance. Probá de nuevo en un rato.")
+        return
+    if pull_error:
+        text += "\n⚠️ No se pudo hacer git pull — puede faltar algún movimiento reciente."
+
+    if not TELEGRAM_CHAT_ID_PORTFOLIO:
+        # Detalles de configuración solo a consola, nunca al chat.
+        print("/balance: TELEGRAM_CHAT_ID_PORTFOLIO no configurado — respondo en el chat de origen.")
+        send_message(chat_id, text)
+        return
+
+    target = int(TELEGRAM_CHAT_ID_PORTFOLIO)
+    try:
+        send_message(target, text)
+    except requests.RequestException as exc:
+        # El texto de una excepción de requests incluye la URL, que lleva el token del bot:
+        # va solo a consola, nunca al chat.
+        print(f"/balance: falló el envío al chat de alertas: {exc}")
+        send_message(chat_id, f"No se pudo enviar al chat de alertas. Te lo dejo acá:\n\n{text}")
+        return
+    if target != chat_id:
+        send_message(chat_id, "Balance enviado al chat de alertas del portafolio ✅")
+
+
 # --- Loop principal --------------------------------------------------------------------------
 
 
@@ -392,6 +500,19 @@ def main() -> int:
         return 1
 
     allowed_chat_id = int(TELEGRAM_CHAT_ID)
+    alerts_chat_id = int(TELEGRAM_CHAT_ID_PORTFOLIO) if TELEGRAM_CHAT_ID_PORTFOLIO else None
+    # Registra los comandos para que aparezcan en el menú "/" de Telegram.
+    try:
+        _api(
+            "setMyCommands",
+            commands=[
+                {"command": "start", "description": "Registrar compra/venta o ver balance"},
+                {"command": "balance", "description": "Enviar balance al chat de alertas"},
+                {"command": "cancelar", "description": "Cancelar la carga en curso"},
+            ],
+        )
+    except requests.RequestException as exc:
+        print(f"No se pudieron registrar los comandos del menú: {exc}")
     print("Bot de Portafolio escuchando. Ctrl+C para parar.")
     offset = None
 
@@ -425,6 +546,15 @@ def main() -> int:
                 elif "message" in update and "text" in update["message"]:
                     msg = update["message"]
                     chat_id = msg["chat"]["id"]
+                    # Desde el chat de alertas solo se acepta /balance (un grupo con modo
+                    # privacidad igual solo le reenvía comandos al bot, no texto suelto).
+                    if (
+                        alerts_chat_id is not None
+                        and chat_id == alerts_chat_id
+                        and msg["text"].strip().split("@", 1)[0] == "/balance"
+                    ):
+                        send_balance(chat_id)
+                        continue
                     if chat_id != allowed_chat_id:
                         print(f"Ignorado: mensaje de chat_id no autorizado {chat_id} ({msg['chat'].get('type')}): {msg['text']!r}")
                         continue

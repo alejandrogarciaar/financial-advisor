@@ -63,6 +63,8 @@ simulate_additional_purchase = _lib.simulate_additional_purchase
 build_synthetic_portfolio_series = _lib.build_synthetic_portfolio_series
 project_future_value = _lib.project_future_value
 commission_summary = _lib.commission_summary
+rebuy_ceiling_summary = _lib.rebuy_ceiling_summary
+format_balance_message = _lib.format_balance_message
 
 
 def load_purchases() -> pd.DataFrame:
@@ -139,3 +141,4 @@ def _pull_rebase(repo_dir: Path) -> None:
         raise subprocess.CalledProcessError(
             result.returncode, result.args, result.stdout, result.stderr
         )
+

@@ -36,6 +36,7 @@ from src.portfolio import (
     load_sales,
     project_future_value,
     realized_gains_summary,
+    rebuy_ceiling_summary,
     sale_cost_basis_by_row,
     save_purchases,
     save_sales,
@@ -446,6 +447,57 @@ def _render_cartera_and_total(purchases: pd.DataFrame, sales: pd.DataFrame) -> N
         st.caption("⚠️ El precio actual de algún ticker no está disponible ahora — el total no lo incluye.")
 
 
+def _render_rebuy_ceilings(purchases: pd.DataFrame, sales: pd.DataFrame) -> None:
+    """"🔁 Tope de recompra" — para cada ticker vendido en su totalidad, el precio de venta neto
+    (ver `rebuy_ceiling_summary()`) como máximo para volver a comprar, contra el precio de hoy.
+    Regla del usuario (2026-11-12): reinvertir lo realizado comprando POR DEBAJO de lo que se
+    vendió. Es una regla propia de disciplina, no una señal validada fuera de muestra."""
+    ceilings = rebuy_ceiling_summary(purchases, sales)
+    if ceilings.empty:
+        return
+
+    st.divider()
+    st.subheader("🔁 Tope de recompra")
+    st.caption(
+        "Para cada acción que vendiste por completo, el precio al que saliste (promedio de esa "
+        "salida, neto de la comisión de venta) es el máximo para volver a comprar — la idea es "
+        "reinvertir esa plata comprando más barato de lo que vendiste. Si vendiste completo más "
+        "de una vez, manda la salida más reciente. Es tu regla de disciplina, no una señal "
+        "validada con backtest."
+    )
+
+    price_results = _parallel_fetch(
+        {t: (_cached_portfolio_price, (t,)) for t in ceilings["ticker"]}
+    )
+    current = ceilings["ticker"].map(lambda t: price_results.get(t, (None, None))[0])
+    gap = current / ceilings["ceiling_cop"] - 1
+
+    def _status(g):
+        if pd.isna(g):
+            return "Sin precio ahora"
+        return "🟢 Por debajo del tope" if g < 0 else "🔴 Por encima del tope"
+
+    display = pd.DataFrame(
+        {
+            "Ticker": ceilings["ticker"],
+            "Salida": ceilings["exit_date"].map(lambda v: v.isoformat() if hasattr(v, "isoformat") else str(v)),
+            "Acciones vendidas": ceilings["shares_sold"],
+            "Tope (COP)": ceilings["ceiling_cop"].map(lambda v: f"${v:,.0f}"),
+            "Precio hoy (COP)": current.map(lambda v: f"${v:,.0f}" if pd.notna(v) else "—"),
+            "Hoy vs. tope": gap.map(lambda v: f"{v:+.1%}" if pd.notna(v) else "—"),
+            "Estado": gap.map(_status),
+            "Plata liberada (COP)": ceilings["net_proceeds_cop"].map(lambda v: f"${v:,.0f}"),
+        }
+    )
+    st.dataframe(display, hide_index=True, use_container_width=True)
+    st.caption(
+        "\"Plata liberada\" es lo que entró neto en esa salida — lo que habría para reinvertir. "
+        "Solo aparecen las acciones que hoy no tenés: al volver a comprar, la posición pasa a "
+        "\"Mi Cartera\". Para que una recompra quede de verdad por debajo, considerá también la "
+        "comisión de compra."
+    )
+
+
 @st.fragment(run_every=PORTFOLIO_AUTOREFRESH_INTERVAL)
 def _render_portfolio_analysis(purchases: pd.DataFrame, sales: pd.DataFrame) -> None:
     """Todo lo que va DESPUÉS de "Tus compras"/"Tus ventas" en el orden de la página: Comisiones,
@@ -539,6 +591,8 @@ def _render_portfolio_analysis(purchases: pd.DataFrame, sales: pd.DataFrame) -> 
             "lógica de costo promedio, aplicada a la fecha). Con compras en fechas muy distintas es un "
             "promedio, no el tiempo de cada lote."
         )
+
+    _render_rebuy_ceilings(purchases, sales)
 
     held_tickers, summary = _compute_held_summary(purchases, sales)
 
@@ -899,6 +953,13 @@ def render_capital():
         "arriba, que ya muestra tu posición neta y precio promedio. Las acciones son unidades "
         "enteras — no se aceptan compras fraccionarias (1.2, 2.3, etc.)."
     )
+
+    ceilings = rebuy_ceiling_summary(purchases, sales)
+    if not ceilings.empty:
+        st.caption(
+            "🔁 Topes de recompra (comprá por debajo): "
+            + " · ".join(f"{r.ticker} ≤ ${r.ceiling_cop:,.0f}" for r in ceilings.itertuples())
+        )
 
     with st.form("add_purchase_form", clear_on_submit=True):
         st.markdown("**➕ Registrar una compra nueva**")

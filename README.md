@@ -125,6 +125,14 @@ máquinas y al deploy público, sin volver a la PC a pushear a mano.
 Cosas a tener en cuenta:
 
 - Solo responde al chat de `TELEGRAM_CHAT_ID`; cualquier otro se ignora en silencio.
+- `/balance` calcula el balance actual (mismo cálculo que "Mi Cartera"/"Total" y "Ganancias
+  realizadas" de la app, precios en vivo de yfinance) y lo envía al chat de alertas del
+  portafolio, `TELEGRAM_CHAT_ID_PORTFOLIO` en `.env` (mismo nombre que el secret de
+  `market-signals-telegram`). Se puede pedir desde el chat privado o desde ese mismo grupo; si la
+  variable no está, responde en el chat donde se pidió.
+  También está como botón "📊 Balance" en el menú de `/start`, e incluye los topes de recompra.
+- Al confirmar una compra de un ticker que ya vendiste completo, el resumen avisa si el precio
+  (con comisión) queda por encima o por debajo de su tope de recompra.
 - No correrlo en dos máquinas al mismo tiempo — Telegram solo permite un proceso haciendo
   polling por token a la vez y rechaza al segundo con `409` (el script lo detecta y avisa).
 
