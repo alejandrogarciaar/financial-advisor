@@ -159,5 +159,12 @@
     "price_cop": 1249340.0,
     "commission_cop": 18506.0,
     "date": "2026-11-10"
+  },
+  {
+    "ticker": "TSLACO",
+    "shares": 5,
+    "price_cop": 1320000.0,
+    "commission_cop": 9818.0,
+    "date": "2026-11-12"
   }
 ]
