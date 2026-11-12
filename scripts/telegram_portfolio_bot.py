@@ -63,10 +63,6 @@ TICKERS = list(PORTFOLIO_CDI_TICKERS.keys())
 
 TELEGRAM_TOKEN = os.environ.get("TELEGRAM_TOKEN")
 TELEGRAM_CHAT_ID = os.environ.get("TELEGRAM_CHAT_ID")
-# Chat de alertas del portafolio (el mismo grupo donde `market-signals-telegram` postea sus
-# alertas de Portafolio — ahí el secret se llama igual, TELEGRAM_CHAT_ID_PORTFOLIO). Opcional:
-# solo lo usa /balance para saber a dónde mandar el reporte.
-TELEGRAM_CHAT_ID_PORTFOLIO = os.environ.get("TELEGRAM_CHAT_ID_PORTFOLIO")
 API_BASE = f"https://api.telegram.org/bot{TELEGRAM_TOKEN}"
 
 ACTION_LABEL = {"compra": "COMPRA", "venta": "VENTA"}
@@ -190,7 +186,7 @@ def handle_text(chat_id: int, text: str) -> None:
             send_message(
                 chat_id,
                 "/start — registrar una compra o venta\n"
-                "/balance — enviar el balance actual del portafolio al chat de alertas\n"
+                "/balance — ver el balance actual del portafolio\n"
                 "/cancelar — cancelar la carga en curso",
             )
         return
@@ -460,8 +456,9 @@ def build_balance_text() -> str:
 
 
 def send_balance(chat_id: int) -> None:
-    """/balance: calcula el balance y lo manda al chat de alertas del portafolio
-    (TELEGRAM_CHAT_ID_PORTFOLIO). Si no está configurado, lo responde en el chat donde se pidió."""
+    """/balance: calcula el balance y lo responde SOLO en el chat privado donde se pidió — nunca
+    en el grupo de alertas (pedido explícito 2026-11-12). Ese grupo ya recibe el mismo mensaje dos
+    veces por día hábil desde el digest programado de market-signals-telegram."""
     pull_error = _pull_latest()  # mismo motivo que al guardar: no reportar con datos locales viejos
     try:
         text = build_balance_text()
@@ -471,24 +468,7 @@ def send_balance(chat_id: int) -> None:
         return
     if pull_error:
         text += "\n⚠️ No se pudo hacer git pull — puede faltar algún movimiento reciente."
-
-    if not TELEGRAM_CHAT_ID_PORTFOLIO:
-        # Detalles de configuración solo a consola, nunca al chat.
-        print("/balance: TELEGRAM_CHAT_ID_PORTFOLIO no configurado — respondo en el chat de origen.")
-        send_message(chat_id, text)
-        return
-
-    target = int(TELEGRAM_CHAT_ID_PORTFOLIO)
-    try:
-        send_message(target, text)
-    except requests.RequestException as exc:
-        # El texto de una excepción de requests incluye la URL, que lleva el token del bot:
-        # va solo a consola, nunca al chat.
-        print(f"/balance: falló el envío al chat de alertas: {exc}")
-        send_message(chat_id, f"No se pudo enviar al chat de alertas. Te lo dejo acá:\n\n{text}")
-        return
-    if target != chat_id:
-        send_message(chat_id, "Balance enviado al chat de alertas del portafolio ✅")
+    send_message(chat_id, text)
 
 
 # --- Loop principal --------------------------------------------------------------------------
@@ -500,14 +480,13 @@ def main() -> int:
         return 1
 
     allowed_chat_id = int(TELEGRAM_CHAT_ID)
-    alerts_chat_id = int(TELEGRAM_CHAT_ID_PORTFOLIO) if TELEGRAM_CHAT_ID_PORTFOLIO else None
     # Registra los comandos para que aparezcan en el menú "/" de Telegram.
     try:
         _api(
             "setMyCommands",
             commands=[
                 {"command": "start", "description": "Registrar compra/venta o ver balance"},
-                {"command": "balance", "description": "Enviar balance al chat de alertas"},
+                {"command": "balance", "description": "Ver el balance actual del portafolio"},
                 {"command": "cancelar", "description": "Cancelar la carga en curso"},
             ],
         )
@@ -546,15 +525,6 @@ def main() -> int:
                 elif "message" in update and "text" in update["message"]:
                     msg = update["message"]
                     chat_id = msg["chat"]["id"]
-                    # Desde el chat de alertas solo se acepta /balance (un grupo con modo
-                    # privacidad igual solo le reenvía comandos al bot, no texto suelto).
-                    if (
-                        alerts_chat_id is not None
-                        and chat_id == alerts_chat_id
-                        and msg["text"].strip().split("@", 1)[0] == "/balance"
-                    ):
-                        send_balance(chat_id)
-                        continue
                     if chat_id != allowed_chat_id:
                         print(f"Ignorado: mensaje de chat_id no autorizado {chat_id} ({msg['chat'].get('type')}): {msg['text']!r}")
                         continue
