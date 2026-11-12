@@ -481,15 +481,17 @@ def main() -> int:
 
     allowed_chat_id = int(TELEGRAM_CHAT_ID)
     # Registra los comandos para que aparezcan en el menú "/" de Telegram.
+    # Se registra por defecto Y para el chat privado autorizado (en español): los clientes de
+    # Telegram cachean la lista y una versión a nivel de chat es la que más rápido refrescan.
+    commands = [
+        {"command": "start", "description": "Registrar compra/venta o ver balance"},
+        {"command": "balance", "description": "Ver tu balance aquí"},
+        {"command": "cancelar", "description": "Cancelar la carga en curso"},
+    ]
     try:
-        _api(
-            "setMyCommands",
-            commands=[
-                {"command": "start", "description": "Registrar compra/venta o ver balance"},
-                {"command": "balance", "description": "Ver tu balance aquí"},
-                {"command": "cancelar", "description": "Cancelar la carga en curso"},
-            ],
-        )
+        _api("setMyCommands", commands=commands)
+        _api("setMyCommands", commands=commands, scope={"type": "chat", "chat_id": allowed_chat_id})
+        _api("setMyCommands", commands=commands, language_code="es")
     except requests.RequestException as exc:
         print(f"No se pudieron registrar los comandos del menú: {exc}")
     print("Bot de Portafolio escuchando. Ctrl+C para parar.")
