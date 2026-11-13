@@ -65,6 +65,13 @@ TELEGRAM_TOKEN = os.environ.get("TELEGRAM_TOKEN")
 TELEGRAM_CHAT_ID = os.environ.get("TELEGRAM_CHAT_ID")
 API_BASE = f"https://api.telegram.org/bot{TELEGRAM_TOKEN}"
 
+
+def _redact(value: object) -> str:
+    """Texto seguro para el log: las excepciones de requests incluyen la URL completa, que lleva
+    el token del bot (pasó con errores de red: el token quedaba en telegram_bot.log)."""
+    text = str(value)
+    return text.replace(TELEGRAM_TOKEN, "<TOKEN>") if TELEGRAM_TOKEN else text
+
 ACTION_LABEL = {"compra": "COMPRA", "venta": "VENTA"}
 
 # Estado de la conversación por chat_id — en memoria; un reinicio del proceso simplemente hace
@@ -305,7 +312,7 @@ def _rebuy_ceiling(ticker: str) -> Optional[float]:
     try:
         ceilings = rebuy_ceiling_summary(load_purchases(), load_sales())
     except Exception as exc:
-        print(f"No se pudo calcular el tope de recompra de {ticker}: {exc}")
+        print(f"No se pudo calcular el tope de recompra de {ticker}: {_redact(exc)}")
         return None
     if ceilings.empty:
         return None
@@ -438,7 +445,7 @@ def _fetch_cdi_price(ticker: str) -> Optional[float]:
         quote, _ = yfinance_client.get_quote(PORTFOLIO_CDI_TICKERS[ticker])
         return quote.get("price")
     except Exception as exc:
-        print(f"/balance: no se pudo obtener precio de {ticker}: {exc}")
+        print(f"/balance: no se pudo obtener precio de {ticker}: {_redact(exc)}")
         return None
 
 
@@ -463,7 +470,7 @@ def send_balance(chat_id: int) -> None:
     try:
         text = build_balance_text()
     except Exception as exc:
-        print(f"/balance: no se pudo calcular el balance: {exc}")
+        print(f"/balance: no se pudo calcular el balance: {_redact(exc)}")
         send_message(chat_id, "No se pudo calcular el balance. Probá de nuevo en un rato.")
         return
     if pull_error:
@@ -493,7 +500,7 @@ def main() -> int:
         _api("setMyCommands", commands=commands, scope={"type": "chat", "chat_id": allowed_chat_id})
         _api("setMyCommands", commands=commands, language_code="es")
     except requests.RequestException as exc:
-        print(f"No se pudieron registrar los comandos del menú: {exc}")
+        print(f"No se pudieron registrar los comandos del menú: {_redact(exc)}")
     print("Bot de Portafolio escuchando. Ctrl+C para parar.")
     offset = None
 
@@ -510,7 +517,7 @@ def main() -> int:
             resp.raise_for_status()
             updates = resp.json().get("result", [])
         except requests.RequestException as exc:
-            print(f"Error de red consultando Telegram: {exc}. Reintentando en 5s...")
+            print(f"Error de red consultando Telegram: {_redact(exc)}. Reintentando en 5s...")
             time.sleep(5)
             continue
 
@@ -532,7 +539,7 @@ def main() -> int:
                         continue
                     handle_text(chat_id, msg["text"])
             except Exception as exc:  # nunca tirar abajo el loop por un update puntual
-                print(f"Error procesando update: {exc}")
+                print(f"Error procesando update: {_redact(exc)}")
 
 
 if __name__ == "__main__":
