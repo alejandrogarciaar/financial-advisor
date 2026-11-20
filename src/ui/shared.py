@@ -317,6 +317,15 @@ def _cached_historical_prices(ticker: str):
     return PROVIDERS["yfinance"].get_historical_prices(ticker)
 
 
+@st.cache_data(ttl=21600, show_spinner=False)
+def _cached_analyst_view(ticker: str):
+    """Consenso de analistas (yfinance) del subyacente en USD. TTL de 6h: los precios objetivo
+    se revisan por días/semanas, no por minutos — no hace falta pegarle a Yahoo en cada
+    auto-refresh de Portafolio."""
+    raw, _ = PROVIDERS["yfinance"].get_analyst_view(ticker)
+    return raw
+
+
 def zone_badge(zone: str, small: bool = False) -> str:
     color = ZONE_COLOR[zone]
     label = FRIENDLY_ZONE[zone]

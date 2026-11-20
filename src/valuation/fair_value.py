@@ -9,7 +9,7 @@ from dataclasses import dataclass, field
 
 from src.config import EQUITY_RISK_PREMIUM, RISK_FREE_RATE, DCF_PROJECTION_YEARS
 from src.data import fmp_client, yfinance_client
-from src.valuation.analyst_view import AnalystView, build_analyst_view
+from src.valuation.analyst_view import AnalystView, analyst_view_from_raw
 from src.valuation.book_value import BookValueResult, evaluate_book_value
 from src.valuation.dcf import (
     DCFScenarios,
@@ -376,13 +376,7 @@ def evaluate_ticker(ticker: str, provider: str = "fmp") -> TickerEvaluation:
     analyst_view = None
     try:
         raw_view, _ = client.get_analyst_view(ticker)
-        analyst_view = build_analyst_view(
-            price_target_mean=raw_view.get("priceTargetMean"),
-            price_target_median=raw_view.get("priceTargetMedian"),
-            forward_growth_rate=raw_view.get("forwardGrowth"),
-            eps_estimate_now=raw_view.get("epsEstimateNow"),
-            eps_estimate_90d_ago=raw_view.get("epsEstimate90dAgo"),
-        )
+        analyst_view = analyst_view_from_raw(raw_view)
     except Exception:
         pass
 

@@ -183,9 +183,27 @@ def get_analyst_view(ticker: str) -> tuple[dict, dict]:
         except Exception:
             pass
 
+        # Cobertura y recomendación: mismo origen que el precio objetivo (el bloque
+        # financialData de Yahoo, que agrega el consenso de LSEG/Refinitiv). Opcional — si
+        # `.info` falla, el precio objetivo igual sirve solo.
+        n_analysts = rec_key = rec_mean = None
+        try:
+            info = t.info or {}
+            n_analysts = info.get("numberOfAnalystOpinions")
+            rec_key = info.get("recommendationKey")
+            rec_mean = _to_float(info.get("recommendationMean"))
+        except Exception:
+            pass
+
         return {
             "priceTargetMean": _to_float(targets.get("mean")),
             "priceTargetMedian": _to_float(targets.get("median")),
+            "priceTargetLow": _to_float(targets.get("low")),
+            "priceCurrent": _to_float(targets.get("current")),  # USD, mismo snapshot que el objetivo
+            "priceTargetHigh": _to_float(targets.get("high")),
+            "numberOfAnalysts": int(n_analysts) if n_analysts else None,
+            "recommendationKey": rec_key if rec_key and rec_key != "none" else None,
+            "recommendationMean": rec_mean,
             "forwardGrowth": forward_growth,
             "epsEstimateNow": eps_now,
             "epsEstimate90dAgo": eps_90d,

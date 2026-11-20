@@ -47,10 +47,12 @@ from src.portfolio import (
 )
 from src.ui.shared import (
     ZONE_COLOR,
+    _cached_analyst_view,
     _cached_historical_prices,
     _cached_portfolio_price,
     _parallel_fetch,
 )
+from src.valuation.analyst_view import analyst_view_from_raw
 from src.valuation.risk_return import evaluate_risk_return
 
 PORTFOLIO_TICKERS = list(PORTFOLIO_CDI_TICKERS.keys())
@@ -498,6 +500,117 @@ def _render_rebuy_ceilings(purchases: pd.DataFrame, sales: pd.DataFrame) -> None
     )
 
 
+RECOMMENDATION_LABEL = {
+    "strong_buy": "Compra fuerte",
+    "buy": "Compra",
+    "hold": "Mantener",
+    "underperform": "Bajo rendimiento",
+    "sell": "Venta",
+    "strong_sell": "Venta fuerte",
+}
+
+
+def _render_analyst_targets(purchases: pd.DataFrame, sales: pd.DataFrame) -> None:
+    """"🎯 Precio objetivo de analistas" — consenso de Wall Street a ~12 meses SOLO para las
+    acciones que tenés en cartera hoy (compradas menos vendidas > 0; las vendidas por completo
+    no aparecen, pedido explícito del usuario), convertido a COP y comparado contra tu costo
+    promedio. Pedido del usuario (2026-11-17). Fuente: yfinance (Yahoo Finance, que agrega el consenso de LSEG);
+    contrastado ese día contra MarketBeat y S&P Global (vía StockAnalysis) con diferencias de
+    ~1-6% en el promedio. Es contexto, igual que en Acciones (`analyst_view.py`): una opinión
+    profesional, no una señal validada fuera de muestra en este proyecto — por eso el lenguaje
+    describe ("el consenso ve +X%"), nunca indica qué hacer."""
+    held_tickers, summary = _compute_held_summary(purchases, sales)
+    if not held_tickers:
+        return
+
+    tickers = held_tickers
+    stock_tickers = [t for t in tickers if PORTFOLIO_CDI_UNDERLYING[t][0] == "stock"]
+    etf_tickers = [t for t in tickers if PORTFOLIO_CDI_UNDERLYING[t][0] == "etf"]
+
+    st.divider()
+    st.subheader("🎯 Precio objetivo de analistas")
+    st.caption(
+        "Lo que el consenso de analistas de Wall Street estima que va a valer cada acción que "
+        "tenés en cartera en ~12 meses (promedio de sus precios objetivo), pasado a COP. Es una opinión profesional, no "
+        "una garantía ni una señal validada con backtest en esta app — sirve para contrastar "
+        "contra tu propio costo y contra nuestras fórmulas de la pestaña Acciones."
+    )
+    if not stock_tickers:
+        st.caption("Ninguna de tus posiciones abiertas es una acción individual con cobertura de analistas.")
+        return
+
+    jobs = {}
+    for t in stock_tickers:
+        jobs[("view", t)] = (_cached_analyst_view, (PORTFOLIO_CDI_UNDERLYING[t][1],))
+        jobs[("cop", t)] = (_cached_portfolio_price, (t,))
+    results = _parallel_fetch(jobs)
+
+    avg_cost = dict(zip(summary["ticker"], summary["avg_price_cop"]))
+
+    def _money(v):
+        return f"${v:,.0f}" if v is not None and pd.notna(v) else "—"
+
+    def _pct(v):
+        return f"{v:+.1%}" if v is not None and pd.notna(v) else "—"
+
+    rows = []
+    missing = []
+    for t in stock_tickers:
+        raw, view_err = results[("view", t)]
+        price_cop, _ = results[("cop", t)]
+        if view_err is not None or not raw or not raw.get("priceTargetMean"):
+            missing.append(t)
+            continue
+        av = analyst_view_from_raw(raw)
+        usd_now = raw.get("priceCurrent")
+        # Misma aproximación que "Plan de compra escalonada": ratio CDI(COP)/subyacente(USD) de
+        # hoy. Cancela en los %, solo cambia la moneda mostrada.
+        ratio = price_cop / usd_now if price_cop and usd_now else None
+
+        def _cop(usd):
+            return usd * ratio if usd is not None and ratio else None
+
+        target_cop = _cop(av.price_target_mean)
+        upside = av.price_target_mean / usd_now - 1 if usd_now else None
+        ref = avg_cost.get(t)
+        vs_ref = target_cop / ref - 1 if target_cop and ref else None
+
+        rows.append(
+            {
+                "Ticker": f"{t} → {PORTFOLIO_CDI_UNDERLYING[t][1]}",
+                "Consenso": RECOMMENDATION_LABEL.get(av.recommendation_key, "—")
+                + (f" ({av.number_of_analysts})" if av.number_of_analysts else ""),
+                "Precio hoy (COP)": _money(price_cop),
+                "Objetivo promedio (COP)": _money(target_cop),
+                "Potencial vs. hoy": _pct(upside),
+                "Rango objetivo (COP)": f"{_money(_cop(av.price_target_low))} – {_money(_cop(av.price_target_high))}",
+                "Tu costo promedio (COP)": _money(ref),
+                "Objetivo vs. tu costo": _pct(vs_ref),
+                "Objetivo (USD)": f"${av.price_target_mean:,.2f}",
+            }
+        )
+
+    if rows:
+        st.dataframe(pd.DataFrame(rows), hide_index=True, use_container_width=True)
+    st.caption(
+        "**Tu costo promedio** incluye la comisión de compra. Las acciones que ya vendiste por "
+        "completo no aparecen acá (ver \"Tope de recompra\"). **Consenso** = recomendación promedio y, entre "
+        "paréntesis, cuántos analistas la cubren. El rango va del objetivo más bajo al más alto: "
+        "cuanto más ancho, menos acuerdo hay entre analistas. El paso a COP usa el ratio "
+        "CDI/subyacente de hoy (aproximación; los % no cambian). Fuente: Yahoo Finance "
+        "(consenso LSEG), refrescado cada 6 horas — puede diferir unos puntos de MarketBeat, "
+        "TipRanks o FactSet según qué analistas incluya cada uno."
+    )
+    if missing:
+        st.caption(f"Sin consenso de analistas disponible ahora para: {', '.join(missing)}.")
+    if etf_tickers:
+        st.caption(
+            f"{', '.join(etf_tickers)}: es un ETF — no tiene precio objetivo de analistas (no es "
+            "una empresa). Su referencia equivalente sería el objetivo de los estrategas para el "
+            "índice S&P 500, que no se trae automáticamente."
+        )
+
+
 @st.fragment(run_every=PORTFOLIO_AUTOREFRESH_INTERVAL)
 def _render_portfolio_analysis(purchases: pd.DataFrame, sales: pd.DataFrame) -> None:
     """Todo lo que va DESPUÉS de "Tus compras"/"Tus ventas" en el orden de la página: Comisiones,
@@ -593,6 +706,7 @@ def _render_portfolio_analysis(purchases: pd.DataFrame, sales: pd.DataFrame) -> 
         )
 
     _render_rebuy_ceilings(purchases, sales)
+    _render_analyst_targets(purchases, sales)
 
     held_tickers, summary = _compute_held_summary(purchases, sales)
 

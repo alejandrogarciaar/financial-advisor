@@ -191,7 +191,7 @@ mapa es solo para ubicarse rápido, no para reemplazar esa lectura.
 | `graham_growth.py` | Fórmula de crecimiento de Graham: `EPS × (8.5 + 2g) × 4.4 / Y`. |
 | `quality.py` | Filtro (no señal de precio): ROIC vs. WACC — ¿la empresa crea valor al reinvertir? |
 | `solvency.py` | Filtro: cobertura de intereses y deuda/EBITDA — riesgo de apalancamiento. |
-| `analyst_view.py` | Consenso de Wall Street (solo yfinance) — contexto, no un método propio. |
+| `analyst_view.py` | Consenso de Wall Street (solo yfinance) — precio objetivo promedio/mediana/rango, nº de analistas, recomendación y revisión de EPS; contexto, no un método propio. Usado por Acciones y por "🎯 Precio objetivo de analistas" en Portafolio. |
 | `trend.py` | EMA-55 / SMA 50-200 — momentum, no participa del voto de `summarize_signals()`. |
 | `risk_return.py` | CAGR (1/3/5y), volatilidad, Sharpe, máxima caída — 100% retrospectivo; compartido entre Acciones y ETFs. |
 | `etf_analysis.py` | Valoración de ETFs (P/E histórico del S&P 500 como referencia) + riesgo/retorno — no usa las 6 fórmulas de acciones. |
@@ -207,7 +207,7 @@ mapa es solo para ubicarse rápido, no para reemplazar esa lectura.
 | `validation.py` | Pestaña Validación — backtest en UI + historial de veredictos. |
 | `speculation.py` | Pestaña Especulación (solo acciones) + `render_speculation_indicators()` (compartida con Cripto) + sección del Market Reaction Zone Engine sobre datos diarios + pestaña interna "Niveles calculados". |
 | `cripto.py` | Pestaña Cripto (BTC/ETH/SOL, Binance) — mismo cuerpo de indicadores + Market Reaction Zone Engine sobre 4h + VWAP, Wyckoff Spring y flujos de ETFs spot vía SoSoValue (secciones propias, no compartidas con Especulación), más la pestaña interna "Niveles calculados" (`render_niveles_calculados()`, en `shared.py`). |
-| `portfolio.py` | Pestaña Portafolio — alta de compras y ventas, resumen de holdings, "Ganancias realizadas", "Plan de compra escalonada", auto-refresh de precios (`st.fragment`). |
+| `portfolio.py` | Pestaña Portafolio — alta de compras y ventas, resumen de holdings, "Ganancias realizadas", "Tope de recompra", "Precio objetivo de analistas", "Plan de compra escalonada", auto-refresh de precios (`st.fragment`). |
 
 ### `src/` — módulos de cómputo top-level (no UI)
 

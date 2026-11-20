@@ -176,6 +176,18 @@ config + tab wiring). This tab's code lives in `src/ui/portfolio.py`:
   `format_balance_message()` (also in the package) is the ONE balance text shared by the bot's
   `/balance` and market-signals-telegram's scheduled portfolio digest — change the format there.
 
+- `_render_analyst_targets()` (`src/ui/portfolio.py`, right after `_render_rebuy_ceilings()`;
+  added 2026-11-17, user request) — "🎯 Precio objetivo de analistas": ONLY for CDIs currently
+  held (net shares > 0) whose underlying is a stock — fully-sold tickers are excluded by
+  explicit user request (same day), the Wall Street ~12-month consensus target
+  (`_cached_analyst_view()` in `shared.py`, 6h TTL → yfinance `get_analyst_view()`, which is
+  Yahoo's LSEG-sourced consensus) converted to COP with today's CDI/underlying ratio (same
+  approximation as the laddered plan), plus low–high range, analyst count, recommendation, and
+  the target vs. the user's avg cost. Held ETFs (CSPXCO) have no analyst target — shown as a
+  note. Cross-checked the day it shipped
+  against MarketBeat and S&P Global (StockAnalysis): averages within ~1-6%. Context only, NOT
+  OOS-validated — keep the language descriptive (no "comprá"/"vendé").
+
 ## `src/drawdown_dca.py`
 
 - `current_drawdown_from_high()` (bare %, used internally by `current_bucket_reaction()`),
