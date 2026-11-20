@@ -111,6 +111,19 @@ config + tab wiring). This tab's code lives in `src/ui/cripto.py`:
   `{"BTC": {"support"}, "ETH": {"support"}, "SOL": {"support"}}` (or the even older
   `{"BTC": {"support"}, "TSLA": {"support", "resistance"}}`) values without re-running the
   validation fresh.
+- `render_btc_cycle_bottom()` — "🧱 ¿Fondo de ciclo? — variables estadísticas", **BTC only**
+  (rendered after `render_etf_flows()` inside the "📊 Análisis" inner tab when `ticker == "BTC"`;
+  added 2026-11-20, user request). Live state of each cycle-bottom variable from
+  `src/btc_cycle.py` (zone family: combined ≥3/5 valuation, MVRV<1, below 200-week MA, 300–450
+  days since ATH, Mayer<0.8, drawdown ≤−75%, weekly RSI<30, Fear & Greed ≤15; confirmation
+  family: reclaim 200W MA, MVRV back above 1, hash ribbon, reclaim 200D MA) with the BTC price
+  that would trigger each one, next to its historical record from `scripts/btc_bottom_study.py`
+  (`STUDY_RESULTS`/`STUDY_DATE` — re-run the script and update both together). Data:
+  `src/data/onchain_client.py` (CoinMetrics price+MVRV, blockchain.com hashrate; 6h
+  `@st.cache_data`) + the existing Fear & Greed cache. **Descriptive, not OOS-validated**: only 4
+  completed cycle lows exist, so it stays out of the "validado" language. Live confirmations gate
+  on a prior ≥50% drawdown (`LIVE_CONFIRM_MIN_DRAWDOWN`) instead of the study's 70%, because the
+  current cycle bottomed out (so far) at −53% — the caption says so.
 - `render_vwap()` + `VWAP_PRICE_COLOR`/`VWAP_COLOR`/`VWAP_DASH`/`VWAP_WINDOW_LABEL`/
   `VWAP_CHART_WINDOW_DAYS` — the "🎯 VWAP" section, called from `render_crypto()` between
   `render_speculation_indicators()` and `render_wyckoff_spring()`. Its OWN section, not inside the

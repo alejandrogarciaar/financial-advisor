@@ -15,7 +15,17 @@ import plotly.graph_objects as go
 import streamlit as st
 
 from src.config import CRYPTO_BINANCE_SYMBOLS, SOSOVALUE_API_KEY
-from src.data import binance_client, bitstamp_client, sosovalue_client
+from src.btc_cycle import (
+    BASELINE_ZONE_SHARE,
+    LIVE_CONFIRM_MIN_DRAWDOWN,
+    STUDY_DATE,
+    STUDY_RESULTS,
+    build_cycle_frame,
+    current_indicators,
+    cycle_context,
+    fecha_es,
+)
+from src.data import binance_client, bitstamp_client, onchain_client, sosovalue_client
 from src.data.errors import DataError
 from src.speculation import (
     VWAP_REACTION_ATR_THRESHOLD,
@@ -394,6 +404,105 @@ VWAP_REACTION_HEADLINE_HORIZON = 20  # mismo criterio que WYCKOFF_SPRING_HEADLIN
 # scripts/vwap_oos_validate.py para quien quiera el detalle.
 
 
+def render_btc_cycle_bottom() -> None:
+    """"🧱 ¿Fondo de ciclo?" — solo BTC (pedido del usuario, 2026-11-20). Muestra, con datos de
+    hoy, en qué estado está cada variable que `scripts/btc_bottom_study.py` midió contra los 4
+    pisos de ciclo completos, junto con su historial (pisos detectados, falsas alarmas,
+    precisión). Con 4 pisos no es una señal validada fuera de muestra como el resto de la
+    pestaña: es descriptivo, y el lenguaje tiene que quedar así (nunca "comprá")."""
+    st.divider()
+    st.subheader("🧱 ¿Fondo de ciclo? — variables estadísticas")
+    st.caption(
+        "Qué variables acompañaron históricamente los 4 pisos de ciclo completos de BTC "
+        "(nov 2011, ene 2015, dic 2018, nov 2022) y cómo están hoy. Con solo 4 pisos esto "
+        "describe la historia; no es una señal validada fuera de muestra."
+    )
+    try:
+        pm, pm_meta = _cached_btc_price_mvrv()
+    except DataError as exc:
+        st.caption(f"No pudimos consultar precio y MVRV de CoinMetrics ahora mismo. Detalle: {exc}")
+        return
+    try:
+        hr, _ = _cached_btc_hashrate()
+    except DataError:
+        hr = []
+    try:
+        fg_data, _ = _cached_fear_greed_index()
+        fg_value = fg_data["value"]
+    except DataError:
+        fg_value = None
+
+    df = build_cycle_frame(pm, hr)
+    ctx = cycle_context(df)
+    indicators = current_indicators(df, fg_value)
+    zone = [i for i in indicators if i.family == "zona"]
+    confirm = [i for i in indicators if i.family == "confirmación"]
+    combined = zone[0]
+
+    c1, c2, c3, c4 = st.columns(4)
+    c1.metric("Señales de zona activas", f"{sum(1 for i in zone[1:] if i.active)}/{len(zone) - 1}")
+    c2.metric("Combinada de valuación", combined.today, "zona de fondo" if combined.active else "todavía no",
+              delta_color="normal" if combined.active else "off")
+    c3.metric("Confirmaciones", f"{sum(1 for i in confirm if i.active)}/{len(confirm)}")
+    c4.metric("Precio realizado", f"${ctx['realized_price']:,.0f}", f"{ctx['price'] / ctx['realized_price'] - 1:+.0%} el precio")
+
+    def _state(active):
+        return "—" if active is None else ("✅ Activa" if active else "⏳ No")
+
+    def _money(v):
+        return "—" if v is None else f"${v:,.0f}"
+
+    def _pct(v):
+        return "—" if v is None else f"{v:.0%}"
+
+    st.markdown("**Zona de fondo** (valuación extrema)")
+    st.dataframe(
+        pd.DataFrame([
+            {
+                "Variable": i.label, "Hoy": i.today, "Fondo si": i.threshold, "Estado": _state(i.active),
+                "Precio que la activa": _money(i.trigger_price),
+                "Pisos detectados": STUDY_RESULTS[i.key]["pisos"], "Falsas alarmas": STUDY_RESULTS[i.key]["falsas"],
+                "Precisión": _pct(STUDY_RESULTS[i.key]["precision"]),
+                "BTC más alto a 1 año": _pct(STUDY_RESULTS[i.key]["gana_365"]),
+                "Caída extra típica": f"{STUDY_RESULTS[i.key]['dolor']:+.0%}",
+            }
+            for i in zone
+        ]),
+        hide_index=True, use_container_width=True,
+    )
+    st.markdown("**Confirmación** (la recuperación ya arrancó)")
+    st.dataframe(
+        pd.DataFrame([
+            {
+                "Variable": i.label, "Hoy": i.today, "Confirma si": i.threshold, "Estado": _state(i.active),
+                "Precio de confirmación": _money(i.trigger_price),
+                "Pisos detectados": STUDY_RESULTS[i.key]["pisos"], "Falsas alarmas": STUDY_RESULTS[i.key]["falsas"],
+                "Llegó tras el piso": STUDY_RESULTS[i.key]["retraso"],
+                "BTC más alto a 1 año": _pct(STUDY_RESULTS[i.key]["gana_365"]),
+            }
+            for i in confirm
+        ]),
+        hide_index=True, use_container_width=True,
+    )
+    cache_note = " (dato en caché)" if pm_meta["from_cache"] else ""
+    st.caption(
+        f"**Precisión** = qué parte de los días con la señal activa cayeron en la zona de fondo "
+        f"(hasta 6 meses del piso y a menos de +25% de él); solo el {BASELINE_ZONE_SHARE:.0%} de todos "
+        "los días lo están. **Caída extra típica** = mediana de lo que BTC siguió cayendo en el año "
+        "siguiente a la señal. Las confirmaciones llegan tarde a propósito: cambian parte de la subida "
+        "por menos riesgo de que la caída continúe. Ciclo actual: máximo de "
+        f"${ctx['ath']:,.0f} el {fecha_es(ctx['ath_date'])}, hoy {ctx['drawdown']:.0%}. Es más "
+        "superficial que los anteriores (−77% a −85%), así que algunos umbrales podrían no tocarse. "
+        "Por eso, en vivo, las confirmaciones exigen una caída previa de al menos "
+        f"{LIVE_CONFIRM_MIN_DRAWDOWN:.0%} (el estudio histórico usó 70%)."
+    )
+    st.caption(
+        f"Fuentes: CoinMetrics (precio y MVRV){cache_note}, blockchain.com (hashrate), alternative.me "
+        f"(miedo y codicia). Historial medido el {STUDY_DATE} con `scripts/btc_bottom_study.py`; el "
+        "estado de hoy se recalcula con cada carga."
+    )
+
+
 def render_vwap(ticker: str, historical_prices: list[dict], closes: list[float], current_price: float) -> None:
     """Sección PROPIA de esta pestaña, no dentro de `render_speculation_indicators()` — mismo
     criterio que Wyckoff Spring y Golden Cross: nunca se probó nada de esto para acciones, así que
@@ -636,6 +745,18 @@ def _cached_bitstamp_historical_prices_4h(ticker: str):
 # snapshot trae la fecha de la última sesión liquidada), y un TTL corto solo gastaría cuota del
 # free tier (20 req/min, 100k/mes) sin traer nada distinto. Mismo criterio que el TTL de 86400s
 # de _cached_backtest_ticker en Validación.
+# On-chain de BTC para "🧱 ¿Fondo de ciclo?": datos diarios (CoinMetrics publica el día anterior,
+# blockchain.com el hashrate del día) — 6h alcanza, no hay nada que seguir al minuto.
+@st.cache_data(ttl=21600, show_spinner=False)
+def _cached_btc_price_mvrv():
+    return onchain_client.get_btc_price_mvrv_history()
+
+
+@st.cache_data(ttl=21600, show_spinner=False)
+def _cached_btc_hashrate():
+    return onchain_client.get_btc_hashrate_history()
+
+
 @st.cache_data(ttl=86400, show_spinner=False)
 def _cached_etf_list(symbol: str):
     return sosovalue_client.get_etf_list(symbol)
@@ -996,6 +1117,8 @@ def render_crypto():
         render_vwap(ticker, historical_prices, closes, current_price)
         render_wyckoff_spring(ticker, historical_prices, closes)
         render_etf_flows(ticker)
+        if ticker == "BTC":
+            render_btc_cycle_bottom()
 
     with tab_niveles:
         # Bitstamp y no Binance: es la fuente de los gráficos que esta sección reproduce. Si
