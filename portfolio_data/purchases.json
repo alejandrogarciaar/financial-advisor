@@ -180,5 +180,12 @@
     "price_cop": 43400.0,
     "commission_cop": 51646.0,
     "date": "2026-11-13"
+  },
+  {
+    "ticker": "NVDACO",
+    "shares": 5,
+    "price_cop": 477640.0,
+    "commission_cop": 7437.5,
+    "date": "2026-11-20"
   }
 ]

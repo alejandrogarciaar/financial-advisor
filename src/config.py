@@ -57,6 +57,7 @@ PORTFOLIO_CDI_TICKERS = {
     "NUCO": "NUCO.CL",
     "UBERCO": "UBERCO.CL",
     "TSLACO": "TSLACO.CL",
+    "NVDACO": "NVDACO.CL",
 }
 
 # Para el Portafolio: qué evaluación de la pestaña Acciones/ETFs reusar como contexto de cada
@@ -75,6 +76,7 @@ PORTFOLIO_CDI_UNDERLYING = {
     "NUCO": ("stock", "NU"),
     "UBERCO": ("stock", "UBER"),
     "TSLACO": ("stock", "TSLA"),
+    "NVDACO": ("stock", "NVDA"),
 }
 
 # Clasificación GICS aproximada de cada subyacente, para la sección de diversificación del
@@ -93,6 +95,7 @@ PORTFOLIO_CDI_SECTOR = {
     "NUCO": "Financiero",  # Nubank: banco digital (GICS Financials)
     "UBERCO": "Industriales",  # Uber: GICS Industrials (Ground Transportation)
     "TSLACO": "Consumo discrecional",  # Tesla: GICS Consumer Discretionary (Automobiles)
+    "NVDACO": "Tecnología",  # Nvidia: GICS Information Technology (Semiconductors)
 }
 
 # Cripto para la pestaña "🪙 Cripto" (no participa en Acciones/Portafolio: no tiene estados
