@@ -131,7 +131,8 @@ config + tab wiring). This tab's code lives in `src/ui/portfolio.py`:
 
 - `load_purchases()` / `save_purchases()` — persisted to `portfolio_data/purchases.json`.
   `load_sales()` / `save_sales()` — persisted to `portfolio_data/sales.json`, same shape
-  (ticker/shares/price_cop/commission_cop/date), separate file. Real user data — never delete
+  (ticker/shares/price_cop/commission_cop/date), separate file. Optional `time` ("HH:MM", Colombia) only to order a same-day buy/sell in the
+  cost-basis ledger — when every movement that day has it, they're ordered by time; otherwise buy-first. Real user data — never delete
   without asking, see memory. **Committed to git since 2026-08-08** (explicit user request, so
   the public Streamlit Cloud deploy shows real data — see `CLAUDE.md`'s "Deploying" section),
   no longer gitignored like `app_data/` still is — a local edit via the UI/`scripts/add_sale.py`
