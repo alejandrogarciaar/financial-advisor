@@ -52,6 +52,7 @@ from src.ui.shared import (
     _cached_portfolio_price,
     _parallel_fetch,
 )
+from src.ui.portfolio_plan import render_trading_plan
 from src.valuation.analyst_view import analyst_view_from_raw
 from src.valuation.risk_return import evaluate_risk_return
 
@@ -1056,6 +1057,18 @@ def render_capital():
 
     purchases = load_purchases()
     sales = load_sales()
+
+    # Sub-pestañas (pedido del usuario 2026-11-25): la cartera real de siempre y su plan de
+    # compra/venta. st.tabs no es lazy: el plan corre en cada rerun, pero solo trae precios
+    # cacheados (los mismos `_cached_portfolio_price`) y volumen con TTL de 6 h.
+    tab_cartera, tab_plan = st.tabs(["📒 Mi cartera", "🗺️ Plan de compra y venta"])
+    with tab_cartera:
+        _render_my_portfolio(purchases, sales)
+    with tab_plan:
+        render_trading_plan(purchases, sales)
+
+
+def _render_my_portfolio(purchases: pd.DataFrame, sales: pd.DataFrame) -> None:
 
     _render_cartera_and_total(purchases, sales)
 

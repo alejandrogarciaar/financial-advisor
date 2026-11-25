@@ -208,7 +208,8 @@ mapa es solo para ubicarse rápido, no para reemplazar esa lectura.
 | `validation.py` | Pestaña Validación — backtest en UI + historial de veredictos. |
 | `speculation.py` | Pestaña Especulación (solo acciones) + `render_speculation_indicators()` (compartida con Cripto) + sección del Market Reaction Zone Engine sobre datos diarios + pestaña interna "Niveles calculados". |
 | `cripto.py` | Pestaña Cripto (BTC/ETH/SOL, Binance) — mismo cuerpo de indicadores + Market Reaction Zone Engine sobre 4h + VWAP, Wyckoff Spring y flujos de ETFs spot vía SoSoValue (secciones propias, no compartidas con Especulación), más la pestaña interna "Niveles calculados" (`render_niveles_calculados()`, en `shared.py`). |
-| `portfolio.py` | Pestaña Portafolio — alta de compras y ventas, resumen de holdings, "Ganancias realizadas", "Tope de recompra", "Precio objetivo de analistas", "Plan de compra escalonada", auto-refresh de precios (`st.fragment`). |
+| `portfolio.py` | Pestaña Portafolio — sub-pestañas "📒 Mi cartera" y "🗺️ Plan de compra y venta"; alta de compras y ventas, resumen de holdings, "Ganancias realizadas", "Tope de recompra", "Precio objetivo de analistas", "Plan de compra escalonada", auto-refresh de precios (`st.fragment`). |
+| `portfolio_plan.py` | Sub-pestaña "🗺️ Plan de compra y venta": el plan del usuario (`portfolio_data/plan_compra_venta.json`, 80 M COP) en acciones a comprar por ticker (base/agresiva), volumen diario BVC, y niveles de venta/riesgo en COP sobre el costo promedio real. |
 
 ### `src/` — módulos de cómputo top-level (no UI)
 
@@ -218,6 +219,7 @@ mapa es solo para ubicarse rápido, no para reemplazar esa lectura.
 | `speculation.py` | RSI, MACD, Bollinger, VWAP, ADX, OBV, soportes/resistencias simples, reacciones por régimen — computación técnica, separada de la valoración. |
 | `support_resistance.py` | "Market Reaction Zone Engine" — motor multi-metodología de soporte/resistencia (DBSCAN, KDE, RANSAC/Theil-Sen/Huber, Hough, Volume Profile, VWAP), compartido por Especulación y Cripto vía `daily_reference_config()`/`SRConfig()`. |
 | `btc_cycle.py` | Variables de fondo de ciclo de BTC (MVRV, Mayer, media de 200 semanas, caída, RSI semanal, calendario, hash ribbon, confirmaciones) — estado de hoy y precio que activa cada una, más los resultados históricos de `scripts/btc_bottom_study.py`. Descriptivo: 4 pisos no alcanzan para validar fuera de muestra. |
+| `trading_plan.py` | Cómputo puro del plan de compra y venta: pesos, acciones enteras por presupuesto (comisión Trii 0,14875%, mín. 7.437,50) y niveles P × multiplicador. |
 | `drawdown_dca.py` | Zona de acumulación por caída desde máximo de 1 año, usado en Portafolio. |
 | `niveles_calculados.py` | (motor de la app; el homónimo en `scripts/` es el CLI autocontenido) Reconstrucción del método de niveles de Crecetrader (envolvente de sesión, rejilla diaria, fracciones macro, eje semanal) + confirmaciones sobre un nivel (rebote/ruptura/retest, sin uso en la UI) — algoritmo puro, sin I/O ni dependencias externas. |
 | `niveles_calculados_inputs.py` | Deriva las 6 entradas de `niveles_calculados.LevelEngine` desde una serie de velas diarias (ancla estructural — ventana anual auto-extendida si su mínimo es un artefacto del borde —, primer impulso, caída macro, apertura semanal). Además, la calibración por ticker de los umbrales del impulso , la escalera diaria con 40/60% y las entradas de la rejilla de grado menor (4h). |

@@ -58,6 +58,9 @@ PORTFOLIO_CDI_TICKERS = {
     "UBERCO": "UBERCO.CL",
     "TSLACO": "TSLACO.CL",
     "NVDACO": "NVDACO.CL",
+    "KOCO": "KOCO.CL",
+    "PFECO": "PFECO.CL",
+    "GEVCO": "GEVCO.CL",
 }
 
 # Para el Portafolio: qué evaluación de la pestaña Acciones/ETFs reusar como contexto de cada
@@ -77,6 +80,10 @@ PORTFOLIO_CDI_UNDERLYING = {
     "UBERCO": ("stock", "UBER"),
     "TSLACO": ("stock", "TSLA"),
     "NVDACO": ("stock", "NVDA"),
+    # KO/PFE/GEV tampoco están en TICKERS: igual que NU, solo alimentan el precio histórico.
+    "KOCO": ("stock", "KO"),
+    "PFECO": ("stock", "PFE"),
+    "GEVCO": ("stock", "GEV"),
 }
 
 # Clasificación GICS aproximada de cada subyacente, para la sección de diversificación del
@@ -96,6 +103,9 @@ PORTFOLIO_CDI_SECTOR = {
     "UBERCO": "Industriales",  # Uber: GICS Industrials (Ground Transportation)
     "TSLACO": "Consumo discrecional",  # Tesla: GICS Consumer Discretionary (Automobiles)
     "NVDACO": "Tecnología",  # Nvidia: GICS Information Technology (Semiconductors)
+    "KOCO": "Consumo básico",  # Coca-Cola: GICS Consumer Staples (Beverages)
+    "PFECO": "Salud",  # Pfizer: GICS Health Care (Pharmaceuticals)
+    "GEVCO": "Industriales",  # GE Vernova: GICS Industrials (Electrical Equipment)
 }
 
 # Cripto para la pestaña "🪙 Cripto" (no participa en Acciones/Portafolio: no tiene estados

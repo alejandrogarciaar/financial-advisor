@@ -127,6 +127,14 @@ config + tab wiring). This tab's code lives in `src/ui/portfolio.py`:
   valoración" section — that consumer is gone (see above), so the ordering is purely the user's
   preferred page layout now, not a data dependency.
 
+## Sub-pestañas (2026-11-25)
+
+`render_capital()` abre dos sub-pestañas: "📒 Mi cartera" (`_render_my_portfolio`, todo lo de
+siempre) y "🗺️ Plan de compra y venta" (`src/ui/portfolio_plan.py` → `src/trading_plan.py`). El
+plan es del usuario y vive en `portfolio_data/plan_compra_venta.json` (no se sincroniza al repo
+`portfolio`); P = costo promedio real si la acción está en cartera, si no el precio de hoy. Son
+reglas del usuario, no señales validadas — el panel lo dice.
+
 ## `src/portfolio.py`
 
 - `load_purchases()` / `save_purchases()` — persisted to `portfolio_data/purchases.json`.
