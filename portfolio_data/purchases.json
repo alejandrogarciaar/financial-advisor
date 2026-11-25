@@ -210,5 +210,13 @@
     "commission_cop": 7437.5,
     "date": "2026-11-25",
     "time": "10:05"
+  },
+  {
+    "ticker": "MSFTCO",
+    "shares": 4,
+    "price_cop": 1745660.0,
+    "commission_cop": 10386.68,
+    "date": "2026-11-25",
+    "time": "12:55"
   }
 ]
