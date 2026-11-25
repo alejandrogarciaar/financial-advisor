@@ -218,5 +218,13 @@
     "commission_cop": 10386.68,
     "date": "2026-11-25",
     "time": "12:55"
+  },
+  {
+    "ticker": "GOOGLCO",
+    "shares": 8,
+    "price_cop": 967240.0,
+    "commission_cop": 11510.16,
+    "date": "2026-11-25",
+    "time": "12:56"
   }
 ]
