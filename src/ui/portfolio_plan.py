@@ -100,41 +100,66 @@ def render_trading_plan(purchases: pd.DataFrame, sales: pd.DataFrame) -> None:
             st.markdown(f"- {rule}")
 
     # --- Venta ---
-    st.markdown("#### 💰 Venta y control de riesgo")
+    st.markdown("#### 💰 Cuándo vender y cuándo promediar — tus acciones del plan")
     st.caption(
-        f"{plan['sale_plan']['calculation_basis']} Si ya tenés la acción, P es tu costo promedio real "
-        "(comisiones incluidas); si todavía no, se usa el precio de hoy como referencia y los niveles "
-        "se recalculan solos cuando registres la compra."
+        "Cada celda dice **a qué % sobre tu costo promedio** (comisiones incluidas) vender y **cuántas "
+        "acciones**, y el precio en pesos de ese nivel; en las compras, también cómo queda tu costo promedio. ⚡ = el precio de hoy ya llegó a ese nivel."
     )
+    sale_rows, pending, extra_cop = [], [], 0.0
     for r in rows:
         t = r["ticker"]
-        rule = plan["sale_plan"]["by_ticker"].get(t, {})
         shares, avg = held.get(t, (0, None))
-        base = avg if avg else r["price_cop"]
-        if base is None:
-            st.warning(f"{t}: sin precio hoy, no se pueden calcular los niveles.")
+        if not shares:
+            pending.append(t)
             continue
-        p_label = f"P = {_money(base)} (tu costo promedio, {shares:,} acc.)" if avg else f"P = {_money(base)} (precio de hoy, aún no comprada)"
+        rule = plan["sale_plan"]["by_ticker"].get(t, {})
         price = r["price_cop"]
-        vs = f" · hoy {_money(price)} ({price / base - 1:+.1%} vs. P)" if price and avg else ""
-        with st.expander(f"{t} · {r['name']} — {p_label}{vs}", expanded=bool(avg)):
-            if rule.get("management"):
-                st.markdown(f"**Gestión:** {rule['management']}")
-                limit = rule.get("rebalance_above_percent")
-                if limit and held_value:
-                    weight_now = (r["held_value_cop"] or 0) / held_value
-                    st.caption(f"Peso actual dentro de las acciones del plan: {weight_now:.0%} (rebalancear sobre {limit}%).")
-            levels = sale_levels(plan, t, base, shares, price)
-            if levels:
-                st.dataframe(pd.DataFrame([{
-                    "Tipo": "🟢 Toma de ganancia" if lv["kind"] == "venta" else "🔴 Control de riesgo",
-                    "Nivel": f"P × {lv['mult']:.2f}",
-                    "Precio (COP)": _money(lv["price_cop"]),
-                    "Acción": lv["action"],
-                    "Acciones": "—" if lv["shares"] is None else f"{lv['shares']:,}",
-                    "Distancia desde hoy": "—" if lv["distance"] is None else f"{lv['distance']:+.1%}",
-                    "Estado": "—" if lv["reached"] is None or not avg else ("⚡ alcanzado" if lv["reached"] else "pendiente"),
-                } for lv in levels]), hide_index=True, width="stretch")
+        levels = sale_levels(plan, t, avg, shares, price)
+        ups = [lv for lv in levels if lv["kind"] == "venta"]
+        downs = [lv for lv in levels if lv["kind"] == "compra"]
+
+        def cell(lv):
+            mark = "⚡ " if lv["reached"] else ""
+            pct = f"{lv['mult'] - 1:+.0%}"
+            if lv["kind"] == "venta":
+                what = f"vender {lv['shares']:,} acc." if lv["shares"] else "0 acc. (posición chica)"
+            else:
+                what = f"comprar {lv['shares']:,} acc." if lv["shares"] else lv["action"].lower()
+                if lv["new_avg_cop"]:
+                    return f"{mark}{pct} → {what} · {_money(lv['price_cop'])} · promedio queda {_money(lv['new_avg_cop'])}"
+            return f"{mark}{pct} → {what} · {_money(lv['price_cop'])}"
+
+        row = {
+            "Acción": t,
+            "Tenés": f"{shares:,} acc.",
+            "Tu costo": _money(avg),
+            "Hoy": "—" if not price else f"{_money(price)} ({price / avg - 1:+.1%})",
+        }
+        if ups:
+            for i in range(3):
+                row[f"{i + 1}ª venta"] = cell(ups[i]) if i < len(ups) else "—"
+        else:
+            limit = rule.get("rebalance_above_percent")
+            weight_now = (r["held_value_cop"] or 0) / held_value if held_value else None
+            row["1ª venta"] = f"rebalancear si pesa > {limit}%" + (f" · hoy {weight_now:.0%}" if weight_now is not None else "")
+            row["2ª venta"] = row["3ª venta"] = "—"
+        row["Si baja: comprar"] = cell(downs[0]) if downs else "—"
+        row["Si baja más: comprar"] = cell(downs[1]) if len(downs) > 1 else "—"
+        extra_cop += sum(lv["cost_cop"] or 0 for lv in downs)
+        sale_rows.append(row)
+
+    if sale_rows:
+        st.dataframe(pd.DataFrame(sale_rows), hide_index=True, width="stretch")
+    else:
+        st.info("Todavía no tenés ninguna acción del plan.")
+    if extra_cop:
+        st.caption(
+            "No hay ventas en pérdida: si baja, se compra más para bajar el costo promedio. Si todas "
+            f"tus acciones tocaran todos sus niveles de compra harían falta **{_money(extra_cop)}** "
+            "adicionales (comisiones incluidas), fuera de los 80 M del plan."
+        )
+    if pending:
+        st.caption(f"Sin comprar todavía: {', '.join(pending)} — aparecen acá cuando registres la compra.")
 
     with st.expander("📋 Reglas generales de venta"):
         for rule in plan["sale_plan"]["general_rules"]:

@@ -209,7 +209,7 @@ mapa es solo para ubicarse rápido, no para reemplazar esa lectura.
 | `speculation.py` | Pestaña Especulación (solo acciones) + `render_speculation_indicators()` (compartida con Cripto) + sección del Market Reaction Zone Engine sobre datos diarios + pestaña interna "Niveles calculados". |
 | `cripto.py` | Pestaña Cripto (BTC/ETH/SOL, Binance) — mismo cuerpo de indicadores + Market Reaction Zone Engine sobre 4h + VWAP, Wyckoff Spring y flujos de ETFs spot vía SoSoValue (secciones propias, no compartidas con Especulación), más la pestaña interna "Niveles calculados" (`render_niveles_calculados()`, en `shared.py`). |
 | `portfolio.py` | Pestaña Portafolio — sub-pestañas "📒 Mi cartera" y "🗺️ Plan de compra y venta"; alta de compras y ventas, resumen de holdings, "Ganancias realizadas", "Tope de recompra", "Precio objetivo de analistas", "Plan de compra escalonada", auto-refresh de precios (`st.fragment`). |
-| `portfolio_plan.py` | Sub-pestaña "🗺️ Plan de compra y venta": el plan del usuario (`portfolio_data/plan_compra_venta.json`, 80 M COP) en acciones a comprar por ticker (base/agresiva), volumen diario BVC, y niveles de venta/riesgo en COP sobre el costo promedio real. |
+| `portfolio_plan.py` | Sub-pestaña "🗺️ Plan de compra y venta": el plan del usuario (`portfolio_data/plan_compra_venta.json`, 80 M COP) en acciones a comprar por ticker (base/agresiva), volumen diario BVC, y niveles de venta y de recompra para promediar a la baja (sin ventas en pérdida) en COP sobre el costo promedio real. |
 
 ### `src/` — módulos de cómputo top-level (no UI)
 

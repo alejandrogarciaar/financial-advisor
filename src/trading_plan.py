@@ -2,7 +2,7 @@
 
 El plan lo definió el usuario (pegado el 2026-11-25, 80 M COP repartidos en 8 CDIs de la BVC).
 Acá solo se traduce a números: cuántas acciones comprar por ticker con el capital asignado, y en
-qué precios en COP caen los tramos de venta y los controles de riesgo según el costo promedio
+qué precios en COP caen los tramos de venta y las recompras para promediar a la baja según el costo promedio
 real (P) de cada posición. NO es una señal validada fuera de muestra: son reglas del usuario.
 """
 
@@ -66,18 +66,35 @@ def allocation_rows(plan: dict, mode: str, prices: dict, held: dict) -> list[dic
 
 
 def sale_levels(plan: dict, ticker: str, base_price: float, shares: int, current_price: float | None) -> list[dict]:
-    """Niveles de venta y de riesgo en COP para `base_price` (P). `shares` reparte los % de venta
-    sobre la posición actual (0 si todavía no se compró — entonces solo se muestran precios)."""
+    """Niveles de venta (sobre P) y de compra para promediar a la baja (bajo P), en COP. `shares`
+    reparte los % sobre la posición actual (0 si todavía no se compró — solo se muestran precios)."""
     rule = plan["sale_plan"]["by_ticker"].get(ticker, {})
     out = []
+    # Reparto acumulado: redondear cada tramo por separado puede sumar más o menos que la
+    # posición (p. ej. 3 acciones al 25/25/50 → 1/1/2 = 4); así los tramos siempre suman `shares`.
+    cum_pct, cum_shares = 0, 0
     for mult, pct in rule.get("take_profit", []):
-        out.append({"kind": "venta", "mult": mult, "price_cop": base_price * mult,
-                    "action": f"Vender {pct}% de la posición", "shares": round(shares * pct / 100) if shares else None})
-    for mult, action in rule.get("risk_control", []):
+        cum_pct += pct
         n = None
         if shares:
-            n = shares if "Salir" in action else (round(shares / 2) if "50%" in action else None)
-        out.append({"kind": "riesgo", "mult": mult, "price_cop": base_price * mult, "action": action, "shares": n})
+            target = round(shares * cum_pct / 100 + 1e-9)
+            n, cum_shares = target - cum_shares, target
+        out.append({"kind": "venta", "mult": mult, "price_cop": base_price * mult, "pct": pct,
+                    "action": f"Vender {pct}% de la posición", "shares": n})
+    # Sin ventas en pérdida (decisión del usuario, 2026-11-25): al caer a P × nivel se COMPRA el %
+    # indicado de la posición que haya en ese momento, y se muestra cómo queda el costo promedio.
+    held_now, avg_now = shares, base_price
+    for mult, pct in rule.get("average_down", []):
+        price = base_price * mult
+        lvl = {"kind": "compra", "mult": mult, "price_cop": price, "pct": pct,
+               "action": f"Comprar {pct}% más", "shares": None, "cost_cop": None, "new_avg_cop": None}
+        if shares:
+            n = max(1, round(held_now * pct / 100))
+            cost = n * price + commission_cop(n * price)
+            avg_now = (held_now * avg_now + cost) / (held_now + n)
+            held_now += n
+            lvl.update(shares=n, cost_cop=cost, new_avg_cop=avg_now)
+        out.append(lvl)
     for lvl in out:
         lvl["distance"] = (lvl["price_cop"] / current_price - 1) if current_price else None
         if current_price is None:

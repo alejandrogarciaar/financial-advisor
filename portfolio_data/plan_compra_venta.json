@@ -9,68 +9,248 @@
     "Usar el precio promedio real de compra, incluyendo comisiones, para calcular las salidas.",
     "No asumir que el precio en COP equivale directamente al precio estadounidense en USD.",
     "Revisar la cartera cada 6 o 12 meses.",
-    "No aumentar una posición únicamente porque haya caído."
+    "No vender en pérdida: si una acción cae a sus niveles de compra, promediar a la baja con la cantidad indicada (decisión del usuario, 2026-11-25)."
   ],
   "base_allocation": [
-    {"symbol": "NVDACO", "instrument": "NVIDIA", "weight_percent": 20},
-    {"symbol": "NUCO", "instrument": "Nu Holdings", "weight_percent": 10},
-    {"symbol": "MSFTCO", "instrument": "Microsoft", "weight_percent": 10},
-    {"symbol": "GOOGLCO", "instrument": "Alphabet A", "weight_percent": 10},
-    {"symbol": "AMZNCO", "instrument": "Amazon", "weight_percent": 5},
-    {"symbol": "KOCO", "instrument": "Coca-Cola", "weight_percent": 15},
-    {"symbol": "PFECO", "instrument": "Pfizer", "weight_percent": 15},
-    {"symbol": "GEVCO", "instrument": "GE Vernova", "weight_percent": 15}
+    {
+      "symbol": "NVDACO",
+      "instrument": "NVIDIA",
+      "weight_percent": 20
+    },
+    {
+      "symbol": "NUCO",
+      "instrument": "Nu Holdings",
+      "weight_percent": 10
+    },
+    {
+      "symbol": "MSFTCO",
+      "instrument": "Microsoft",
+      "weight_percent": 10
+    },
+    {
+      "symbol": "GOOGLCO",
+      "instrument": "Alphabet A",
+      "weight_percent": 10
+    },
+    {
+      "symbol": "AMZNCO",
+      "instrument": "Amazon",
+      "weight_percent": 5
+    },
+    {
+      "symbol": "KOCO",
+      "instrument": "Coca-Cola",
+      "weight_percent": 15
+    },
+    {
+      "symbol": "PFECO",
+      "instrument": "Pfizer",
+      "weight_percent": 15
+    },
+    {
+      "symbol": "GEVCO",
+      "instrument": "GE Vernova",
+      "weight_percent": 15
+    }
   ],
   "aggressive_allocation": {
     "description": "Usar únicamente si se acepta mayor concentración tecnológica.",
     "weights_percent": {
-      "NVDACO": 30, "NUCO": 10, "MSFTCO": 5, "GOOGLCO": 5, "AMZNCO": 5,
-      "KOCO": 15, "PFECO": 15, "GEVCO": 15
+      "NVDACO": 30,
+      "NUCO": 10,
+      "MSFTCO": 5,
+      "GOOGLCO": 5,
+      "AMZNCO": 5,
+      "KOCO": 15,
+      "PFECO": 15,
+      "GEVCO": 15
     }
   },
   "sale_plan": {
     "calculation_basis": "P representa el precio promedio real de compra por acción.",
     "general_rules": [
       "Vender en tramos, no liquidar toda la posición en un único nivel.",
-      "Después de alcanzar el primer objetivo, subir la protección hacia el precio de entrada.",
-      "Si cambia negativamente la tesis fundamental, salir aunque no se haya alcanzado el stop."
+      "Después de alcanzar el primer objetivo, no recomprar por encima del costo promedio."
     ],
     "by_ticker": {
       "NVDACO": {
-        "take_profit": [[1.20, 25], [1.30, 35], [1.40, 40]],
-        "risk_control": [[0.88, "Reducir 50% de la posición"], [0.80, "Salir del saldo"]]
+        "take_profit": [
+          [
+            1.2,
+            25
+          ],
+          [
+            1.3,
+            35
+          ],
+          [
+            1.4,
+            40
+          ]
+        ],
+        "average_down": [
+          [
+            0.88,
+            50
+          ],
+          [
+            0.8,
+            50
+          ]
+        ]
       },
       "NUCO": {
-        "take_profit": [[1.20, 20], [1.30, 30], [1.40, 50]],
-        "risk_control": [[0.85, "Reducir 50% de la posición"], [0.75, "Salir del saldo"]]
+        "take_profit": [
+          [
+            1.2,
+            20
+          ],
+          [
+            1.3,
+            30
+          ],
+          [
+            1.4,
+            50
+          ]
+        ],
+        "average_down": [
+          [
+            0.85,
+            50
+          ],
+          [
+            0.75,
+            50
+          ]
+        ]
       },
       "MSFTCO": {
-        "take_profit": [[1.25, 25], [1.35, 25], [1.50, 50]],
-        "risk_control": [[0.88, "Reducir 50% de la posición"], [0.80, "Revisar la tesis"]]
+        "take_profit": [
+          [
+            1.25,
+            25
+          ],
+          [
+            1.35,
+            25
+          ],
+          [
+            1.5,
+            50
+          ]
+        ],
+        "average_down": [
+          [
+            0.88,
+            50
+          ],
+          [
+            0.8,
+            50
+          ]
+        ]
       },
       "GOOGLCO": {
-        "take_profit": [[1.25, 25], [1.35, 25], [1.50, 50]],
-        "risk_control": [[0.88, "Reducir 50% de la posición"], [0.80, "Revisar la tesis"]]
+        "take_profit": [
+          [
+            1.25,
+            25
+          ],
+          [
+            1.35,
+            25
+          ],
+          [
+            1.5,
+            50
+          ]
+        ],
+        "average_down": [
+          [
+            0.88,
+            50
+          ],
+          [
+            0.8,
+            50
+          ]
+        ]
       },
       "AMZNCO": {
-        "take_profit": [[1.25, 25], [1.40, 25], [1.55, 50]],
-        "risk_control": [[0.85, "Reducir 50% de la posición"], [0.75, "Salir del saldo"]]
+        "take_profit": [
+          [
+            1.25,
+            25
+          ],
+          [
+            1.4,
+            25
+          ],
+          [
+            1.55,
+            50
+          ]
+        ],
+        "average_down": [
+          [
+            0.85,
+            50
+          ],
+          [
+            0.75,
+            50
+          ]
+        ]
       },
       "KOCO": {
-        "management": "Rebalancear si supera 20% de la cartera. Revisar la tesis si pierde 15% desde la entrada.",
+        "management": "Rebalancear si supera 20% de la cartera.",
         "rebalance_above_percent": 20,
-        "risk_control": [[0.85, "Revisar la tesis"]]
+        "average_down": [
+          [
+            0.85,
+            50
+          ]
+        ]
       },
       "PFECO": {
-        "management": "Rebalancear si supera 20% de la cartera. Revisar la tesis si se deteriora la tesis de dividendos o pierde 20% desde la entrada.",
+        "management": "Rebalancear si supera 20% de la cartera.",
         "rebalance_above_percent": 20,
-        "risk_control": [[0.80, "Revisar la tesis"]]
+        "average_down": [
+          [
+            0.8,
+            50
+          ]
+        ]
       },
       "GEVCO": {
-        "take_profit": [[1.25, 25], [1.40, 35], [1.55, 40]],
-        "risk_control": [[0.85, "Reducir 50% de la posición"], [0.75, "Revisar la tesis"]]
+        "take_profit": [
+          [
+            1.25,
+            25
+          ],
+          [
+            1.4,
+            35
+          ],
+          [
+            1.55,
+            40
+          ]
+        ],
+        "average_down": [
+          [
+            0.85,
+            50
+          ],
+          [
+            0.75,
+            50
+          ]
+        ]
       }
-    }
+    },
+    "average_down_basis": "Si el precio cae a P × nivel, comprar el % indicado de la posición que tengas en ese momento."
   },
   "disclaimer": "Este contenido es solo informativo y no constituye asesoramiento de inversión."
 }

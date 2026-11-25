@@ -133,7 +133,8 @@ config + tab wiring). This tab's code lives in `src/ui/portfolio.py`:
 siempre) y "🗺️ Plan de compra y venta" (`src/ui/portfolio_plan.py` → `src/trading_plan.py`). El
 plan es del usuario y vive en `portfolio_data/plan_compra_venta.json` (no se sincroniza al repo
 `portfolio`); P = costo promedio real si la acción está en cartera, si no el precio de hoy. Son
-reglas del usuario, no señales validadas — el panel lo dice.
+reglas del usuario, no señales validadas — el panel lo dice. Sin ventas en pérdida (decisión del usuario,
+2026-11-25): bajo P el plan usa `average_down` (comprar % de la posición) en vez de stops.
 
 ## `src/portfolio.py`
 
