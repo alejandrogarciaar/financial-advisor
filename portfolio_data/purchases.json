@@ -226,5 +226,13 @@
     "commission_cop": 11510.16,
     "date": "2026-11-25",
     "time": "12:56"
+  },
+  {
+    "ticker": "AMZNCO",
+    "shares": 4,
+    "price_cop": 872160.0,
+    "commission_cop": 7437.5,
+    "date": "2026-11-25",
+    "time": "12:58"
   }
 ]
