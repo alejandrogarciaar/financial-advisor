@@ -8,17 +8,31 @@ import streamlit as st
 from src.config import PORTFOLIO_CDI_TICKERS
 from src.valuation.fair_value import PROVIDERS
 from src.portfolio import summarize_by_ticker
-from src.trading_plan import allocation_rows, commission_cop, load_plan, sale_levels
+from src.trading_plan import (
+    allocation_rows,
+    commission_cop,
+    cycle_cash,
+    load_plan,
+    position_start_date,
+    reinvest_plan,
+    runner_level,
+    sale_levels,
+)
 from src.ui.shared import _cached_portfolio_price, _parallel_fetch
 
 LOW_LIQUIDITY_SHARES = 100  # volumen diario promedio (acciones) por debajo del cual se avisa
 
 
-@st.cache_data(ttl=21600, show_spinner=False)
-def _cached_avg_volume(ticker: str) -> tuple[float | None, float | None]:
-    """(acciones/día, COP/día) promedio de las últimas 20 ruedas en la BVC."""
+@st.cache_data(ttl=3600, show_spinner=False)
+def _cached_daily_bvc(ticker: str) -> list[dict]:
+    """Velas diarias del CDI en la BVC (COP): volumen y máximo desde que arrancó la posición."""
     rows, _ = PROVIDERS["yfinance"].get_historical_prices_multi_timeframe(PORTFOLIO_CDI_TICKERS[ticker], "1d")
-    last = rows[-20:]
+    return rows
+
+
+def _avg_volume(rows: list[dict]) -> tuple[float | None, float | None]:
+    """(acciones/día, COP/día) promedio de las últimas 20 ruedas."""
+    last = (rows or [])[-20:]
     if not last:
         return None, None
     return (sum(r["volume"] for r in last) / len(last), sum(r["volume"] * r["close"] for r in last) / len(last))
@@ -46,10 +60,11 @@ def render_trading_plan(purchases: pd.DataFrame, sales: pd.DataFrame) -> None:
 
     tickers = [a["symbol"] for a in plan["base_allocation"]]
     jobs = {("price", t): (_cached_portfolio_price, (t,)) for t in tickers}
-    jobs |= {("vol", t): (_cached_avg_volume, (t,)) for t in tickers}
+    jobs |= {("hist", t): (_cached_daily_bvc, (t,)) for t in tickers}
     fetched = _parallel_fetch(jobs)
     prices = {t: fetched[("price", t)][0] for t in tickers}
-    volumes = {t: fetched[("vol", t)][0] or (None, None) for t in tickers}
+    history = {t: fetched[("hist", t)][0] or [] for t in tickers}
+    volumes = {t: _avg_volume(history[t]) for t in tickers}
 
     summary = summarize_by_ticker(purchases, sales, prices)
     held = {}
@@ -103,7 +118,10 @@ def render_trading_plan(purchases: pd.DataFrame, sales: pd.DataFrame) -> None:
     st.markdown("#### 💰 Cuándo vender y cuándo promediar — tus acciones del plan")
     st.caption(
         "Cada celda dice **a qué % sobre tu costo promedio** (comisiones incluidas) vender y **cuántas "
-        "acciones**, y el precio en pesos de ese nivel; en las compras, también cómo queda tu costo promedio. ⚡ = el precio de hoy ya llegó a ese nivel."
+        "acciones**, y el precio en pesos de ese nivel; en las compras, también cómo queda tu costo promedio. "
+        "⚡ = el precio de hoy ya llegó a ese nivel. **Resto (sin techo)**: el último tramo no se vende a un "
+        "precio fijo — se deja correr y solo se vende si, después de tocar el objetivo anterior, cae el % "
+        "indicado desde su máximo (🟢 = ya activo). Así no se corta a una ganadora que sigue subiendo."
     )
     sale_rows, pending, extra_cop = [], [], 0.0
     for r in rows:
@@ -136,13 +154,24 @@ def render_trading_plan(purchases: pd.DataFrame, sales: pd.DataFrame) -> None:
             "Hoy": "—" if not price else f"{_money(price)} ({price / avg - 1:+.1%})",
         }
         if ups:
-            for i in range(3):
-                row[f"{i + 1}ª venta"] = cell(ups[i]) if i < len(ups) else "—"
+            row["1ª venta"] = cell(ups[0])
+            row["2ª venta"] = cell(ups[1]) if len(ups) > 2 else "—"
+            start = position_start_date(purchases, sales, t)
+            highs = [h["high"] for h in history[t] if start and h["date"][:10] >= str(start)]
+            run = runner_level(plan, t, avg, ups[-1]["shares"], max(highs) if highs else None, price)
+            n_txt = f"{run['shares']:,} acc." if run["shares"] else "0 acc."
+            if run["active"]:
+                mark = "⚡ " if run["triggered"] else "🟢 "
+                row["Resto (sin techo)"] = (f"{mark}{n_txt} · vender si baja a {_money(run['stop_cop'])} "
+                                            f"(−{run['drop']:.0%} desde el máx. {_money(run['high_cop'])})")
+            else:
+                row["Resto (sin techo)"] = (f"{n_txt} ({run['pct']}%) · se activa en {run['activation_mult'] - 1:+.0%} "
+                                            f"({_money(run['activation_cop'])}); luego vender si cae {run['drop']:.0%} desde el máximo")
         else:
             limit = rule.get("rebalance_above_percent")
             weight_now = (r["held_value_cop"] or 0) / held_value if held_value else None
             row["1ª venta"] = f"rebalancear si pesa > {limit}%" + (f" · hoy {weight_now:.0%}" if weight_now is not None else "")
-            row["2ª venta"] = row["3ª venta"] = "—"
+            row["2ª venta"] = row["Resto (sin techo)"] = "—"
         row["Si baja: comprar"] = cell(downs[0]) if downs else "—"
         row["Si baja más: comprar"] = cell(downs[1]) if len(downs) > 1 else "—"
         extra_cop += sum(lv["cost_cop"] or 0 for lv in downs)
@@ -160,6 +189,34 @@ def render_trading_plan(purchases: pd.DataFrame, sales: pd.DataFrame) -> None:
         )
     if pending:
         st.caption(f"Sin comprar todavía: {', '.join(pending)} — aparecen acá cuando registres la compra.")
+
+    # --- Reinversión ---
+    st.markdown("#### ♻️ Efectivo por reinvertir")
+    cash = cycle_cash(plan, purchases, sales)
+    st.caption(
+        f"Lo neto que recibiste por ventas de acciones del plan desde el {plan.get('start_date', '—')}, menos lo que "
+        "ya volviste a comprar después. Se reparte en acciones enteras hacia los pesos objetivo, empezando por la "
+        "más rezagada; el objetivo se mide sobre el valor de hoy del plan (posiciones + efectivo)."
+    )
+    if cash <= 0:
+        st.info("Todavía no hay efectivo de ventas del plan. Cuando vendas un tramo, acá aparece a qué acciones va.")
+    else:
+        st.metric("Efectivo disponible del ciclo", _money(cash))
+        reinv = reinvest_plan(plan, mode, cash, prices, held)
+        st.dataframe(pd.DataFrame([{
+            "Acción": r["ticker"],
+            "Peso objetivo": f"{r['weight']:.0%}",
+            "Valor hoy": _money(r["value_cop"]),
+            "Objetivo": _money(r["target_cop"]),
+            "Le falta": _money(max(r["gap_cop"], 0)),
+            "Comprar": f"{r['buy_shares']:,} acc. · {_money(r['buy_cost_cop'])}" if r["buy_shares"] else "—",
+        } for r in sorted(reinv, key=lambda r: r["gap_cop"], reverse=True)]), hide_index=True, width="stretch")
+        left = cash - sum(r["buy_cost_cop"] for r in reinv)
+        st.caption(f"Sobrante sin asignar (no alcanza para una acción entera donde falta): {_money(left)}.")
+
+    with st.expander("🔎 Antes de meter una acción nueva al plan"):
+        for rule in plan.get("new_stock_filter", []):
+            st.markdown(f"- {rule}")
 
     with st.expander("📋 Reglas generales de venta"):
         for rule in plan["sale_plan"]["general_rules"]:

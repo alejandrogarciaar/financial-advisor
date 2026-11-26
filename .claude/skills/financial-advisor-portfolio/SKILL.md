@@ -135,6 +135,11 @@ plan es del usuario y vive en `portfolio_data/plan_compra_venta.json` (no se sin
 `portfolio`); P = costo promedio real si la acción está en cartera, si no el precio de hoy. Son
 reglas del usuario, no señales validadas — el panel lo dice. Sin ventas en pérdida (decisión del usuario,
 2026-11-25): bajo P el plan usa `average_down` (comprar % de la posición) en vez de stops.
+El último tramo de `take_profit` es un "resto sin techo" (`runner_level`): se activa al tocar el
+penúltimo objetivo (máximo diario BVC desde `position_start_date`) y se vende si cae
+`runner.trailing_drop_percent` desde ese máximo, con piso sobre el costo. "♻️ Efectivo por
+reinvertir" = `cycle_cash` (ventas del plan desde `start_date` menos recompras posteriores),
+repartido por `reinvest_plan` hacia los pesos objetivo sobre el valor actual del plan.
 
 ## `src/portfolio.py`
 

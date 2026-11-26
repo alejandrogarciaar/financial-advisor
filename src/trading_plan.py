@@ -104,3 +104,86 @@ def sale_levels(plan: dict, ticker: str, base_price: float, shares: int, current
         else:
             lvl["reached"] = current_price <= lvl["price_cop"]
     return out
+
+
+def position_start_date(purchases, sales, ticker: str):
+    """Fecha en que arrancó la posición ACTUAL de `ticker` (la última vez que pasó de 0 a >0
+    acciones), o `None` si no hay acciones. Mismo orden que el ledger de costo promedio: por
+    fecha, luego hora si existe, compra antes que venta."""
+    events = []
+    for df, kind in ((purchases, 0), (sales, 1)):
+        if df is None or df.empty:
+            continue
+        for r in df[df["ticker"] == ticker].itertuples():
+            t = getattr(r, "time", None)
+            events.append((r.date, t if isinstance(t, str) else "", kind, int(r.shares)))
+    held, start = 0, None
+    for d, _, kind, n in sorted(events):
+        if kind == 0:
+            if held == 0:
+                start = d
+            held += n
+        else:
+            held -= n
+    return start if held > 0 else None
+
+
+def runner_level(plan: dict, ticker: str, avg_cost: float, runner_shares: int | None,
+                 high_since_start: float | None, current_price: float | None) -> dict | None:
+    """El último tramo de venta sin techo: se activa cuando el precio (máximo desde que arrancó la
+    posición) toca el PENÚLTIMO objetivo; desde ahí se vende solo si cae `trailing_drop_percent`
+    desde ese máximo, con piso en costo × (1 + min_gain) — nunca en pérdida."""
+    tps = plan["sale_plan"]["by_ticker"].get(ticker, {}).get("take_profit", [])
+    cfg = plan["sale_plan"].get("runner")
+    if len(tps) < 2 or not cfg:
+        return None
+    activation = avg_cost * tps[-2][0]
+    floor = avg_cost * (1 + cfg["min_gain_over_cost_percent"] / 100)
+    high = max(x for x in (high_since_start, current_price) if x) if (high_since_start or current_price) else None
+    active = bool(high and high >= activation)
+    stop = max(high * (1 - cfg["trailing_drop_percent"] / 100), floor) if active else None
+    return {
+        "pct": tps[-1][1], "shares": runner_shares, "activation_mult": tps[-2][0], "activation_cop": activation,
+        "drop": cfg["trailing_drop_percent"] / 100, "active": active, "high_cop": high, "stop_cop": stop,
+        "triggered": bool(active and current_price and current_price <= stop),
+    }
+
+
+def cycle_cash(plan: dict, purchases, sales) -> float:
+    """Efectivo del ciclo: lo neto recibido por ventas de acciones del plan desde `start_date`,
+    menos lo que ya se volvió a comprar en acciones del plan DESPUÉS de la primera de esas ventas
+    (reinversión o promediar a la baja). Nunca negativo."""
+    start = plan.get("start_date")
+    tickers = {a["symbol"] for a in plan["base_allocation"]}
+    if sales is None or sales.empty or not start:
+        return 0.0
+    s = sales[sales["ticker"].isin(tickers) & (sales["date"].astype(str) >= start)]
+    if s.empty:
+        return 0.0
+    proceeds = float((s["shares"] * s["price_cop"] - s["commission_cop"]).sum())
+    first_sale = str(s["date"].min())
+    p = purchases[purchases["ticker"].isin(tickers) & (purchases["date"].astype(str) > first_sale)] if not purchases.empty else purchases
+    spent = float((p["shares"] * p["price_cop"] + p["commission_cop"]).sum()) if not p.empty else 0.0
+    return max(proceeds - spent, 0.0)
+
+
+def reinvest_plan(plan: dict, mode: str, cash: float, prices: dict, held: dict) -> list[dict]:
+    """Reparte `cash` en acciones enteras hacia los pesos objetivo, empezando por la acción más
+    por debajo de su peso. El objetivo se mide sobre el valor ACTUAL del plan (posiciones a precio
+    de hoy + efectivo), no sobre los 80 M iniciales, para que las ganancias también se repartan."""
+    value = {t: held.get(t, (0, None))[0] * (prices.get(t) or 0) for t in weights(plan, mode)}
+    total = sum(value.values()) + cash
+    rows = []
+    for t, w in weights(plan, mode).items():
+        rows.append({"ticker": t, "weight": w, "value_cop": value[t], "target_cop": total * w,
+                     "gap_cop": total * w - value[t], "price_cop": prices.get(t), "buy_shares": 0, "buy_cost_cop": 0.0})
+    left = cash
+    for r in sorted(rows, key=lambda r: r["gap_cop"], reverse=True):
+        if r["gap_cop"] <= 0 or not r["price_cop"]:
+            continue
+        n = shares_for_budget(min(r["gap_cop"], left), r["price_cop"]) or 0
+        if n:
+            cost = n * r["price_cop"] + commission_cop(n * r["price_cop"])
+            r["buy_shares"], r["buy_cost_cop"] = n, cost
+            left -= cost
+    return rows

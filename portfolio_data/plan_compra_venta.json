@@ -2,6 +2,7 @@
   "plan_name": "Cartera de acciones estadounidenses listadas en Colombia",
   "currency": "COP",
   "capital_total": 80000000,
+  "start_date": "2026-11-25",
   "market": "BVC / Trii",
   "objective": "Exposición únicamente a empresas estadounidenses listadas en Colombia",
   "execution_rules": [
@@ -70,6 +71,8 @@
     "calculation_basis": "P representa el precio promedio real de compra por acción.",
     "general_rules": [
       "Vender en tramos, no liquidar toda la posición en un único nivel.",
+      "El último tramo no tiene precio techo: se activa al tocar el penúltimo objetivo y solo se vende si el precio cae el % indicado desde el máximo alcanzado (siempre por encima del costo promedio).",
+      "Lo vendido va a efectivo y se reinvierte por pesos objetivo: primero en las acciones del plan que estén por debajo de su peso.",
       "Después de alcanzar el primer objetivo, no recomprar por encima del costo promedio."
     ],
     "by_ticker": {
@@ -250,7 +253,18 @@
         ]
       }
     },
-    "average_down_basis": "Si el precio cae a P × nivel, comprar el % indicado de la posición que tengas en ese momento."
+    "average_down_basis": "Si el precio cae a P × nivel, comprar el % indicado de la posición que tengas en ese momento.",
+    "runner": {
+      "trailing_drop_percent": 15,
+      "min_gain_over_cost_percent": 1
+    }
   },
-  "disclaimer": "Este contenido es solo informativo y no constituye asesoramiento de inversión."
+  "disclaimer": "Este contenido es solo informativo y no constituye asesoramiento de inversión.",
+  "new_stock_filter": [
+    "Veredicto de valoración de la pestaña Acciones en zona razonable o barata.",
+    "Precio objetivo promedio de analistas por encima del precio de hoy.",
+    "Liquidez en la BVC: idealmente más de 100 acciones/día de volumen promedio.",
+    "Que ningún sector quede por encima del 30% de la cartera.",
+    "Que la operación no sea tan chica que la comisión mínima (7.437,50) pese más del 0,5%: órdenes de al menos ~1,5 M COP."
+  ]
 }
