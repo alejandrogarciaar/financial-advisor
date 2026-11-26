@@ -51,7 +51,7 @@ from src.portfolio import (
     load_purchases,
     load_sales,
     format_balance_message,
-    rebuy_ceiling_summary,
+    buy_ceiling_summary,
     save_purchases,
     save_sales,
     validate_purchases,
@@ -288,17 +288,19 @@ def _ask_confirm(chat_id: int, session: dict) -> None:
         f"Total: {_fmt_cop(total)}"
     )
     if session["action"] == "compra":
-        ceiling = _rebuy_ceiling(session["ticker"])
-        if ceiling is not None:
+        found = _buy_ceiling(session["ticker"])
+        if found is not None:
+            ceiling, basis = found
+            basis_label = "tu costo promedio" if basis == "costo promedio" else "tu precio de salida neto"
             effective = session["price_cop"] + session["commission_cop"] / session["shares"]
             if effective >= ceiling:
                 resumen += (
-                    f"\n\n⚠️ Por encima de tu tope de recompra de {session['ticker']} "
-                    f"({_fmt_cop(ceiling)}, tu precio de salida neto). Con comisión pagarías "
+                    f"\n\n⚠️ Por encima de tu tope de compra de {session['ticker']} "
+                    f"({_fmt_cop(ceiling)}, {basis_label}). Con comisión pagarías "
                     f"{_fmt_cop(effective)} por acción."
                 )
             else:
-                resumen += f"\n\n🟢 Por debajo de tu tope de recompra ({_fmt_cop(ceiling)})."
+                resumen += f"\n\n🟢 Por debajo de tu tope de compra ({_fmt_cop(ceiling)}, {basis_label})."
     send_message(
         chat_id,
         resumen,
@@ -306,18 +308,20 @@ def _ask_confirm(chat_id: int, session: dict) -> None:
     )
 
 
-def _rebuy_ceiling(ticker: str) -> Optional[float]:
-    """Tope de recompra vigente del ticker (ver `rebuy_ceiling_summary()`), o None si nunca se
-    vendió completo."""
+def _buy_ceiling(ticker: str) -> Optional[tuple[float, str]]:
+    """(tope, base) vigente del ticker (ver `buy_ceiling_summary()`): costo promedio si está en
+    cartera, precio de salida neto si se vendió completo; None si nunca se compró."""
     try:
-        ceilings = rebuy_ceiling_summary(load_purchases(), load_sales())
+        ceilings = buy_ceiling_summary(load_purchases(), load_sales())
     except Exception as exc:
-        print(f"No se pudo calcular el tope de recompra de {ticker}: {_redact(exc)}")
+        print(f"No se pudo calcular el tope de compra de {ticker}: {_redact(exc)}")
         return None
     if ceilings.empty:
         return None
     match = ceilings[ceilings["ticker"] == ticker]
-    return float(match["ceiling_cop"].iloc[0]) if not match.empty else None
+    if match.empty:
+        return None
+    return float(match["ceiling_cop"].iloc[0]), str(match["basis"].iloc[0])
 
 
 def _save_movement(chat_id: int, session: dict) -> None:

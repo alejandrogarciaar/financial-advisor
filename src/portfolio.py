@@ -64,6 +64,7 @@ build_synthetic_portfolio_series = _lib.build_synthetic_portfolio_series
 project_future_value = _lib.project_future_value
 commission_summary = _lib.commission_summary
 rebuy_ceiling_summary = _lib.rebuy_ceiling_summary
+buy_ceiling_summary = _lib.buy_ceiling_summary
 format_balance_message = _lib.format_balance_message
 
 

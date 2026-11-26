@@ -31,12 +31,12 @@ from src.drawdown_dca import (
 from src.portfolio import (
     DEFAULT_COMMISSION_COP,
     build_synthetic_portfolio_series,
+    buy_ceiling_summary,
     commission_summary,
     load_purchases,
     load_sales,
     project_future_value,
     realized_gains_summary,
-    rebuy_ceiling_summary,
     sale_cost_basis_by_row,
     save_purchases,
     save_sales,
@@ -451,20 +451,24 @@ def _render_cartera_and_total(purchases: pd.DataFrame, sales: pd.DataFrame) -> N
 
 
 def _render_rebuy_ceilings(purchases: pd.DataFrame, sales: pd.DataFrame) -> None:
-    """"🔁 Tope de recompra" — para cada ticker vendido en su totalidad, el precio de venta neto
-    (ver `rebuy_ceiling_summary()`) como máximo para volver a comprar, contra el precio de hoy.
-    Regla del usuario (2026-11-12): reinvertir lo realizado comprando POR DEBAJO de lo que se
-    vendió. Es una regla propia de disciplina, no una señal validada fuera de muestra."""
-    ceilings = rebuy_ceiling_summary(purchases, sales)
+    """"🔁 Tope de compra" — un precio máximo de compra por cada acción con historia (ver
+    `buy_ceiling_summary()`), contra el precio de hoy:
+    - en cartera: el costo promedio actual (comprar por debajo = promediar a la baja, pedido del
+      usuario 2026-11-26);
+    - vendidas por completo: el precio de venta neto de la última salida (regla del usuario
+      2026-11-12: reinvertir lo realizado comprando POR DEBAJO de lo que se vendió).
+    Son reglas propias de disciplina, no señales validadas fuera de muestra."""
+    ceilings = buy_ceiling_summary(purchases, sales)
     if ceilings.empty:
         return
 
     st.divider()
-    st.subheader("🔁 Tope de recompra")
+    st.subheader("🔁 Tope de compra")
     st.caption(
-        "Para cada acción que vendiste por completo, el precio al que saliste (promedio de esa "
-        "salida, neto de la comisión de venta) es el máximo para volver a comprar — la idea es "
-        "reinvertir esa plata comprando más barato de lo que vendiste. Si vendiste completo más "
+        "El máximo para comprar cada acción. Si la tenés hoy, es tu costo promedio (con la "
+        "comisión de compra): comprar por debajo baja tu promedio. Si la vendiste por completo, es "
+        "el precio al que saliste (promedio de esa salida, neto de la comisión de venta): la idea "
+        "es reinvertir esa plata comprando más barato de lo que vendiste; si vendiste completo más "
         "de una vez, manda la salida más reciente. Es tu regla de disciplina, no una señal "
         "validada con backtest."
     )
@@ -480,26 +484,37 @@ def _render_rebuy_ceilings(purchases: pd.DataFrame, sales: pd.DataFrame) -> None
             return "Sin precio ahora"
         return "🟢 Por debajo del tope" if g < 0 else "🔴 Por encima del tope"
 
+    def _fmt_money(v):
+        return f"${v:,.0f}" if pd.notna(v) else "—"
+
+    def _fmt_date(v):
+        if v is None or (not hasattr(v, "isoformat") and pd.isna(v)):
+            return "—"
+        return v.isoformat() if hasattr(v, "isoformat") else str(v)
+
+    held = ceilings["basis"] == "costo promedio"
     display = pd.DataFrame(
         {
             "Ticker": ceilings["ticker"],
-            "Salida": ceilings["exit_date"].map(lambda v: v.isoformat() if hasattr(v, "isoformat") else str(v)),
-            "Acciones vendidas": ceilings["shares_sold"],
-            "Tope (COP)": ceilings["ceiling_cop"].map(lambda v: f"${v:,.0f}"),
-            "Precio hoy (COP)": current.map(lambda v: f"${v:,.0f}" if pd.notna(v) else "—"),
+            "Referencia": held.map({True: "En cartera · costo promedio", False: "Vendida · salida neta"}),
+            "Tope (COP)": ceilings["ceiling_cop"].map(_fmt_money),
+            "Precio hoy (COP)": current.map(_fmt_money),
             "Hoy vs. tope": gap.map(lambda v: f"{v:+.1%}" if pd.notna(v) else "—"),
             "Estado": gap.map(_status),
-            "Plata liberada (COP)": ceilings["net_proceeds_cop"].map(lambda v: f"${v:,.0f}"),
+            "Acciones hoy": ceilings["shares_held_now"].astype(int),
+            "Salida": ceilings.get("exit_date", pd.Series(None, index=ceilings.index)).map(_fmt_date),
+            "Plata liberada (COP)": ceilings.get(
+                "net_proceeds_cop", pd.Series(float("nan"), index=ceilings.index)
+            ).map(_fmt_money),
         }
     )
     st.dataframe(display, hide_index=True, use_container_width=True)
     st.caption(
-        "\"Plata liberada\" es lo que entró neto en esa salida — lo que habría para reinvertir. "
-        "Solo aparecen las acciones que hoy no tenés: al volver a comprar, la posición pasa a "
-        "\"Mi Cartera\". Para que una recompra quede de verdad por debajo, considerá también la "
-        "comisión de compra."
+        "\"Plata liberada\" es lo que entró neto en la salida de una acción vendida por completo, "
+        "o sea lo que habría para reinvertir. Al volver a comprar una vendida, su tope pasa a ser "
+        "el costo promedio de la posición nueva. El costo promedio ya incluye la comisión; para "
+        "que una compra quede de verdad por debajo, sumale la comisión de compra al precio."
     )
-
 
 RECOMMENDATION_LABEL = {
     "strong_buy": "Compra fuerte",
@@ -595,7 +610,7 @@ def _render_analyst_targets(purchases: pd.DataFrame, sales: pd.DataFrame) -> Non
         st.dataframe(pd.DataFrame(rows), hide_index=True, use_container_width=True)
     st.caption(
         "**Tu costo promedio** incluye la comisión de compra. Las acciones que ya vendiste por "
-        "completo no aparecen acá (ver \"Tope de recompra\"). **Consenso** = recomendación promedio y, entre "
+        "completo no aparecen acá (ver \"Tope de compra\"). **Consenso** = recomendación promedio y, entre "
         "paréntesis, cuántos analistas la cubren. El rango va del objetivo más bajo al más alto: "
         "cuanto más ancho, menos acuerdo hay entre analistas. El paso a COP usa el ratio "
         "CDI/subyacente de hoy (aproximación; los % no cambian). Fuente: Yahoo Finance "
@@ -1081,10 +1096,10 @@ def _render_my_portfolio(purchases: pd.DataFrame, sales: pd.DataFrame) -> None:
         "enteras — no se aceptan compras fraccionarias (1.2, 2.3, etc.)."
     )
 
-    ceilings = rebuy_ceiling_summary(purchases, sales)
+    ceilings = buy_ceiling_summary(purchases, sales)
     if not ceilings.empty:
         st.caption(
-            "🔁 Topes de recompra (comprá por debajo): "
+            "🔁 Topes de compra (comprá por debajo): "
             + " · ".join(f"{r.ticker} ≤ ${r.ceiling_cop:,.0f}" for r in ceilings.itertuples())
         )
 
