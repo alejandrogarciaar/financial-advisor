@@ -83,5 +83,13 @@
     "commission_cop": 126199.5,
     "date": "2026-11-24",
     "time": "09:34"
+  },
+  {
+    "ticker": "NUCO",
+    "shares": 100,
+    "price_cop": 45960.0,
+    "commission_cop": 7437.5,
+    "date": "2026-11-27",
+    "time": "09:59"
   }
 ]
